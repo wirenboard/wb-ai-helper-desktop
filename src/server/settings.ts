@@ -8,6 +8,8 @@ export type Settings = {
   baseURL: string
   model: string
   llmProxy: string
+  llmProxyUser: string
+  llmProxyPassword: string
   tlsInsecure: boolean
   mqttUser: string
   mqttPassword: string
@@ -21,10 +23,11 @@ export type Settings = {
   priceCached: number | null
 }
 
-export type PublicSettings = Omit<Settings, 'apiKey' | 'mqttPassword' | 'sshPassword'> & {
+export type PublicSettings = Omit<Settings, 'apiKey' | 'mqttPassword' | 'sshPassword' | 'llmProxyPassword'> & {
   apiKeyConfigured: boolean
   mqttPasswordConfigured: boolean
   sshPasswordConfigured: boolean
+  llmProxyPasswordConfigured: boolean
   storagePath: string
 }
 
@@ -33,6 +36,8 @@ const DEFAULTS: Settings = {
   baseURL: '',
   model: '',
   llmProxy: '',
+  llmProxyUser: '',
+  llmProxyPassword: '',
   tlsInsecure: false,
   mqttUser: '',
   mqttPassword: '',
@@ -86,6 +91,7 @@ export class SettingsStore {
       baseURL: this.cache.baseURL,
       model: this.cache.model,
       llmProxy: this.cache.llmProxy,
+      llmProxyUser: this.cache.llmProxyUser,
       tlsInsecure: this.cache.tlsInsecure,
       mqttUser: this.cache.mqttUser,
       sshUser: this.cache.sshUser,
@@ -98,6 +104,7 @@ export class SettingsStore {
       apiKeyConfigured: !!this.cache.apiKey,
       mqttPasswordConfigured: !!this.cache.mqttPassword,
       sshPasswordConfigured: !!this.cache.sshPassword,
+      llmProxyPasswordConfigured: !!this.cache.llmProxyPassword,
       storagePath: this.file,
     }
   }

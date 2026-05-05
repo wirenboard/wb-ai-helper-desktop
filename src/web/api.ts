@@ -128,6 +128,7 @@ export type Settings = {
   baseURL: string
   model: string
   llmProxy: string
+  llmProxyUser: string
   tlsInsecure: boolean
   mqttUser: string
   sshUser: string
@@ -137,6 +138,7 @@ export type Settings = {
   apiKeyConfigured: boolean
   mqttPasswordConfigured: boolean
   sshPasswordConfigured: boolean
+  llmProxyPasswordConfigured: boolean
   storagePath: string
   priceInput?: number | null
   priceOutput?: number | null
@@ -148,6 +150,8 @@ export type SettingsPatch = Partial<{
   baseURL: string
   model: string
   llmProxy: string
+  llmProxyUser: string
+  llmProxyPassword: string
   tlsInsecure: boolean
   mqttUser: string
   mqttPassword: string

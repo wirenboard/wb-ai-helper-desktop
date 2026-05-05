@@ -47,6 +47,8 @@ let llm: LlmClient | null = settings.apiKey
       baseURL: settings.baseURL || undefined,
       model: settings.model || 'gpt-4.1-mini',
       llmProxy: settings.llmProxy || undefined,
+      llmProxyUser: settings.llmProxyUser || undefined,
+      llmProxyPassword: settings.llmProxyPassword || undefined,
       tlsInsecure: settings.tlsInsecure,
     })
   : null
@@ -58,6 +60,8 @@ settingsStore.onChange((s) => {
         baseURL: s.baseURL || undefined,
         model: s.model || 'gpt-4.1-mini',
         llmProxy: s.llmProxy || undefined,
+        llmProxyUser: s.llmProxyUser || undefined,
+        llmProxyPassword: s.llmProxyPassword || undefined,
         tlsInsecure: s.tlsInsecure,
       })
     : null
@@ -90,7 +94,7 @@ app.get('/api/settings', (c) => c.json(settingsStore.toPublic()))
 app.put('/api/settings', async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
   const patch: Record<string, unknown> = {}
-  const stringFields = ['apiKey', 'baseURL', 'model', 'llmProxy', 'mqttUser', 'mqttPassword', 'sshUser', 'sshPassword', 'sshKeyPath']
+  const stringFields = ['apiKey', 'baseURL', 'model', 'llmProxy', 'llmProxyUser', 'llmProxyPassword', 'mqttUser', 'mqttPassword', 'sshUser', 'sshPassword', 'sshKeyPath']
   for (const f of stringFields) {
     if (typeof body[f] === 'string') patch[f] = body[f]
   }

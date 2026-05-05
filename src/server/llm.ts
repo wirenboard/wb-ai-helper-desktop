@@ -30,12 +30,13 @@ export class LlmClient {
   private client: OpenAI
   readonly model: string
 
-  constructor(opts: { apiKey: string; baseURL?: string; model?: string; llmProxy?: string; tlsInsecure?: boolean }) {
+  constructor(opts: { apiKey: string; baseURL?: string; model?: string; llmProxy?: string; llmProxyUser?: string; llmProxyPassword?: string; tlsInsecure?: boolean }) {
     const needCustomFetch = opts.llmProxy || opts.tlsInsecure
+    const proxyUrl = opts.llmProxy ? buildProxyUrl(opts.llmProxy, opts.llmProxyUser, opts.llmProxyPassword) : undefined
     const fetchFn = needCustomFetch
       ? (url: string | URL, init?: RequestInit) => {
           const extra: Record<string, unknown> = {}
-          if (opts.llmProxy) extra['proxy'] = opts.llmProxy
+          if (proxyUrl) extra['proxy'] = proxyUrl
           if (opts.tlsInsecure) extra['tls'] = { rejectUnauthorized: false }
           return fetch(url, { ...init, ...extra } as RequestInit)
         }
@@ -182,6 +183,18 @@ export class LlmClient {
       yield { type: 'usage', promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens, cachedTokens: totalCachedTokens }
     }
     yield { type: 'done', finish_reason: 'max_turns' }
+  }
+}
+
+function buildProxyUrl(proxy: string, user?: string, password?: string): string {
+  if (!user) return proxy
+  try {
+    const u = new URL(proxy)
+    u.username = encodeURIComponent(user)
+    if (password) u.password = encodeURIComponent(password)
+    return u.toString()
+  } catch {
+    return proxy
   }
 }
 

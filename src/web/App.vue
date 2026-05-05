@@ -310,6 +310,13 @@ function handleStreamEvent(chatId: string, event: string, data: any) {
     } else {
       buf.push({ role: 'tool', toolCallId: data.id, content: data.result })
     }
+    // Immediately show job banner when background job tool responds
+    if (data.ok && (data.name === 'ssh_exec_async' || data.name === 'wb_bus_scan')) {
+      try {
+        const r = JSON.parse(data.result)
+        if (r.jobId) void refreshJobs().then(() => { if (runningJobs.value.length > 0) startJobPolling() })
+      } catch {}
+    }
   }
 }
 

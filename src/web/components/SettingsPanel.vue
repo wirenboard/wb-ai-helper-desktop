@@ -19,6 +19,8 @@ const sshPassword = ref('')
 const sshKeyPath = ref('')
 const discoveryInterval = ref(15000)
 const llmProxy = ref('')
+const llmProxyUser = ref('')
+const llmProxyPassword = ref('')
 const tlsInsecure = ref(false)
 const openBrowser = ref(true)
 const priceInput = ref<number | null>(null)
@@ -50,6 +52,8 @@ watch(
       sshKeyPath.value = props.settings.sshKeyPath
       discoveryInterval.value = props.settings.discoveryInterval
       llmProxy.value = props.settings.llmProxy ?? ''
+      llmProxyUser.value = props.settings.llmProxyUser ?? ''
+      llmProxyPassword.value = ''
       tlsInsecure.value = props.settings.tlsInsecure ?? false
       openBrowser.value = props.settings.openBrowser
       priceInput.value = props.settings.priceInput ?? null
@@ -95,6 +99,7 @@ async function save() {
       baseURL: baseURL.value,
       model: model.value,
       llmProxy: llmProxy.value,
+      llmProxyUser: llmProxyUser.value,
       tlsInsecure: tlsInsecure.value,
       mqttUser: mqttUser.value,
       sshUser: sshUser.value,
@@ -106,6 +111,7 @@ async function save() {
       priceCached: priceCached.value != null ? Number(priceCached.value) : null,
     }
     if (apiKey.value) patch.apiKey = apiKey.value
+    if (llmProxyPassword.value) patch.llmProxyPassword = llmProxyPassword.value
     if (mqttPassword.value) patch.mqttPassword = mqttPassword.value
     if (sshPassword.value) patch.sshPassword = sshPassword.value
     const next = await api.saveSettings(patch)
@@ -168,6 +174,21 @@ async function removeKey() {
             <span>Прокси для LLM <span class="muted small">(необязательно)</span></span>
             <input v-model="llmProxy" placeholder="http://proxy-host:8080" />
           </label>
+          <div v-if="llmProxy" class="proxy-auth-row">
+            <label class="field" style="flex:1;margin-bottom:0">
+              <span>Логин прокси <span class="muted small">(опционально)</span></span>
+              <input v-model="llmProxyUser" placeholder="user" autocomplete="off" />
+            </label>
+            <label class="field" style="flex:1;margin-bottom:0">
+              <span>Пароль прокси {{ settings?.llmProxyPasswordConfigured ? '(сохранён)' : '' }}</span>
+              <input
+                type="password"
+                v-model="llmProxyPassword"
+                :placeholder="settings?.llmProxyPasswordConfigured ? '••• оставьте пустым чтобы не менять' : ''"
+                autocomplete="off"
+              />
+            </label>
+          </div>
 
           <label class="field checkbox-field">
             <input type="checkbox" v-model="tlsInsecure" />
@@ -324,4 +345,5 @@ section h3 { margin: 0 0 8px 0; font-size: 0.75rem; color: var(--text-mute); tex
 .checkbox-field { flex-direction: row; align-items: center; gap: 8px; }
 .checkbox-field input[type=checkbox] { width: auto; margin: 0; flex-shrink: 0; }
 code { background: var(--bg-mute); padding: 2px 4px; border-radius: 3px; font-size: 0.75rem; word-break: break-all; }
+.proxy-auth-row { display: flex; gap: 8px; margin-bottom: 10px; }
 </style>
