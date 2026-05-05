@@ -826,17 +826,37 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
           /\bdocker\s+(run|pull|build|compose)\b/.test(command)) {
         return JSON.stringify({ error: `Команда "${command}" может выполняться долго. Используй ssh_exec_async вместо ssh_exec.` })
       }
-      const out: Record<string, unknown> = {}
+      const results: { sn: string; stdout: string; stderr: string; code: number | null; truncated: boolean; error?: string }[] = []
       await Promise.all(
         targets.map(async (c) => {
           try {
-            out[c.sn] = await ctx.ssh.exec(c, command, timeoutMs)
+            const r = await ctx.ssh.exec(c, command, timeoutMs)
+            results.push({ sn: c.sn, ...r })
           } catch (e: any) {
-            out[c.sn] = { error: e?.message ?? String(e) }
+            results.push({ sn: c.sn, stdout: '', stderr: '', code: -1, truncated: false, error: e?.message ?? String(e) })
           }
         }),
       )
-      return JSON.stringify(out, null, 2)
+      if (results.length === 1) {
+        const r = results[0]!
+        if (r.error) return `[${r.sn}] error: ${r.error}`
+        const parts: string[] = []
+        if (r.stdout) parts.push(r.stdout)
+        if (r.stderr) parts.push(`[stderr]\n${r.stderr}`)
+        if (r.truncated) parts.push('[вывод обрезан]')
+        parts.push(`[exit: ${r.code}]`)
+        return parts.join('\n')
+      }
+      // Multiple targets — group by SN
+      return results.map((r) => {
+        if (r.error) return `[${r.sn}]\nerror: ${r.error}`
+        const parts: string[] = [`[${r.sn}]`]
+        if (r.stdout) parts.push(r.stdout)
+        if (r.stderr) parts.push(`[stderr]\n${r.stderr}`)
+        if (r.truncated) parts.push('[вывод обрезан]')
+        parts.push(`[exit: ${r.code}]`)
+        return parts.join('\n')
+      }).join('\n---\n')
     }
 
     case 'ssh_read_file': {
