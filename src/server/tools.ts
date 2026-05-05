@@ -779,8 +779,16 @@ type Ctx = {
 export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promise<string> {
   const args = parseArgs(argsJson)
   switch (name) {
-    case 'list_controllers':
-      return JSON.stringify(ctx.discovery.list().map(toPublic), null, 2)
+    case 'list_controllers': {
+      // If the cache is empty (e.g. fresh start, periodic scan still in flight),
+      // kick off a refresh so the model never has to ask the user "rescan again".
+      let list = ctx.discovery.list()
+      if (!list.length) {
+        await ctx.discovery.refresh().catch(() => {})
+        list = ctx.discovery.list()
+      }
+      return JSON.stringify(list.map(toPublic), null, 2)
+    }
 
     case 'probe_controller': {
       const sn = String(args['sn'] ?? '')

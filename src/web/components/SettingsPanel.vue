@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { api, PROVIDER_INFO, type LlmProvider, type Settings } from '../api'
+import ComboboxSearch from './ComboboxSearch.vue'
 
 const props = defineProps<{ settings: Settings | null; open: boolean; version?: string; fontSize?: number }>()
 const emit = defineEmits<{
@@ -79,9 +80,13 @@ const loadingModels = ref(false)
 const saving = ref(false)
 const saveError = ref<string | null>(null)
 
-const canFetchModels = computed(
-  () => !!apiKey.value || !!props.settings?.apiKeyConfigured,
-)
+const canFetchModels = computed(() => {
+  const hasKey = !!apiKey.value || apiKeyConfiguredForProvider.value
+  if (!hasKey) return false
+  // Custom requires an explicit Base URL — OpenAI/VseGPT use the hard-coded default
+  if (provider.value === 'custom' && !baseURL.value.trim()) return false
+  return true
+})
 
 watch(
   () => props.open,
@@ -107,14 +112,13 @@ async function fetchModels() {
   loadingModels.value = true
   modelsError.value = null
   try {
-    // If user typed a fresh key, save it first so /api/models can use it.
-    if (apiKey.value || baseURL.value !== props.settings?.baseURL) {
-      const patch: any = {}
-      if (apiKey.value) patch.apiKey = apiKey.value
-      if (baseURL.value !== props.settings?.baseURL) patch.baseURL = baseURL.value
-      await api.saveSettings(patch)
-      apiKey.value = ''
-    }
+    // Always sync the current UI provider + the bits relevant to /api/models
+    // so the backend uses the right provider's key/baseURL for the lookup.
+    const patch: any = { provider: provider.value }
+    if (apiKey.value) patch.apiKey = apiKey.value
+    patch.baseURL = provider.value === 'custom' ? baseURL.value : ''
+    await api.saveSettings(patch)
+    apiKey.value = ''
     const r = await api.models()
     models.value = r.models
     if (model.value && !r.models.includes(model.value)) {
@@ -264,20 +268,26 @@ async function removeKey() {
                 @click="fetchModels"
               >{{ loadingModels ? 'загрузка…' : 'обновить список' }}</button>
             </div>
-            <div v-if="!models.length" class="muted small" style="margin-top:4px">
-              Сохраните API-ключ и нажмите «обновить список».
+            <div v-if="!apiKeyConfiguredForProvider && !apiKey" class="muted small" style="margin-top:4px">
+              Введите API-ключ, чтобы загрузить список моделей.
             </div>
-            <select v-else v-model="model" style="margin-top:4px">
-              <option value="" disabled>— выберите модель —</option>
-              <option v-for="m in models" :key="m" :value="m">{{ m }}</option>
-            </select>
-            <div v-if="modelsError" class="error small">{{ modelsError }}</div>
-            <input
-              v-if="!models.length"
-              v-model="model"
-              placeholder="или впишите имя модели вручную"
-              style="margin-top:6px"
+            <div v-else-if="provider === 'custom' && !baseURL.trim()" class="muted small" style="margin-top:4px">
+              Укажите Base URL.
+            </div>
+            <ComboboxSearch
+              v-else-if="models.length"
+              :modelValue="model"
+              :options="models"
+              placeholder="начните печатать для поиска…"
+              @update:modelValue="model = $event"
             />
+            <input
+              v-else
+              v-model="model"
+              placeholder="нажмите «обновить список» или впишите имя модели"
+              style="margin-top:4px"
+            />
+            <div v-if="modelsError" class="error small">{{ modelsError }}</div>
           </label>
 
           <template v-if="showPriceFields">

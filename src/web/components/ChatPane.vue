@@ -11,12 +11,14 @@ const props = defineProps<{
   chatId: string
   settings: Settings | null
   runningJobs?: TrackedJob[]
+  pendingCancels?: Record<string, { remaining: number }>
 }>()
 const emit = defineEmits<{
   send: [text: string]
   stop: []
   rename: [title: string]
   cancelJob: [jobId: string]
+  undoCancelJob: [jobId: string]
 }>()
 
 const items = computed(() => turnsToItems(props.turns, props.chatId))
@@ -60,9 +62,11 @@ function onSuggest(text: string) {
       :chatId="chatId"
       :settings="settings"
       :runningJobs="runningJobs"
+      :pendingCancels="pendingCancels"
       @mouseup="onSelectionChange"
       @suggest="onSuggest"
       @cancelJob="emit('cancelJob', $event)"
+      @undoCancelJob="emit('undoCancelJob', $event)"
     />
 
     <Teleport to="body">

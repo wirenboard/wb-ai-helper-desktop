@@ -3,11 +3,21 @@ import { nextTick, ref } from 'vue'
 import { calcCost, type Chat, type Settings, type TokenStats } from '../api'
 import { fmtCost, fmtTok } from '../utils'
 
-const props = defineProps<{ chats: Chat[]; activeId: string | null; totalStats: TokenStats | null; totalCost: number | null; settings: Settings | null; open: boolean }>()
+const props = defineProps<{
+  chats: Chat[]
+  activeId: string | null
+  totalStats: TokenStats | null
+  totalCost: number | null
+  settings: Settings | null
+  open: boolean
+  pendingDeleteAll?: { remaining: number } | null
+}>()
 const emit = defineEmits<{
   new: []
   select: [id: string]
   delete: [id: string]
+  deleteAll: []
+  undoDeleteAll: []
   rename: [id: string, title: string]
   toggle: []
 }>()
@@ -51,14 +61,25 @@ function onRenameKey(e: KeyboardEvent, id: string) {
   <aside class="sidebar" :class="{ collapsed: !open }">
     <div class="sidebar-header">
       <template v-if="open">
-        <span>Чаты</span>
-        <button class="primary" @click="emit('new')" title="Новый чат">+ Новый</button>
+        <span class="title">Чаты</span>
+        <button class="icon-btn" @click="emit('new')" title="Новый чат" aria-label="Новый чат">+</button>
+        <button
+          v-if="chats.length > 1 && !pendingDeleteAll"
+          class="icon-btn danger"
+          @click="emit('deleteAll')"
+          title="Удалить все чаты"
+          aria-label="Удалить все чаты"
+        >🗑</button>
       </template>
       <button class="ghost collapse-btn" :title="open ? 'Свернуть' : 'Развернуть'" @click="emit('toggle')">
         {{ open ? '‹' : '›' }}
       </button>
     </div>
     <template v-if="open">
+      <div v-if="pendingDeleteAll" class="banner-undo">
+        <span>⏳ Все чаты будут удалены через {{ pendingDeleteAll.remaining }} с</span>
+        <button class="ghost small" @click="emit('undoDeleteAll')">отмена</button>
+      </div>
       <div class="sidebar-body">
         <div v-if="!chats.length" class="empty">Чатов пока нет</div>
         <div
@@ -111,5 +132,21 @@ function onRenameKey(e: KeyboardEvent, id: string) {
   margin-top: 4px;
   font-size: 11px;
   opacity: 0.6;
+}
+.title { flex: 1; font-weight: 600; }
+.icon-btn {
+  width: 28px; height: 28px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+  font-size: 0.95rem; line-height: 1; cursor: pointer; color: var(--text-mute);
+}
+.icon-btn:hover { background: var(--bg-soft); color: var(--accent); border-color: var(--accent); }
+.icon-btn.danger:hover { color: var(--danger); border-color: var(--danger); }
+.banner-undo {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 10px;
+  background: color-mix(in srgb, #f59e0b 14%, var(--bg));
+  color: #b45309; font-size: 0.78rem;
+  border-bottom: 1px solid var(--border);
 }
 </style>
