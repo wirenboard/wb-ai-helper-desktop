@@ -6,8 +6,9 @@ import { FILES } from './embed-manifest.ts'
 export function embeddedIndex(): Response {
   const path = FILES['index.html']
   if (!path) {
-    return new Response(PLACEHOLDER_HTML, {
-      headers: { 'content-type': 'text/html; charset=utf-8' },
+    return new Response(null, {
+      status: 302,
+      headers: { location: 'http://127.0.0.1:5173/' },
     })
   }
   return new Response(Bun.file(path), {

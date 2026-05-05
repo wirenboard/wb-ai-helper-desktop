@@ -6,7 +6,10 @@ import type { ChatTurn } from '../api'
 marked.use({ breaks: true, gfm: true })
 
 function renderMd(text: string): string {
-  return marked.parse(text) as string
+  const html = marked.parse(text) as string
+  // marked produces <p> inside <li> for "loose" lists (blank lines between items).
+  // Strip the wrapper so our CSS gap controls apply uniformly.
+  return html.replace(/<li>\s*<p>([\s\S]*?)<\/p>\s*<\/li>/g, (_, inner) => `<li>${inner.trim()}</li>`)
 }
 
 const props = defineProps<{
@@ -22,6 +25,10 @@ const emit = defineEmits<{
 
 const input = ref('')
 const body = ref<HTMLDivElement | null>(null)
+const textarea = ref<HTMLTextAreaElement | null>(null)
+const copiedIdx = ref<number | null>(null)
+const selPopup = ref<{ x: number; y: number } | null>(null)
+const selText = ref('')
 
 function send() {
   const t = input.value.trim()
@@ -30,15 +37,76 @@ function send() {
   emit('send', t)
 }
 
-function summaryFor(content: string): string {
-  const head = content.split('\n', 1)[0] ?? ''
-  return head.length > 80 ? head.slice(0, 80) + '…' : head
+type ToolInfo = { name: string; args: string; result: string }
+
+function toolInfo(turns: ChatTurn[], idx: number): ToolInfo {
+  const t = turns[idx]
+  if (!t || t.role !== 'tool') return { name: '?', args: '', result: '' }
+
+  // Streaming format written by App.vue: "▶ name\n{args}\n— result —\n{result}"
+  if (t.content.startsWith('▶ ')) {
+    const lines = t.content.split('\n')
+    const name = lines[0]!.slice(2).trim()
+    const sep = lines.indexOf('— result —')
+    const args = sep > 1 ? lines.slice(1, sep).join('\n') : ''
+    const result = sep >= 0 ? lines.slice(sep + 1).join('\n') : t.content
+    return { name, args, result }
+  }
+
+  // Persisted format: content is raw result. Find tool name + args via toolCallId in sibling assistant turn.
+  let name = 'tool'
+  let args = ''
+  const toolCallId = (t as { toolCallId?: string }).toolCallId
+  if (toolCallId) {
+    for (let i = idx - 1; i >= 0; i--) {
+      const prev = turns[i]
+      if (prev?.role === 'assistant' && prev.toolCalls) {
+        const tc = prev.toolCalls.find((c) => c.id === toolCallId)
+        if (tc) { name = tc.name; args = tc.arguments ?? ''; break }
+      }
+    }
+  }
+  return { name, args, result: t.content }
 }
 
 function onEnter(e: KeyboardEvent) {
   if (e.shiftKey) return
   e.preventDefault()
   send()
+}
+
+async function copyMsg(text: string, idx: number) {
+  await navigator.clipboard.writeText(text)
+  copiedIdx.value = idx
+  setTimeout(() => { copiedIdx.value = null }, 1500)
+}
+
+function onMouseUp(e: MouseEvent) {
+  // Ignore clicks inside the textarea/buttons
+  if ((e.target as HTMLElement).closest('.chat-input-row')) return
+  setTimeout(() => {
+    const sel = window.getSelection()
+    const text = sel?.toString().trim() ?? ''
+    if (text.length > 3 && sel?.rangeCount) {
+      const rect = sel.getRangeAt(0).getBoundingClientRect()
+      selText.value = text
+      selPopup.value = { x: rect.left + rect.width / 2, y: rect.top - 6 }
+    } else {
+      selPopup.value = null
+    }
+  }, 10)
+}
+
+function askSelection() {
+  if (!selText.value) return
+  input.value = `«${selText.value}»\n\n`
+  selPopup.value = null
+  window.getSelection()?.removeAllRanges()
+  nextTick(() => {
+    textarea.value?.focus()
+    const len = textarea.value?.value.length ?? 0
+    textarea.value?.setSelectionRange(len, len)
+  })
 }
 
 function scrollBottom() {
@@ -51,7 +119,7 @@ watch(() => props.streaming, (v) => { if (!v) scrollBottom() })
 </script>
 
 <template>
-  <div class="chat-body" ref="body">
+  <div class="chat-body" ref="body" @mouseup="onMouseUp">
     <div v-if="!turns.length" class="empty">
       Опишите задачу. Например: «список устройств на всех контроллерах»,
       «проверь доступность кухонного контроллера», «какое значение датчика T1 на WB-XXX?».
@@ -61,7 +129,12 @@ watch(() => props.streaming, (v) => { if (!v) scrollBottom() })
         <div class="role">вы</div>{{ t.content }}
       </div>
       <div v-else-if="t.role === 'assistant'" class="msg assistant">
-        <div class="role">помощник</div>
+        <div class="msg-header">
+          <span class="role">помощник</span>
+          <button v-if="t.content" class="ghost small copy-btn" :title="copiedIdx === i ? 'Скопировано!' : 'Копировать'" @click="copyMsg(t.content, i)">
+            {{ copiedIdx === i ? '✓' : '⎘' }}
+          </button>
+        </div>
         <div v-if="t.content" class="md" v-html="renderMd(t.content)" />
         <span v-else class="muted">…</span>
         <div v-if="t.tokensPrompt || t.tokensCompletion" class="token-meta">
@@ -69,16 +142,31 @@ watch(() => props.streaming, (v) => { if (!v) scrollBottom() })
         </div>
       </div>
       <div v-else-if="t.role === 'tool'" class="msg tool">
-        <details>
-          <summary>{{ summaryFor(t.content) }}</summary>
-          <pre>{{ t.content }}</pre>
-        </details>
+        <template v-for="info in [toolInfo(turns, i)]" :key="'info'">
+          <details>
+            <summary>{{ info.name }}</summary>
+            <pre v-if="info.args">{{ info.args }}</pre>
+            <pre v-if="info.result">{{ info.result }}</pre>
+          </details>
+        </template>
       </div>
     </template>
   </div>
 
+  <Teleport to="body">
+    <div
+      v-if="selPopup"
+      class="sel-popup"
+      :style="{ left: selPopup.x + 'px', top: selPopup.y + 'px' }"
+      @mousedown.prevent
+    >
+      <button class="primary small" @click="askSelection">Спросить →</button>
+    </div>
+  </Teleport>
+
   <div class="chat-input-row">
     <textarea
+      ref="textarea"
       v-model="input"
       :placeholder="llmConfigured ? 'Сообщение… (Enter — отправить, Shift+Enter — перенос)' : 'OPENAI_API_KEY не настроен'"
       :disabled="!llmConfigured"
@@ -92,31 +180,13 @@ watch(() => props.streaming, (v) => { if (!v) scrollBottom() })
 </template>
 
 <style scoped>
-.token-meta {
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--text-mute);
-  opacity: 0.7;
-}
-.md { line-height: 1.5; }
-.md :deep(p) { margin: 0 0 4px; }
-.md :deep(p:last-child) { margin-bottom: 0; }
-.md :deep(code) {
-  background: var(--bg-mute); border-radius: 4px;
-  padding: 1px 5px; font-family: ui-monospace, monospace; font-size: 12.5px;
-}
-.md :deep(pre) {
-  background: var(--bg-mute); border-radius: 6px;
-  padding: 10px 12px; overflow-x: auto; margin: 4px 0;
-}
-.md :deep(pre code) { background: none; padding: 0; font-size: 12.5px; }
-.md :deep(ul), .md :deep(ol) { margin: 2px 0; padding-left: 18px; }
-.md :deep(li) { margin-bottom: 1px; }
-.md :deep(li p) { margin: 0; }
-.md :deep(strong) { font-weight: 600; }
-.md :deep(a) { color: var(--accent); }
-.md :deep(blockquote) {
-  border-left: 3px solid var(--border); margin: 4px 0;
-  padding: 2px 10px; color: var(--text-mute);
+.msg-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px; }
+.msg-header .role { font-size: 11px; color: var(--text-mute); text-transform: uppercase; letter-spacing: 0.04em; }
+.copy-btn { padding: 1px 5px; font-size: 12px; opacity: 0; transition: opacity 0.15s; }
+.msg:hover .copy-btn { opacity: 1; }
+.token-meta { margin-top: 4px; font-size: 11px; color: var(--text-mute); opacity: 0.7; }
+.sel-popup {
+  position: fixed; transform: translate(-50%, -100%);
+  z-index: 500; pointer-events: all;
 }
 </style>
