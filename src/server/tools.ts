@@ -160,13 +160,14 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'ssh_read_logs',
-        description: 'Последние строки systemd-журнала. Если указан unit — только этот сервис; иначе общий журнал.',
+        description: 'Последние строки systemd-журнала. Если указан unit — только этот сервис; иначе общий журнал. Для диагностики используй priority="err" чтобы видеть только ошибки.',
         parameters: {
           type: 'object',
           properties: {
             sn: { type: 'string' },
             unit: { type: 'string', description: 'systemd unit, например wb-mqtt-serial' },
             lines: { type: 'number', description: 'кол-во строк (по умолчанию 200, максимум 2000)' },
+            priority: { type: 'string', description: 'фильтр приоритета journalctl: err, warning, info, debug. По умолчанию — все уровни.' },
           },
           required: ['sn'],
           additionalProperties: false,
@@ -877,10 +878,11 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
       const sn = String(args['sn'] ?? '')
       const unit = args['unit'] ? String(args['unit']) : undefined
       const lines = typeof args['lines'] === 'number' ? args['lines'] : undefined
+      const priority = args['priority'] ? String(args['priority']) : undefined
       const c = ctx.discovery.get(sn) ?? ctx.discovery.getOrCreate(sn) ?? adHocController(sn)
       if (!c) return notFound(sn)
       try {
-        const text = await ctx.ssh.readLogs(c, unit, lines)
+        const text = await ctx.ssh.readLogs(c, unit, lines, priority)
         return text
       } catch (e: any) {
         return JSON.stringify({ error: e?.message ?? String(e) })

@@ -46,7 +46,7 @@ WB AI Helper is a single-binary desktop AI assistant for Wiren Board IoT control
 | `src/server/llm.ts` | OpenAI streaming client + agentic tool-call loop, yields `StreamEvent`; token usage emitted only on the final (non-tool) turn |
 | `src/server/tools.ts` | Tool schema definitions + dispatch; 9 tools for list/probe/mqtt/ssh |
 | `src/server/mqtt-pool.ts` | Per-controller MQTT connection pool; read/write/list |
-| `src/server/ssh.ts` | SSH pool with key → password fallback (default: root/wirenboard) |
+| `src/server/ssh.ts` | SSH pool: key → explicit password → 'wirenboard' fallback; port always 22; host key verification disabled |
 | `src/server/http-probe.ts` | HTTP reachability check; updates `reachable`, `fw`, `hostname` on the Controller object |
 | `src/server/discovery.ts` | mDNS scanner — parses `wirenboard-<SN>.local`, broadcasts via SSE every 15 s |
 | `src/server/db.ts` | SQLite WAL, auto-migration on startup |
@@ -65,6 +65,8 @@ WB AI Helper is a single-binary desktop AI assistant for Wiren Board IoT control
 Two independent SSE streams coexist:
 - `GET /api/events` — global controller-list updates (push when mDNS changes)
 - `POST /api/chats/:id/message` — per-request chat stream (text-delta, tool-call, tool-result, usage, end)
+
+`tool-result` events carry `ok: boolean`; errors are stored in DB with a `\x01` prefix so the frontend can show a red dot vs green dot.
 
 ### Build pipeline
 

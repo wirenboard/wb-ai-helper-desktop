@@ -115,11 +115,11 @@ export class SshPool {
     return { content: r.stdout, truncated: false }
   }
 
-  async readLogs(controller: Controller, unit?: string, lines = 200): Promise<string> {
+  async readLogs(controller: Controller, unit?: string, lines = 200, priority?: string): Promise<string> {
     const safeLines = Math.max(1, Math.min(2000, Math.floor(lines)))
-    const cmd = unit
-      ? `journalctl --no-pager -n ${safeLines} -u ${shellEscape(unit)}`
-      : `journalctl --no-pager -n ${safeLines}`
+    const pFlag = priority ? ` -p ${shellEscape(priority)}` : ''
+    const uFlag = unit ? ` -u ${shellEscape(unit)}` : ''
+    const cmd = `journalctl --no-pager -n ${safeLines}${pFlag}${uFlag}`
     const r = await this.exec(controller, cmd, 20_000)
     if (r.code !== 0 && !r.stdout) {
       throw new Error(r.stderr.trim() || `journalctl exited ${r.code}`)
