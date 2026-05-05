@@ -125,7 +125,7 @@ async function downloadViaFetch(url: string, name: string) {
 </template>
 
 <style scoped>
-.msg { margin: 6px 0; }
+.msg { margin: 3px 0; }
 
 /* ── Bubbles ────────────────────────────────────────────────── */
 .bubble {
@@ -136,12 +136,13 @@ async function downloadViaFetch(url: string, name: string) {
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
-  max-width: 100%;
+  max-width: 88%;
   position: relative;
 }
 .user { display: flex; justify-content: flex-end; }
-.user .bubble { background: var(--accent-soft); color: var(--text); border-bottom-right-radius: 2px; }
-.assistant .bubble { background: var(--bg-soft); color: var(--text); border-bottom-left-radius: 2px; }
+.user .bubble { background: var(--accent-soft); color: var(--text); border-bottom-right-radius: 2px; max-width: 72%; }
+.assistant { width: 100%; }
+.assistant .bubble { background: var(--bg-soft); color: var(--text); border-bottom-left-radius: 2px; width: 100%; max-width: 100%; display: block; box-sizing: border-box; }
 .error .bubble { background: #fef2f2; color: var(--danger); border: 1px solid #fbb; }
 
 /* ── Markdown ───────────────────────────────────────────────── */
@@ -180,16 +181,16 @@ async function downloadViaFetch(url: string, name: string) {
 /* ── Tool call ──────────────────────────────────────────────── */
 .tool { font-size: 0.75rem; }
 .tool-head {
-  display: inline-flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: 6px; width: 100%;
   border: 1px dashed var(--border); background: var(--bg);
   border-radius: 4px; padding: 4px 8px;
   font-family: 'JetBrains Mono', monospace; font-size: 0.6875rem;
-  cursor: pointer; color: var(--text-mute);
+  cursor: pointer; color: var(--text-mute); text-align: left;
 }
 .tool-head:hover { background: var(--bg-soft); }
 .tool-icon { color: var(--ok); }
 .tool-name { font-weight: 700; color: var(--text); }
-.tool-args { color: var(--text-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
+.tool-args { color: var(--text-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
 .tool-status { font-weight: 700; color: var(--ok); }
 .tool-status.err { color: var(--danger); }
 .tool-status.pending { color: var(--text-mute); }

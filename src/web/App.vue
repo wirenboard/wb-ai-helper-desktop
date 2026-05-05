@@ -325,6 +325,7 @@ const visibleTurns = computed<ChatTurn[]>(() => {
           class="chat-tokens small muted"
           title="Токены в этом чате: ↑ prompt / ↓ completion"
         >↑{{ fmtTok(currentChatTokens.prompt) }} ↓{{ fmtTok(currentChatTokens.completion) }}</div>
+        <button class="ghost small" title="Новый чат" @click="newChat" style="white-space:nowrap">+ Новый</button>
         <button class="ghost" :title="`Тема: ${themeLabel[theme]}`" @click="cycleTheme">{{ themeIcon[theme] }}</button>
         <button class="ghost" title="Настройки" @click="settingsOpen = true">⚙</button>
       </div>

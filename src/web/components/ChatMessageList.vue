@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import type { ChatItem, ChatItemToolCall } from '../api'
 import { fmtSize, plural } from '../utils'
 import ChatMessage from './ChatMessage.vue'
@@ -60,8 +60,13 @@ function scrollToBottom() {
   if (scrollEl.value) scrollEl.value.scrollTop = scrollEl.value.scrollHeight
 }
 
+// Scroll when items change (new messages, page load)
+watch(() => props.items.length, () => nextTick(scrollToBottom))
+watch(() => props.streaming, (v) => { if (!v) nextTick(scrollToBottom) })
+
 let ro: ResizeObserver | null = null
-onMounted(() => {
+onMounted(async () => {
+  await nextTick()
   scrollToBottom()
   if (!scrollEl.value) return
   ro = new ResizeObserver(scrollToBottom)
@@ -112,7 +117,7 @@ onBeforeUnmount(() => ro?.disconnect())
 </template>
 
 <style scoped>
-.msg-list { flex: 1; overflow-y: auto; padding: 12px 16px 24px; display: flex; flex-direction: column; }
+.msg-list { flex: 1; overflow-y: auto; padding: 8px 14px 16px; display: flex; flex-direction: column; }
 
 /* ── Empty state ────────────────────────────────────────────── */
 .empty-state { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-top: 24px; }

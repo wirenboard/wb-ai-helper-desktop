@@ -106,7 +106,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .sidebar-footer { padding: 8px 12px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-mute); }
 .collapse-btn { font-size: 16px; padding: 2px 6px; line-height: 1; }
 
-.chat-pane { display: flex; flex-direction: column; min-width: 0; }
+.chat-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .chat-header { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
 .chat-title { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-context { font-size: 12px; color: var(--text-mute); }
