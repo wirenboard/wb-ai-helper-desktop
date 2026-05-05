@@ -7,8 +7,6 @@ marked.use({ breaks: true, gfm: true })
 
 function renderMd(text: string): string {
   const html = marked.parse(text) as string
-  // marked produces <p> inside <li> for "loose" lists (blank lines between items).
-  // Strip the wrapper so our CSS gap controls apply uniformly.
   return html.replace(/<li>\s*<p>([\s\S]*?)<\/p>\s*<\/li>/g, (_, inner) => `<li>${inner.trim()}</li>`)
 }
 
@@ -29,12 +27,15 @@ const textarea = ref<HTMLTextAreaElement | null>(null)
 const copiedIdx = ref<number | null>(null)
 const selPopup = ref<{ x: number; y: number } | null>(null)
 const selText = ref('')
+const selQuote = ref('')  // confirmed quote shown as chip above textarea
 
 function send() {
   const t = input.value.trim()
   if (!t || props.streaming) return
+  const msg = selQuote.value ? `«${selQuote.value}»\n\n${t}` : t
   input.value = ''
-  emit('send', t)
+  selQuote.value = ''
+  emit('send', msg)
 }
 
 type ToolInfo = { name: string; args: string; result: string }
@@ -69,6 +70,11 @@ function toolInfo(turns: ChatTurn[], idx: number): ToolInfo {
   return { name, args, result: t.content }
 }
 
+function isEmptyArgs(args: string): boolean {
+  const t = args.trim()
+  return !t || t === '{}' || t === '[]'
+}
+
 function onEnter(e: KeyboardEvent) {
   if (e.shiftKey) return
   e.preventDefault()
@@ -82,7 +88,6 @@ async function copyMsg(text: string, idx: number) {
 }
 
 function onMouseUp(e: MouseEvent) {
-  // Ignore clicks inside the textarea/buttons
   if ((e.target as HTMLElement).closest('.chat-input-row')) return
   setTimeout(() => {
     const sel = window.getSelection()
@@ -99,14 +104,17 @@ function onMouseUp(e: MouseEvent) {
 
 function askSelection() {
   if (!selText.value) return
-  input.value = `«${selText.value}»\n\n`
+  selQuote.value = selText.value
   selPopup.value = null
   window.getSelection()?.removeAllRanges()
-  nextTick(() => {
-    textarea.value?.focus()
-    const len = textarea.value?.value.length ?? 0
-    textarea.value?.setSelectionRange(len, len)
-  })
+  nextTick(() => { textarea.value?.focus() })
+}
+
+function autoResize() {
+  const el = textarea.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = Math.min(el.scrollHeight, 200) + 'px'
 }
 
 function scrollBottom() {
@@ -116,6 +124,7 @@ function scrollBottom() {
 watch(() => props.turns.length, scrollBottom)
 watch(() => props.turns[props.turns.length - 1]?.content, scrollBottom)
 watch(() => props.streaming, (v) => { if (!v) scrollBottom() })
+watch(input, autoResize)
 </script>
 
 <template>
@@ -128,7 +137,10 @@ watch(() => props.streaming, (v) => { if (!v) scrollBottom() })
       <div v-if="t.role === 'user'" class="msg user">
         <div class="role">вы</div>{{ t.content }}
       </div>
-      <div v-else-if="t.role === 'assistant'" class="msg assistant">
+      <div
+        v-else-if="t.role === 'assistant' && (t.content || (streaming && i === turns.length - 1))"
+        class="msg assistant"
+      >
         <div class="msg-header">
           <span class="role">помощник</span>
           <button v-if="t.content" class="ghost small copy-btn" :title="copiedIdx === i ? 'Скопировано!' : 'Копировать'" @click="copyMsg(t.content, i)">
@@ -145,7 +157,7 @@ watch(() => props.streaming, (v) => { if (!v) scrollBottom() })
         <template v-for="info in [toolInfo(turns, i)]" :key="'info'">
           <details>
             <summary>{{ info.name }}</summary>
-            <pre v-if="info.args">{{ info.args }}</pre>
+            <pre v-if="!isEmptyArgs(info.args)">{{ info.args }}</pre>
             <pre v-if="info.result">{{ info.result }}</pre>
           </details>
         </template>
@@ -165,13 +177,19 @@ watch(() => props.streaming, (v) => { if (!v) scrollBottom() })
   </Teleport>
 
   <div class="chat-input-row">
-    <textarea
-      ref="textarea"
-      v-model="input"
-      :placeholder="llmConfigured ? 'Сообщение… (Enter — отправить, Shift+Enter — перенос)' : 'OPENAI_API_KEY не настроен'"
-      :disabled="!llmConfigured"
-      @keydown.enter="onEnter"
-    />
+    <div class="input-wrap">
+      <div v-if="selQuote" class="quote-bar">
+        <span class="quote-text">«{{ selQuote }}»</span>
+        <button class="ghost small dismiss-btn" title="Убрать" @click="selQuote = ''">✕</button>
+      </div>
+      <textarea
+        ref="textarea"
+        v-model="input"
+        :placeholder="llmConfigured ? 'Сообщение… (Enter — отправить, Shift+Enter — перенос)' : 'OPENAI_API_KEY не настроен'"
+        :disabled="!llmConfigured"
+        @keydown.enter="onEnter"
+      />
+    </div>
     <button v-if="streaming" class="danger" @click="emit('stop')">Стоп</button>
     <button v-else class="primary" :disabled="!llmConfigured || !input.trim()" @click="send">
       Отправить
@@ -188,5 +206,26 @@ watch(() => props.streaming, (v) => { if (!v) scrollBottom() })
 .sel-popup {
   position: fixed; transform: translate(-50%, -100%);
   z-index: 500; pointer-events: all;
+}
+.input-wrap { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.quote-bar {
+  display: flex; align-items: flex-start; gap: 6px;
+  background: var(--accent-soft); border: 1px solid var(--accent);
+  border-bottom: none; border-radius: 6px 6px 0 0;
+  padding: 4px 8px; font-size: 12px; color: var(--text-mute);
+}
+.quote-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dismiss-btn { padding: 0 4px; font-size: 11px; color: var(--text-mute); }
+.input-wrap textarea {
+  border-radius: 6px;
+  resize: none;
+  height: 40px;
+  max-height: 200px;
+  overflow-y: auto;
+  width: 100%;
+}
+.input-wrap .quote-bar + textarea {
+  border-radius: 0 0 6px 6px;
+  border-top: none;
 }
 </style>
