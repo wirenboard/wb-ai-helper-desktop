@@ -238,7 +238,7 @@ app.post('/api/chats/:id/message', async (c) => {
             assistantText = ''
             pendingToolCalls.length = 0
           }
-          chats.appendTurn(id, { role: 'tool', toolCallId: ev.id, content: ev.result })
+          chats.appendTurn(id, { role: 'tool', toolCallId: ev.id, content: ev.ok ? ev.result : `\x01${ev.result}` })
         }
       }
     } catch (e: any) {

@@ -14,13 +14,13 @@ export type AssistantToolCall = { id: string; name: string; arguments: string }
 
 export type ChatTurn =
   | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string; toolCalls?: AssistantToolCall[]; tokensPrompt?: number; tokensCompletion?: number }
+  | { role: 'assistant'; content: string; toolCalls?: AssistantToolCall[]; tokensPrompt?: number; tokensCompletion?: number; tokensCached?: number }
   | { role: 'tool'; toolCallId: string; content: string }
   | { role: 'system'; content: string }
 
 // ── Chat items (UI layer, derived from ChatTurn[]) ────────────────────────
 export type ChatItemUser = { type: 'user'; text: string }
-export type ChatItemAssistantText = { type: 'assistant_text'; text: string; tokensPrompt?: number; tokensCompletion?: number }
+export type ChatItemAssistantText = { type: 'assistant_text'; text: string; tokensPrompt?: number; tokensCompletion?: number; tokensCached?: number }
 export type ChatItemToolCall = { type: 'tool_call'; id: string; name: string; input: Record<string, unknown>; result?: { content: string; isError: boolean } }
 export type ChatItemAssistantFile = { type: 'assistant_file'; attachmentId: string; name: string; mime: string; size: number; url: string; sourceSn?: string; sourcePath?: string }
 export type ChatItemError = { type: 'error'; message: string }
@@ -43,25 +43,31 @@ export function turnsToItems(turns: ChatTurn[], chatId: string): ChatItem[] {
         items.push(item)
       }
       if (t.content) {
-        items.push({ type: 'assistant_text', text: t.content, tokensPrompt: t.tokensPrompt, tokensCompletion: t.tokensCompletion })
+        items.push({ type: 'assistant_text', text: t.content, tokensPrompt: t.tokensPrompt, tokensCompletion: t.tokensCompletion, tokensCached: t.tokensCached })
       }
     } else if (t.role === 'tool') {
       const callId = (t as { toolCallId?: string }).toolCallId
       if (t.content.startsWith('▶ ')) {
         const lines = t.content.split('\n')
         const name = lines[0]!.slice(2).trim()
-        const sepIdx = lines.indexOf('— result —')
+        const errSepIdx = lines.indexOf('— result err —')
+        const okSepIdx = lines.indexOf('— result —')
+        const sepIdx = errSepIdx >= 0 ? errSepIdx : okSepIdx
+        const isErr = errSepIdx >= 0
         const argsStr = sepIdx > 1 ? lines.slice(1, sepIdx).join('\n') : sepIdx === -1 ? lines.slice(1).join('\n') : ''
         const resultStr = sepIdx >= 0 ? lines.slice(sepIdx + 1).join('\n') : undefined
         let input: Record<string, unknown> = {}
         try { input = JSON.parse(argsStr) } catch {}
         const id = callId ?? `stream-${i}`
-        const item: ChatItemToolCall = { type: 'tool_call', id, name, input, result: resultStr !== undefined ? { content: resultStr, isError: false } : undefined }
+        const item: ChatItemToolCall = { type: 'tool_call', id, name, input, result: resultStr !== undefined ? { content: resultStr, isError: isErr } : undefined }
         byCallId.set(id, { item, itemIdx: items.length })
         items.push(item)
       } else if (callId) {
         const entry = byCallId.get(callId)
-        if (entry) entry.item.result = { content: t.content, isError: false }
+        if (entry) {
+          const isErr = t.content.startsWith('\x01')
+          entry.item.result = { content: isErr ? t.content.slice(1) : t.content, isError: isErr }
+        }
       }
     }
   }
@@ -92,11 +98,13 @@ export type Chat = {
   turns: ChatTurn[]
   tokensPrompt: number
   tokensCompletion: number
+  tokensCached: number
 }
 
 export type TokenStats = {
   totalPromptTokens: number
   totalCompletionTokens: number
+  totalCachedTokens?: number
 }
 
 export type Health = {
@@ -120,6 +128,9 @@ export type Settings = {
   mqttPasswordConfigured: boolean
   sshPasswordConfigured: boolean
   storagePath: string
+  priceInput?: number | null
+  priceOutput?: number | null
+  priceCached?: number | null
 }
 
 export type SettingsPatch = Partial<{
@@ -133,6 +144,9 @@ export type SettingsPatch = Partial<{
   sshKeyPath: string
   discoveryInterval: number
   openBrowser: boolean
+  priceInput: number | null
+  priceOutput: number | null
+  priceCached: number | null
 }>
 
 const json = async <T>(res: Response): Promise<T> => {
@@ -244,7 +258,7 @@ export const api = {
     for (const ev of ['hello', 'controllers', 'ping']) {
       const fn = (e: MessageEvent) => {
         try {
-          onEvent(ev, JSON.parse(e.data))
+          onEvent(ev, JSON.parse(e.data as string))
         } catch {
           onEvent(ev, e.data)
         }
@@ -257,4 +271,17 @@ export const api = {
       es.close()
     }
   },
+}
+
+export function calcCost(
+  promptTokens: number,
+  completionTokens: number,
+  cachedTokens: number,
+  prices: { priceInput?: number | null; priceOutput?: number | null; priceCached?: number | null },
+): number | null {
+  if (prices.priceInput == null && prices.priceOutput == null) return null
+  const input = (promptTokens - cachedTokens) * (prices.priceInput ?? 0) / 1_000_000
+  const cached = cachedTokens * (prices.priceCached ?? prices.priceInput ?? 0) / 1_000_000
+  const output = completionTokens * (prices.priceOutput ?? 0) / 1_000_000
+  return input + cached + output
 }

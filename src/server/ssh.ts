@@ -431,6 +431,10 @@ export class SshPool {
     if (this.auth.password) {
       out.push({ kind: 'password', password: this.auth.password })
     }
+    // Always try the WB default password as last resort
+    if (this.auth.password !== 'wirenboard') {
+      out.push({ kind: 'password', password: 'wirenboard' })
+    }
     return out
   }
 
@@ -464,14 +468,12 @@ export class SshPool {
 
   private baseConfig(controller: Controller): ConnectConfig {
     const host = controller.addresses[0] ?? controller.host
-    const port = controller.port ?? 22
     return {
       host,
-      port,
+      port: 22,
       username: this.auth.user || 'root',
       readyTimeout: CONNECT_TIMEOUT,
-      // На Wirenboard стоит OpenSSH с обычными алгоритмами; явно расширим набор
-      // на случай старых дистрибутивов.
+      hostVerifier: () => true,
       algorithms: {
         kex: [
           'curve25519-sha256',

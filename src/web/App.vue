@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { api, type Chat, type ChatTurn, type Controller, type Health, type Settings, type TokenStats } from './api'
-import { fmtTok } from './utils'
+import { api, calcCost, type Chat, type ChatTurn, type Controller, type Health, type Settings, type TokenStats } from './api'
+import { fmtCost, fmtTok } from './utils'
 import ChatList from './components/ChatList.vue'
 import ChatPane from './components/ChatPane.vue'
 import ControllerList from './components/ControllerList.vue'
@@ -31,6 +31,22 @@ function cycleTheme() {
 }
 
 applyTheme(theme.value)
+
+const FONT_SIZE_KEY = 'wb-font-size'
+const fontSize = ref<number>(Number(localStorage.getItem(FONT_SIZE_KEY)) || 18)
+
+function applyFontSize(s: number) {
+  document.documentElement.style.fontSize = s + 'px'
+}
+
+function onFontSizeChange(s: number) {
+  fontSize.value = s
+  localStorage.setItem(FONT_SIZE_KEY, String(s))
+  applyFontSize(s)
+}
+
+applyFontSize(fontSize.value)
+
 const leftWidth = ref(260)
 const rightWidth = ref(320)
 
@@ -97,11 +113,26 @@ const currentChatTokens = computed(() => {
       if (t.role === 'assistant') {
         acc.prompt += t.tokensPrompt ?? 0
         acc.completion += t.tokensCompletion ?? 0
+        acc.cached += t.tokensCached ?? 0
       }
       return acc
     },
-    { prompt: 0, completion: 0 },
+    { prompt: 0, completion: 0, cached: 0 },
   )
+})
+
+const currentChatCost = computed(() => {
+  if (!settings.value) return null
+  const { prompt, completion, cached } = currentChatTokens.value
+  if (!prompt && !completion) return null
+  return calcCost(prompt, completion, cached, settings.value)
+})
+
+const totalCost = computed(() => {
+  if (!settings.value || !totalStats.value) return null
+  const { totalPromptTokens, totalCompletionTokens, totalCachedTokens } = totalStats.value
+  if (!totalPromptTokens && !totalCompletionTokens) return null
+  return calcCost(totalPromptTokens, totalCompletionTokens, totalCachedTokens ?? 0, settings.value)
 })
 
 
@@ -124,7 +155,7 @@ async function loadInitial() {
     await selectChat(chats.value[0]!.id)
   }
   unsubscribe = api.subscribeEvents((event, data) => {
-    if (event === 'controllers') controllers.value = data
+    if (event === 'controllers') controllers.value = data as Controller[]
   })
 }
 
@@ -224,7 +255,10 @@ async function sendMessage(text: string) {
     abortStream = null
     if (activeChatId.value === id) {
       const c = await api.getChat(id).catch(() => null)
-      if (c) patchLocalChat(c)
+      if (c) {
+        patchLocalChat(c)
+        delete liveTurns[id]  // persisted is now fresh, drop live
+      }
     }
     void api.stats().then((s) => { totalStats.value = s }).catch(() => {})
   }
@@ -255,11 +289,12 @@ function handleStreamEvent(chatId: string, event: string, data: any) {
     const idx = buf.findIndex(
       (t) => t.role === 'tool' && (t as any).toolCallId === data.id,
     )
+    const sep = data.ok === false ? '— result err —' : '— result —'
     if (idx >= 0) {
       buf[idx] = {
         role: 'tool',
         toolCallId: data.id,
-        content: `${buf[idx]!.content}\n— result —\n${data.result}`,
+        content: `${buf[idx]!.content}\n${sep}\n${data.result}`,
       }
     } else {
       buf.push({ role: 'tool', toolCallId: data.id, content: data.result })
@@ -289,8 +324,8 @@ const visibleTurns = computed<ChatTurn[]>(() => {
   if (!activeChat.value) return []
   const persisted = activeChat.value.turns.filter((t) => t.role !== 'system')
   const live = liveTurns[activeChat.value.id] ?? []
-  // Persisted is updated after the stream ends; while streaming, show live.
-  return streaming.value ? live : persisted.length ? persisted : live
+  // Prefer live while it has content; after getChat refreshes persisted, live is deleted
+  return live.length ? live : persisted
 })
 </script>
 
@@ -300,6 +335,8 @@ const visibleTurns = computed<ChatTurn[]>(() => {
       :chats="chats"
       :active-id="activeChatId"
       :total-stats="totalStats"
+      :total-cost="totalCost"
+      :settings="settings"
       :open="leftOpen"
       @new="newChat"
       @select="selectChat"
@@ -323,8 +360,8 @@ const visibleTurns = computed<ChatTurn[]>(() => {
         <div
           v-if="currentChatTokens.prompt + currentChatTokens.completion"
           class="chat-tokens small muted"
-          title="Токены в этом чате: ↑ prompt / ↓ completion"
-        >↑{{ fmtTok(currentChatTokens.prompt) }} ↓{{ fmtTok(currentChatTokens.completion) }}</div>
+          :title="`Токены в этом чате: ↑${fmtTok(currentChatTokens.prompt)} prompt${currentChatTokens.cached ? ` (⊙${fmtTok(currentChatTokens.cached)} кэш)` : ''} / ↓${fmtTok(currentChatTokens.completion)} completion`"
+        >↑{{ fmtTok(currentChatTokens.prompt) }} ↓{{ fmtTok(currentChatTokens.completion) }}<template v-if="currentChatTokens.cached"> ⊙{{ fmtTok(currentChatTokens.cached) }}</template><template v-if="currentChatCost != null"> · {{ fmtCost(currentChatCost) }}</template></div>
         <button class="ghost small" title="Новый чат" @click="newChat" style="white-space:nowrap">+ Новый</button>
         <button class="ghost" :title="`Тема: ${themeLabel[theme]}`" @click="cycleTheme">{{ themeIcon[theme] }}</button>
         <button class="ghost" title="Настройки" @click="settingsOpen = true">⚙</button>
@@ -357,8 +394,10 @@ const visibleTurns = computed<ChatTurn[]>(() => {
       :settings="settings"
       :open="settingsOpen"
       :version="health?.version"
+      :font-size="fontSize"
       @close="settingsOpen = false"
       @saved="onSettingsSaved"
+      @font-size-change="onFontSizeChange"
     />
 
     <ControllerList
