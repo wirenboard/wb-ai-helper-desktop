@@ -63,7 +63,8 @@ function migrate(db: Database) {
 function defaultDbPath(): string {
   const exe = process.execPath
   const isCompiled = exe && !path.basename(exe).startsWith('bun')
-  if (isCompiled) return path.join(path.dirname(exe), 'wb-ai-helper.db')
+  // In AppImage the binary lives in a read-only squashfs → fall through to XDG
+  if (isCompiled && !process.env['APPIMAGE']) return path.join(path.dirname(exe), 'wb-ai-helper.db')
   const cfg =
     process.platform === 'win32'
       ? path.join(process.env['APPDATA'] ?? path.join(os.homedir(), 'AppData', 'Roaming'), 'wb-ai-helper')
