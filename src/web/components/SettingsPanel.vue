@@ -13,18 +13,57 @@ const provider = ref<LlmProvider>('openai')
 const apiKey = ref('')
 const baseURL = ref('')
 const model = ref('')
+const llmProxy = ref('')
+const llmProxyUser = ref('')
+const llmProxyPassword = ref('')
+const tlsInsecure = ref(false)
+const priceInput = ref<number | null>(null)
+const priceOutput = ref<number | null>(null)
+const priceCached = ref<number | null>(null)
 
 const providerInfo = computed(() => PROVIDER_INFO[provider.value])
 const showPriceFields = computed(() => providerInfo.value.pricesEditable)
 const baseURLPlaceholder = computed(() => providerInfo.value.defaultBaseURL || 'https://your-endpoint/v1')
+const apiKeyConfiguredForProvider = computed(
+  () => !!props.settings?.providers?.[provider.value]?.apiKeyConfigured,
+)
+const llmProxyPasswordConfiguredForProvider = computed(
+  () => !!props.settings?.providers?.[provider.value]?.llmProxyPasswordConfigured,
+)
+
+/** Load the saved fields for `next` into the form. */
+function loadProviderFields(next: LlmProvider) {
+  const cfg = props.settings?.providers?.[next]
+  apiKey.value = ''
+  llmProxyPassword.value = ''
+  if (cfg) {
+    baseURL.value = cfg.baseURL
+    model.value = cfg.model
+    llmProxy.value = cfg.llmProxy
+    llmProxyUser.value = cfg.llmProxyUser
+    tlsInsecure.value = cfg.tlsInsecure
+    priceInput.value = cfg.priceInput
+    priceOutput.value = cfg.priceOutput
+    priceCached.value = cfg.priceCached
+  } else {
+    baseURL.value = PROVIDER_INFO[next].defaultBaseURL
+    model.value = ''
+    llmProxy.value = ''
+    llmProxyUser.value = ''
+    tlsInsecure.value = false
+    priceInput.value = null
+    priceOutput.value = null
+    priceCached.value = null
+  }
+  // If the loaded baseURL is empty (user never customised), suggest provider's default
+  if (!baseURL.value) baseURL.value = PROVIDER_INFO[next].defaultBaseURL
+}
 
 function onProviderChange(next: LlmProvider) {
   provider.value = next
-  // If the user hasn't customised baseURL, prefill from the new provider's default
-  const prevDef = props.settings ? PROVIDER_INFO[props.settings.provider]?.defaultBaseURL : ''
-  if (!baseURL.value || baseURL.value === prevDef) {
-    baseURL.value = PROVIDER_INFO[next].defaultBaseURL
-  }
+  loadProviderFields(next)
+  models.value = []
+  modelsError.value = null
 }
 const mqttUser = ref('')
 const mqttPassword = ref('')
@@ -32,14 +71,7 @@ const sshUser = ref('root')
 const sshPassword = ref('')
 const sshKeyPath = ref('')
 const discoveryInterval = ref(15000)
-const llmProxy = ref('')
-const llmProxyUser = ref('')
-const llmProxyPassword = ref('')
-const tlsInsecure = ref(false)
 const openBrowser = ref(true)
-const priceInput = ref<number | null>(null)
-const priceOutput = ref<number | null>(null)
-const priceCached = ref<number | null>(null)
 
 const models = ref<string[]>([])
 const modelsError = ref<string | null>(null)
@@ -57,24 +89,15 @@ watch(
     if (!v) return
     if (props.settings) {
       provider.value = props.settings.provider
-      apiKey.value = ''
-      baseURL.value = props.settings.baseURL
-      model.value = props.settings.model
+      loadProviderFields(provider.value)
       mqttUser.value = props.settings.mqttUser
       mqttPassword.value = ''
       sshUser.value = props.settings.sshUser || 'root'
       sshPassword.value = ''
       sshKeyPath.value = props.settings.sshKeyPath
       discoveryInterval.value = props.settings.discoveryInterval
-      llmProxy.value = props.settings.llmProxy ?? ''
-      llmProxyUser.value = props.settings.llmProxyUser ?? ''
-      llmProxyPassword.value = ''
-      tlsInsecure.value = props.settings.tlsInsecure ?? false
       openBrowser.value = props.settings.openBrowser
-      priceInput.value = props.settings.priceInput ?? null
-      priceOutput.value = props.settings.priceOutput ?? null
-      priceCached.value = props.settings.priceCached ?? null
-      if (props.settings.apiKeyConfigured) void fetchModels()
+      if (apiKeyConfiguredForProvider.value) void fetchModels()
     }
   },
   { immediate: true },
@@ -110,9 +133,12 @@ async function save() {
   saving.value = true
   saveError.value = null
   try {
+    // Only Custom carries an explicit baseURL; OpenAI/VseGPT always use the
+    // hard-coded provider default on the backend.
+    const baseURLForSave = provider.value === 'custom' ? baseURL.value : ''
     const patch: any = {
       provider: provider.value,
-      baseURL: baseURL.value,
+      baseURL: baseURLForSave,
       model: model.value,
       llmProxy: llmProxy.value,
       llmProxyUser: llmProxyUser.value,
@@ -174,24 +200,33 @@ async function removeKey() {
             </div>
           </label>
           <label class="field">
-            <span>API-ключ {{ settings?.apiKeyConfigured ? '(сохранён)' : '(не задан)' }}</span>
+            <span>
+              API-ключ {{ apiKeyConfiguredForProvider ? '(сохранён)' : '(не задан)' }}
+              <a
+                v-if="providerInfo.signupUrl"
+                :href="providerInfo.signupUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="key-link"
+              >Получить ключ ↗</a>
+            </span>
             <div class="row">
               <input
                 type="password"
                 v-model="apiKey"
-                :placeholder="settings?.apiKeyConfigured ? '••• оставьте пустым чтобы не менять' : 'sk-...'"
+                :placeholder="apiKeyConfiguredForProvider ? '••• оставьте пустым чтобы не менять' : 'sk-...'"
                 autocomplete="off"
               />
               <button
-                v-if="settings?.apiKeyConfigured"
+                v-if="apiKeyConfiguredForProvider"
                 class="ghost danger"
                 @click="removeKey"
               >удалить</button>
             </div>
           </label>
 
-          <label class="field">
-            <span>Base URL <span class="muted small">(оставьте пустым — будет использован {{ providerInfo.defaultBaseURL || 'свой endpoint' }})</span></span>
+          <label v-if="provider === 'custom'" class="field">
+            <span>Base URL</span>
             <input v-model="baseURL" :placeholder="baseURLPlaceholder" />
           </label>
 
@@ -205,11 +240,11 @@ async function removeKey() {
               <input v-model="llmProxyUser" placeholder="user" autocomplete="off" />
             </label>
             <label class="field" style="flex:1;margin-bottom:0">
-              <span>Пароль прокси {{ settings?.llmProxyPasswordConfigured ? '(сохранён)' : '' }}</span>
+              <span>Пароль прокси {{ llmProxyPasswordConfiguredForProvider ? '(сохранён)' : '' }}</span>
               <input
                 type="password"
                 v-model="llmProxyPassword"
-                :placeholder="settings?.llmProxyPasswordConfigured ? '••• оставьте пустым чтобы не менять' : ''"
+                :placeholder="llmProxyPasswordConfiguredForProvider ? '••• оставьте пустым чтобы не менять' : ''"
                 autocomplete="off"
               />
             </label>
@@ -389,4 +424,9 @@ code { background: var(--bg-mute); padding: 2px 4px; border-radius: 3px; font-si
 .provider-opt:hover { background: var(--bg-soft); }
 .provider-opt.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
 .provider-opt input { width: auto; margin: 0; flex-shrink: 0; }
+.key-link {
+  margin-left: 8px; font-size: 0.75rem; color: var(--accent);
+  text-decoration: none; white-space: nowrap;
+}
+.key-link:hover { text-decoration: underline; }
 </style>

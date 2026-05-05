@@ -133,32 +133,76 @@ export type Health = {
 
 export type LlmProvider = 'openai' | 'vsegpt' | 'custom'
 
-export const PROVIDER_INFO: Record<LlmProvider, { label: string; defaultBaseURL: string; currency: 'USD' | 'RUB' | null; pricesEditable: boolean }> = {
-  openai:  { label: 'OpenAI',     defaultBaseURL: 'https://api.openai.com/v1', currency: 'USD', pricesEditable: true },
-  vsegpt:  { label: 'VseGPT.Ru',  defaultBaseURL: 'https://api.vsegpt.ru/v1',  currency: 'RUB', pricesEditable: false },
-  custom:  { label: 'Custom',     defaultBaseURL: '',                          currency: null,  pricesEditable: false },
+export interface ProviderInfo {
+  label: string
+  defaultBaseURL: string
+  currency: 'USD' | 'RUB' | null
+  pricesEditable: boolean
+  /** Where the user can sign up / get an API key. Shown as "Получить ключ ↗". */
+  signupUrl: string | null
 }
 
-export type Settings = {
-  provider: LlmProvider
+export const PROVIDER_INFO: Record<LlmProvider, ProviderInfo> = {
+  openai: {
+    label: 'OpenAI',
+    defaultBaseURL: 'https://api.openai.com/v1',
+    currency: 'USD',
+    pricesEditable: true,
+    signupUrl: 'https://platform.openai.com/api-keys',
+  },
+  vsegpt: {
+    label: 'VseGPT.Ru',
+    defaultBaseURL: 'https://api.vsegpt.ru/v1',
+    currency: 'RUB',
+    pricesEditable: false,
+    signupUrl: 'https://vsegpt.ru/User/API',
+  },
+  custom: {
+    label: 'Custom',
+    defaultBaseURL: '',
+    currency: null,
+    pricesEditable: false,
+    signupUrl: null,
+  },
+}
+
+export type ProviderConfigPublic = {
   baseURL: string
   model: string
   llmProxy: string
   llmProxyUser: string
   tlsInsecure: boolean
+  priceInput: number | null
+  priceOutput: number | null
+  priceCached: number | null
+  apiKeyConfigured: boolean
+  llmProxyPasswordConfigured: boolean
+}
+
+export type Settings = {
+  provider: LlmProvider
+  /** Per-provider configs; the active one is providers[provider]. */
+  providers: Record<LlmProvider, ProviderConfigPublic>
+  // Flat view of the *current* provider — these are the same as providers[provider].
+  baseURL: string
+  model: string
+  llmProxy: string
+  llmProxyUser: string
+  tlsInsecure: boolean
+  apiKeyConfigured: boolean
+  llmProxyPasswordConfigured: boolean
+  priceInput?: number | null
+  priceOutput?: number | null
+  priceCached?: number | null
+  // Shared (controller / UI):
   mqttUser: string
   sshUser: string
   sshKeyPath: string
   discoveryInterval: number
   openBrowser: boolean
-  apiKeyConfigured: boolean
   mqttPasswordConfigured: boolean
   sshPasswordConfigured: boolean
-  llmProxyPasswordConfigured: boolean
   storagePath: string
-  priceInput?: number | null
-  priceOutput?: number | null
-  priceCached?: number | null
 }
 
 export type SettingsPatch = Partial<{

@@ -33,7 +33,8 @@ setInterval(() => cleanupExpired(), 60 * 60 * 1000)
 
 /** Pick a baseURL: explicit user value wins; otherwise fall back to the provider's default. */
 function resolveBaseUrl(s: Settings): string | undefined {
-  if (s.baseURL && s.baseURL.trim()) return s.baseURL
+  const cur = s.providers[s.provider]
+  if (cur.baseURL && cur.baseURL.trim()) return cur.baseURL
   const def = PROVIDER_DEFAULTS[s.provider]?.baseURL
   return def || undefined
 }
@@ -48,30 +49,24 @@ const ssh = new SshPool({
   keyPath: settings.sshKeyPath,
 })
 const chats = new ChatStore(db)
-let llm: LlmClient | null = settings.apiKey
-  ? new LlmClient({
-      apiKey: settings.apiKey,
-      baseURL: resolveBaseUrl(settings),
-      model: settings.model || 'gpt-4.1-mini',
-      llmProxy: settings.llmProxy || undefined,
-      llmProxyUser: settings.llmProxyUser || undefined,
-      llmProxyPassword: settings.llmProxyPassword || undefined,
-      tlsInsecure: settings.tlsInsecure,
-    })
-  : null
+function buildLlmClient(s: Settings): LlmClient | null {
+  const cur = s.providers[s.provider]
+  if (!cur.apiKey) return null
+  return new LlmClient({
+    apiKey: cur.apiKey,
+    baseURL: resolveBaseUrl(s),
+    model: cur.model || 'gpt-4.1-mini',
+    llmProxy: cur.llmProxy || undefined,
+    llmProxyUser: cur.llmProxyUser || undefined,
+    llmProxyPassword: cur.llmProxyPassword || undefined,
+    tlsInsecure: cur.tlsInsecure,
+  })
+}
+
+let llm: LlmClient | null = buildLlmClient(settings)
 
 settingsStore.onChange((s) => {
-  llm = s.apiKey
-    ? new LlmClient({
-        apiKey: s.apiKey,
-        baseURL: s.baseURL || undefined,
-        model: s.model || 'gpt-4.1-mini',
-        llmProxy: s.llmProxy || undefined,
-        llmProxyUser: s.llmProxyUser || undefined,
-        llmProxyPassword: s.llmProxyPassword || undefined,
-        tlsInsecure: s.tlsInsecure,
-      })
-    : null
+  llm = buildLlmClient(s)
   void mqtt.close()
   mqtt = new MqttPool({ user: s.mqttUser, password: s.mqttPassword })
   ssh.setAuth({ user: s.sshUser, password: s.sshPassword, keyPath: s.sshKeyPath })
@@ -128,9 +123,10 @@ app.delete('/api/settings/api-key', async (c) => {
 
 app.get('/api/models', async (c) => {
   const s = settingsStore.get()
-  if (!s.apiKey) return c.json({ error: 'apiKey не задан' }, 400)
+  const cur = s.providers[s.provider]
+  if (!cur.apiKey) return c.json({ error: 'apiKey не задан' }, 400)
   try {
-    const models = await listModels(s.apiKey, resolveBaseUrl(s))
+    const models = await listModels(cur.apiKey, resolveBaseUrl(s))
     return c.json({ models })
   } catch (e: any) {
     return c.json({ error: e?.message ?? String(e) }, 502)
@@ -418,7 +414,7 @@ const server = Bun.serve({
 
 console.log(`WB Helper запущен:          http://${server.hostname}:${server.port}/`)
 console.log(`Настройки:                  ${settingsStore.storagePath()}`)
-console.log(`LLM:                        ${llm ? `${llm.model} (${settings.baseURL || 'OpenAI'})` : 'не настроен — введите ключ через UI'}`)
+console.log(`LLM:                        ${llm ? `${llm.model} (${PROVIDER_DEFAULTS[settings.provider].label})` : 'не настроен — введите ключ через UI'}`)
 console.log(`mDNS-сканирование:          каждые ${settings.discoveryInterval} мс`)
 
 if (settings.openBrowser) openBrowser(`http://127.0.0.1:${server.port}/`)
