@@ -14,6 +14,9 @@ export type Settings = {
   sshKeyPath: string
   discoveryInterval: number
   openBrowser: boolean
+  priceInput: number | null
+  priceOutput: number | null
+  priceCached: number | null
 }
 
 export type PublicSettings = Omit<Settings, 'apiKey' | 'mqttPassword' | 'sshPassword'> & {
@@ -34,6 +37,9 @@ const DEFAULTS: Settings = {
   sshKeyPath: '',
   discoveryInterval: 15000,
   openBrowser: true,
+  priceInput: null,
+  priceOutput: null,
+  priceCached: null,
 }
 
 export class SettingsStore {
@@ -80,6 +86,9 @@ export class SettingsStore {
       sshKeyPath: this.cache.sshKeyPath,
       discoveryInterval: this.cache.discoveryInterval,
       openBrowser: this.cache.openBrowser,
+      priceInput: this.cache.priceInput,
+      priceOutput: this.cache.priceOutput,
+      priceCached: this.cache.priceCached,
       apiKeyConfigured: !!this.cache.apiKey,
       mqttPasswordConfigured: !!this.cache.mqttPassword,
       sshPasswordConfigured: !!this.cache.sshPassword,
@@ -120,9 +129,10 @@ function defaultStoragePath(): string {
   // process.execPath для bun-скомпилированного бинарника указывает на сам exe.
   // В dev-режиме (`bun --hot src/server/index.ts`) — на бинарь bun, тогда уходим в XDG/APPDATA,
   // чтобы не засорять рабочую копию проекта.
+  // В AppImage (APPIMAGE env set) — бинарник в read-only squashfs, уходим в XDG.
   const exe = process.execPath
   const isCompiled = exe && !path.basename(exe).startsWith('bun')
-  if (isCompiled) return path.join(path.dirname(exe), 'wb-ai-helper-settings.json')
+  if (isCompiled && !process.env['APPIMAGE']) return path.join(path.dirname(exe), 'wb-ai-helper-settings.json')
   const cfg =
     process.platform === 'win32'
       ? path.join(process.env['APPDATA'] ?? path.join(os.homedir(), 'AppData', 'Roaming'), 'wb-ai-helper')

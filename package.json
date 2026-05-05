@@ -9,6 +9,7 @@
     "build:web": "vue-tsc --noEmit -p tsconfig.web.json && vite build",
     "build": "bun scripts/build.ts",
     "smoke": "bun scripts/smoke.ts",
+    "appimage": "bun scripts/build-appimage.ts",
     "typecheck": "tsc --noEmit && vue-tsc --noEmit -p tsconfig.web.json",
     "test": "bun test tests/",
     "test:unit": "bun test tests/turns.test.ts tests/ssh-auth.test.ts",
