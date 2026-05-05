@@ -450,9 +450,11 @@ const visibleTurns = computed<ChatTurn[]>(() => {
         :streaming="streaming"
         :llm-configured="health?.llmConfigured ?? true"
         :chat-id="activeChat.id"
+        :running-jobs="runningJobs"
         @send="sendMessage"
         @stop="stopStreaming"
         @rename="renameChat"
+        @cancel-job="cancelJob"
       />
       <div v-else class="welcome">
         <h2>WB AI Helper</h2>

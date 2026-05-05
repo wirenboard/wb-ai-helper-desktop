@@ -186,10 +186,26 @@ async function downloadViaFetch(url: string, name: string) {
   <div v-else-if="item.type === 'error'" class="msg error">
     <div class="bubble">⚠ {{ (item as any).message }}</div>
   </div>
+
+  <!-- System event (auto job-done notification) -->
+  <div v-else-if="item.type === 'system_event'" class="msg system-event">
+    <span class="system-event-icon">⚙</span>
+    <span class="system-event-text">{{ (item as any).text }}</span>
+  </div>
 </template>
 
 <style scoped>
 .msg { margin: 4px 0; }
+
+/* ── System event ───────────────────────────────────────────── */
+.system-event {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px; margin: 2px 0;
+  font-size: 0.75rem; color: var(--text-mute);
+  border-left: 2px solid var(--border);
+}
+.system-event-icon { opacity: 0.5; flex-shrink: 0; }
+.system-event-text { font-style: italic; }
 
 /* ── User bubble ────────────────────────────────────────────── */
 .user { display: flex; justify-content: flex-end; }

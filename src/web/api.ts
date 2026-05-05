@@ -24,7 +24,8 @@ export type ChatItemAssistantText = { type: 'assistant_text'; text: string; toke
 export type ChatItemToolCall = { type: 'tool_call'; id: string; name: string; input: Record<string, unknown>; result?: { content: string; isError: boolean } }
 export type ChatItemAssistantFile = { type: 'assistant_file'; attachmentId: string; name: string; mime: string; size: number; url: string; sourceSn?: string; sourcePath?: string }
 export type ChatItemError = { type: 'error'; message: string }
-export type ChatItem = ChatItemUser | ChatItemAssistantText | ChatItemToolCall | ChatItemAssistantFile | ChatItemError
+export type ChatItemSystemEvent = { type: 'system_event'; text: string }
+export type ChatItem = ChatItemUser | ChatItemAssistantText | ChatItemToolCall | ChatItemAssistantFile | ChatItemError | ChatItemSystemEvent
 
 export function turnsToItems(turns: ChatTurn[], chatId: string): ChatItem[] {
   const items: ChatItem[] = []
@@ -33,6 +34,10 @@ export function turnsToItems(turns: ChatTurn[], chatId: string): ChatItem[] {
   for (let i = 0; i < turns.length; i++) {
     const t = turns[i]!
     if (t.role === 'user') {
+      if (t.content.startsWith('[Система]')) {
+        items.push({ type: 'system_event', text: t.content.slice('[Система]'.length).trim().split('\n')[0]! })
+        continue
+      }
       items.push({ type: 'user', text: t.content })
     } else if (t.role === 'assistant') {
       for (const tc of t.toolCalls ?? []) {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
-import type { ChatItem, ChatItemToolCall } from '../api'
+import type { ChatItem, ChatItemToolCall, TrackedJob } from '../api'
 import { fmtSize, plural } from '../utils'
 import ChatMessage from './ChatMessage.vue'
 
@@ -8,9 +8,30 @@ const props = defineProps<{
   items: ChatItem[]
   streaming: boolean
   chatId: string
+  runningJobs?: TrackedJob[]
 }>()
-const emit = defineEmits<{ suggest: [text: string] }>()
+const emit = defineEmits<{ suggest: [text: string]; cancelJob: [jobId: string] }>()
 
+const JOB_TOOLS = new Set(['wb_bus_scan', 'ssh_exec_async', 'wb_serial_debug'])
+
+function groupRunningJobs(g: Group): TrackedJob[] {
+  if (!props.runningJobs?.length) return []
+  const toolItems: ChatItemToolCall[] = g.kind === 'tools'
+    ? g.items
+    : (g.kind === 'single' && g.item.type === 'tool_call' ? [g.item as ChatItemToolCall] : [])
+  const snSet = new Set<string>()
+  const jobIdSet = new Set<string>()
+  for (const item of toolItems) {
+    if (!JOB_TOOLS.has(item.name)) continue
+    if (item.result) {
+      try { const r = JSON.parse(item.result.content); if (r.jobId) jobIdSet.add(r.jobId) } catch {}
+    }
+    const sn = String(item.input.sn ?? '')
+    if (sn) snSet.add(sn)
+  }
+  if (!jobIdSet.size && !snSet.size) return []
+  return props.runningJobs.filter(j => jobIdSet.has(j.jobId) || snSet.has(j.sn))
+}
 const GROUP_THRESHOLD = 3
 
 const SUGGESTIONS = [
@@ -121,6 +142,13 @@ onBeforeUnmount(() => ro?.disconnect())
           <ChatMessage v-for="(it, k) in g.items" :key="k" :item="it" :chatId="chatId" />
         </div>
       </div>
+      <!-- Inline job indicators for this group -->
+      <div v-for="job in groupRunningJobs(g)" :key="'job-' + job.jobId" class="inline-job">
+        <span class="inline-job-spinner">⟳</span>
+        <span class="inline-job-label">{{ job.label }}</span>
+        <span class="inline-job-sn">{{ job.sn }}</span>
+        <button class="inline-job-cancel ghost small" @click="emit('cancelJob', job.jobId)">✕</button>
+      </div>
     </template>
 
     <!-- Typing indicator -->
@@ -157,6 +185,20 @@ onBeforeUnmount(() => ro?.disconnect())
 .tool-group-label { font-weight: 600; color: var(--text); }
 .tool-group-names { color: var(--accent); font-family: 'JetBrains Mono', monospace; font-size: 0.6875rem; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-group-body { margin-top: 4px; padding-left: 12px; border-left: 2px solid var(--border); }
+
+/* ── Inline job indicator ───────────────────────────────────── */
+.inline-job {
+  display: flex; align-items: center; gap: 6px;
+  margin: 4px 0 4px 2px; padding: 5px 10px;
+  border: 1px dashed var(--primary, #6366f1); border-radius: 6px;
+  background: color-mix(in srgb, var(--primary, #6366f1) 8%, var(--bg));
+  font-size: 0.8rem; color: var(--primary, #6366f1);
+}
+.inline-job-spinner { animation: spin 1.2s linear infinite; display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.inline-job-label { font-weight: 500; }
+.inline-job-sn { opacity: 0.65; font-size: 0.72em; }
+.inline-job-cancel { margin-left: auto; color: inherit; border-color: currentColor; padding: 1px 6px; }
 
 /* ── Typing dots ────────────────────────────────────────────── */
 .typing { display: inline-flex; gap: 3px; margin: 6px 4px; }

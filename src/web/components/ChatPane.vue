@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
-import { type ChatTurn, turnsToItems } from '../api'
+import { type ChatTurn, turnsToItems, type TrackedJob } from '../api'
 import ChatMessageList from './ChatMessageList.vue'
 import ChatInputArea from './ChatInputArea.vue'
 
@@ -9,11 +9,13 @@ const props = defineProps<{
   streaming: boolean
   llmConfigured: boolean
   chatId: string
+  runningJobs?: TrackedJob[]
 }>()
 const emit = defineEmits<{
   send: [text: string]
   stop: []
   rename: [title: string]
+  cancelJob: [jobId: string]
 }>()
 
 const items = computed(() => turnsToItems(props.turns, props.chatId))
@@ -55,8 +57,10 @@ function onSuggest(text: string) {
       :items="items"
       :streaming="streaming"
       :chatId="chatId"
+      :runningJobs="runningJobs"
       @mouseup="onSelectionChange"
       @suggest="onSuggest"
+      @cancelJob="emit('cancelJob', $event)"
     />
 
     <Teleport to="body">
