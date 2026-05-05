@@ -8,14 +8,15 @@ export interface AttachmentMeta {
   createdAt: number
 }
 
-export function useAttachments(chatIdGetter: () => string) {
+export function useAttachments(chatIdGetter: () => string, opts: { source?: 'user' | 'assistant' } = {}) {
   const items = ref<AttachmentMeta[]>([])
 
   async function refresh() {
     const chatId = chatIdGetter()
     if (!chatId) return
     try {
-      const r = await fetch(`/api/attachments?chatId=${encodeURIComponent(chatId)}`)
+      const q = opts.source ? `&source=${opts.source}` : ''
+      const r = await fetch(`/api/attachments?chatId=${encodeURIComponent(chatId)}${q}`)
       if (!r.ok) return
       const j = await r.json() as { items: AttachmentMeta[] }
       items.value = j.items

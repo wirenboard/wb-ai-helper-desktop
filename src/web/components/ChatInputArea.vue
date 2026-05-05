@@ -8,7 +8,7 @@ const emit = defineEmits<{ send: [text: string]; abort: [] }>()
 
 const COLLAPSE_AT = 3
 
-const { items, upload, remove, downloadUrl, removeAll, downloadAll } = useAttachments(() => props.chatId)
+const { items, upload, remove, downloadUrl, removeAll, downloadAll, clear } = useAttachments(() => props.chatId, { source: 'user' })
 
 const text = ref('')
 const quote = ref('')
@@ -20,6 +20,7 @@ const uploading = ref(false)
 const stripExpanded = ref(false)
 
 const stripCollapsed = computed(() => items.value.length > COLLAPSE_AT && !stripExpanded.value)
+const filesPopupOpen = ref(false)
 const totalSize = computed(() => items.value.reduce((n, a) => n + a.size, 0))
 
 function setQuote(q: string) {
@@ -36,6 +37,9 @@ function submit() {
   emit('send', msg)
   text.value = ''
   quote.value = ''
+  // Files have been sent — visually clear the strip. They stay on disk for
+  // list_attachments / read_attachment / upload_to_controller use later.
+  clear()
 }
 
 function onKey(e: KeyboardEvent) {
@@ -127,6 +131,7 @@ function onFileChange(e: Event) {
     <div class="buttons">
       <input ref="fileInputRef" type="file" multiple hidden @change="onFileChange" />
       <button type="button" class="attach" :disabled="uploading" :title="uploading ? 'Загрузка…' : 'Прикрепить файл'" @click="fileInputRef?.click()">📎</button>
+      <span class="downloads-hint" title="В Chrome Ctrl+J открывает список скачанных файлов с пунктом «Показать в папке»"><kbd>Ctrl+J</kbd> — скачанные файлы</span>
       <button v-if="disabled" type="button" class="abort" @click="emit('abort')">■ Прервать</button>
       <button type="submit" class="send" :disabled="disabled || !llmConfigured || (!text.trim() && !items.length)">Отправить</button>
     </div>
@@ -200,7 +205,7 @@ textarea:focus { border-color: var(--accent); }
 .buttons { display: flex; justify-content: flex-end; gap: 6px; align-items: center; }
 .attach {
   padding: 4px 10px; background: var(--bg); border: 1px solid var(--border);
-  border-radius: 4px; font-size: 0.875rem; cursor: pointer; color: var(--text-mute); margin-right: auto;
+  border-radius: 4px; font-size: 0.875rem; cursor: pointer; color: var(--text-mute);
 }
 .attach:hover { background: var(--bg-soft); color: var(--accent); }
 .attach:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -215,4 +220,40 @@ textarea:focus { border-color: var(--accent); }
 }
 .send:hover { filter: brightness(1.1); }
 .send:disabled { background: var(--border); cursor: not-allowed; }
+.downloads-hint {
+  font-size: 0.7rem; color: var(--text-mute); opacity: 0.65;
+  margin-right: auto; margin-left: 6px; user-select: none;
+}
+.downloads-hint kbd {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.68rem;
+  padding: 1px 4px; border: 1px solid var(--border); border-radius: 3px;
+  background: var(--bg);
+}
+.badge-count {
+  display: inline-block; min-width: 16px; padding: 0 4px; margin-left: 4px;
+  background: var(--accent); color: #fff; border-radius: 8px;
+  font-size: 0.7rem; line-height: 16px; text-align: center;
+}
+.files-popup {
+  position: absolute; bottom: 48px; right: 12px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  width: min(360px, 90%); padding: 6px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.12); z-index: 20;
+}
+.files-popup-head {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 0.75rem; font-weight: 600; color: var(--text-mute);
+  padding: 4px 6px; border-bottom: 1px solid var(--border); margin-bottom: 4px;
+}
+.files-popup-body { display: flex; flex-direction: column; max-height: 240px; overflow-y: auto; }
+.files-popup-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 6px; border-radius: 4px; text-decoration: none;
+  color: var(--text); font-size: 0.8rem;
+}
+.files-popup-row:hover { background: var(--bg-soft); }
+.files-popup-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files-popup-size { color: var(--text-mute); font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; }
+.files-popup-rm { border: none; background: transparent; color: var(--text-mute); cursor: pointer; padding: 0 4px; }
+.files-popup-rm:hover { color: var(--danger); }
 </style>

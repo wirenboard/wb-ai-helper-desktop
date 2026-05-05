@@ -6,6 +6,7 @@ import ChatList from './components/ChatList.vue'
 import ChatPane from './components/ChatPane.vue'
 import ControllerList from './components/ControllerList.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
+import SshTerminal from './components/SshTerminal.vue'
 
 const leftOpen = ref(true)
 const rightOpen = ref(true)
@@ -241,33 +242,69 @@ async function deleteChat(id: string) {
   }
 }
 
-const pendingDeleteAll = ref<{ timer: ReturnType<typeof setTimeout>; remaining: number; tick: ReturnType<typeof setInterval> } | null>(null)
+const pendingDeleteAll = ref<{
+  timer: ReturnType<typeof setTimeout>
+  remaining: number
+  tick: ReturnType<typeof setInterval>
+  /** Snapshot of chats hidden from the sidebar — restored on undo. */
+  snapshotChats: Chat[]
+  snapshotActiveId: string | null
+  snapshotActive: Chat | null
+} | null>(null)
 
 function scheduleDeleteAllChats() {
   if (pendingDeleteAll.value) return
+  // Stash current state and visually clear the sidebar.
+  const snapshotChats = [...chats.value]
+  const snapshotActiveId = activeChatId.value
+  const snapshotActive = activeChat.value
+  chats.value = []
+  activeChatId.value = null
+  activeChat.value = null
+  void newChat()  // give the user an empty chat to type into while undo is available
+
   const timer = setTimeout(async () => {
-    if (pendingDeleteAll.value) clearInterval(pendingDeleteAll.value.tick)
+    const stash = pendingDeleteAll.value
+    if (stash) clearInterval(stash.tick)
     pendingDeleteAll.value = null
-    for (const c of [...chats.value]) await api.deleteChat(c.id).catch(() => {})
-    chats.value = []
-    activeChatId.value = null
-    activeChat.value = null
+    if (!stash) return
+    // Commit: actually drop the snapshotted chats on the backend
+    for (const c of stash.snapshotChats) await api.deleteChat(c.id).catch(() => {})
     for (const k of Object.keys(liveTurns)) delete liveTurns[k]
-    await newChat()
     void api.stats().then((s) => { totalStats.value = s }).catch(() => {})
   }, UNDO_DELAY_MS)
+
   const tick = setInterval(() => {
     if (!pendingDeleteAll.value) return
     pendingDeleteAll.value = { ...pendingDeleteAll.value, remaining: pendingDeleteAll.value.remaining - 1 }
   }, 1000)
-  pendingDeleteAll.value = { timer, remaining: UNDO_DELAY_MS / 1000, tick }
+
+  pendingDeleteAll.value = {
+    timer, tick,
+    remaining: UNDO_DELAY_MS / 1000,
+    snapshotChats, snapshotActiveId, snapshotActive,
+  }
 }
 
-function undoDeleteAllChats() {
-  if (!pendingDeleteAll.value) return
-  clearTimeout(pendingDeleteAll.value.timer)
-  clearInterval(pendingDeleteAll.value.tick)
+async function undoDeleteAllChats() {
+  const stash = pendingDeleteAll.value
+  if (!stash) return
+  clearTimeout(stash.timer)
+  clearInterval(stash.tick)
   pendingDeleteAll.value = null
+  // The "filler" chat we created in scheduleDeleteAllChats is unwanted now —
+  // it's the only chat in chats.value. Drop it from the backend, then restore the snapshot.
+  const filler = chats.value[0]
+  if (filler && !stash.snapshotChats.some(c => c.id === filler.id)) {
+    await api.deleteChat(filler.id).catch(() => {})
+  }
+  chats.value = stash.snapshotChats
+  if (stash.snapshotActiveId && chats.value.some(c => c.id === stash.snapshotActiveId)) {
+    activeChatId.value = stash.snapshotActiveId
+    activeChat.value = stash.snapshotActive
+  } else if (chats.value.length) {
+    await selectChat(chats.value[0]!.id)
+  }
 }
 
 function patchLocalChat(c: Chat) {
@@ -359,11 +396,33 @@ function handleStreamEvent(chatId: string, event: string, data: any) {
     } else {
       buf.push({ role: 'tool', toolCallId: data.id, content: data.result })
     }
-    // Immediately show job banner when background job tool responds
-    if (data.ok && (data.name === 'ssh_exec_async' || data.name === 'wb_bus_scan')) {
+    // Immediately show job banner when background job tool responds.
+    // We synthesise a TrackedJob entry on the fly so the inline indicator
+    // appears instantly — without it, fast jobs (<3 s) finish before our
+    // first refreshJobs poll and the user never sees a "running" badge.
+    if (data.ok && (data.name === 'ssh_exec_async' || data.name === 'wb_bus_scan' || data.name === 'serial_debug_collect')) {
       try {
         const r = JSON.parse(data.result)
-        if (r.jobId) void refreshJobs().then(() => { if (runningJobs.value.length > 0) startJobPolling() })
+        if (r.jobId && !runningJobs.value.some(j => j.jobId === r.jobId)) {
+          let sn = ''
+          let label: string = data.name
+          try {
+            // tool input is in our pendingToolCalls or the previous tool entry —
+            // simplest: parse from the tool result envelope if present
+            sn = String(r.sn ?? '')
+          } catch { /* */ }
+          if (!sn) {
+            // Try to read from the latest tool input in the buffer
+            const toolEntry = buf.find(t => t.role === 'tool' && (t as any).toolCallId === data.id)
+            if (toolEntry) {
+              const m = toolEntry.content.match(/sn=([A-Z0-9]+)/)
+              if (m) sn = m[1] ?? ''
+            }
+          }
+          runningJobs.value = [...runningJobs.value, { jobId: r.jobId, sn: sn || '?', label, sessionId: chatId, state: 'running' }]
+          startJobPolling()
+          void refreshJobs()
+        }
       } catch {}
     }
   }
@@ -375,10 +434,13 @@ function stopStreaming() {
 
 const completedJobs = ref<TrackedJob[]>([])
 
+const terminalSn = ref<string | null>(null)
+
 async function refreshJobs() {
   if (!activeChatId.value) return
   try {
     const r = await api.chatJobs(activeChatId.value)
+    if (r.jobs?.length) console.log('[jobs] refresh →', r.jobs.map(j => `${j.jobId}/${j.state}`).join(', '))
     const prevRunning = new Set(runningJobs.value.map((j) => j.jobId))
     const nowRunning = r.jobs.filter((j) => j.state === 'running')
     const nowExited = r.jobs.filter((j) => j.state !== 'running' && prevRunning.has(j.jobId))
@@ -398,7 +460,8 @@ async function refreshJobs() {
     if (nowRunning.length === 0 && nowExited.length === 0 && !streaming.value) {
       stopJobPolling()
     }
-  } catch {
+  } catch (e) {
+    console.warn('[jobs] refresh failed:', e)
     runningJobs.value = []
   }
 }
@@ -496,8 +559,10 @@ const visibleTurns = computed<ChatTurn[]>(() => {
   if (!activeChat.value) return []
   const persisted = activeChat.value.turns.filter((t) => t.role !== 'system')
   const live = liveTurns[activeChat.value.id] ?? []
-  // Prefer live while it has content; after getChat refreshes persisted, live is deleted
-  return live.length ? live : persisted
+  // Prefer whichever is longer — protects against a brief race during the
+  // post-stream `getChat` refresh that would otherwise blank out earlier
+  // history while liveTurns is being torn down.
+  return live.length >= persisted.length ? live : persisted
 })
 </script>
 
@@ -541,20 +606,8 @@ const visibleTurns = computed<ChatTurn[]>(() => {
         <button class="ghost" title="Настройки" @click="settingsOpen = true">⚙</button>
       </div>
       <div v-if="errorBanner" class="error">{{ errorBanner }}</div>
-      <template v-for="job in runningJobs" :key="job.jobId">
-        <div v-if="pendingCancels[job.jobId]" class="job-banner job-banner--cancelling">
-          <span>⏳ Отмена через {{ pendingCancels[job.jobId].remaining }} с — {{ job.label }}</span>
-          <button class="job-cancel ghost small" @click="undoCancelJob(job.jobId)">продолжить</button>
-        </div>
-        <div v-else class="job-banner job-banner--running">
-          <span class="job-spinner">⟳</span>
-          <span class="job-label">{{ job.label }} <span class="job-sn">{{ job.sn }}</span></span>
-          <button class="job-cancel ghost small" @click="scheduleCancelJob(job.jobId)" title="Отменить задачу (с возможностью отката)">✕ Отменить</button>
-        </div>
-      </template>
-      <div v-for="job in completedJobs" :key="job.jobId" class="job-banner job-banner--done">
-        <span>✓ Задача завершена: {{ job.label }}</span>
-      </div>
+      <!-- Running/done jobs are rendered inline next to the tool group that
+           started them (see ChatMessageList) — no need to duplicate here. -->
       <ChatPane
         v-if="activeChat"
         :turns="visibleTurns"
@@ -609,8 +662,11 @@ const visibleTurns = computed<ChatTurn[]>(() => {
       }"
       @select-all="setChatContext(controllers.map((c) => c.sn))"
       @clear="setChatContext([])"
+      @open-terminal="terminalSn = $event"
     />
   </div>
+
+  <SshTerminal :sn="terminalSn" @close="terminalSn = null" />
 
   <Transition name="toast">
     <div v-if="toast" class="toast">{{ toast }}</div>
@@ -627,30 +683,4 @@ const visibleTurns = computed<ChatTurn[]>(() => {
 .toast-enter-active, .toast-leave-active { transition: opacity 0.2s, transform 0.2s; }
 .toast-enter-from, .toast-leave-to { opacity: 0; transform: translateX(-50%) translateY(8px); }
 
-.job-banner {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 12px; font-size: 0.8rem;
-  border-bottom: 1px solid var(--border);
-}
-.job-banner--running {
-  background: color-mix(in srgb, var(--primary) 12%, var(--bg));
-  color: var(--primary);
-}
-.job-banner--done {
-  background: color-mix(in srgb, #22c55e 12%, var(--bg));
-  color: #16a34a;
-}
-.job-banner--cancelling {
-  background: color-mix(in srgb, #f59e0b 14%, var(--bg));
-  color: #b45309;
-  justify-content: space-between;
-}
-.job-spinner {
-  display: inline-block;
-  animation: spin 1.2s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-.job-label { flex: 1; }
-.job-sn { opacity: 0.7; font-size: 0.75em; }
-.job-cancel { margin-left: auto; color: inherit; border-color: currentColor; }
 </style>

@@ -6,12 +6,21 @@ import { compile } from 'vega-lite'
 import type { TopLevelSpec } from 'vega-lite'
 import type { HistorySeries } from './tools.ts'
 
+export type ChartType =
+  | 'line'      // время-ряд линиями (по умолчанию)
+  | 'bar'       // столбики во времени (для дискретных событий, бинарных каналов)
+  | 'area'      // заливка под линией (накопления, доля)
+  | 'point'     // скаттер (редкие точки, выбросы)
+  | 'histogram' // распределение значений: x=бины значений, y=кол-во точек
+  | 'heatmap'   // плотность: x=время, y=бины значений, color=кол-во (видно «обычный» уровень и выбросы)
+  | 'boxplot'   // ящики с усами по периодам — min/max/median/quartiles
+
 interface FlatPoint {
-  t: string          // ISO timestamp
-  v: number          // raw value
-  vn: number         // normalised value, 0..1 (used for 3+ unit-group fallback)
-  series: string     // series label (legend key)
-  unit: string       // grouping key for axis assignment
+  t: string
+  v: number
+  vn: number
+  series: string
+  unit: string
 }
 
 const PALETTE = ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d']
@@ -32,7 +41,6 @@ function emptySvg(message: string): string {
   )
 }
 
-/** Group series by `units`. Series without units share the empty-string group. */
 function groupByUnits(series: HistorySeries[]): Map<string, HistorySeries[]> {
   const groups = new Map<string, HistorySeries[]>()
   for (const s of series) {
@@ -44,7 +52,6 @@ function groupByUnits(series: HistorySeries[]): Map<string, HistorySeries[]> {
   return groups
 }
 
-/** Strip a common `device/` prefix from labels so the legend shows only what differs. */
 function buildLabelMap(series: HistorySeries[]): Map<HistorySeries, string> {
   const devices = new Set<string>()
   for (const s of series) {
@@ -62,7 +69,6 @@ function buildLabelMap(series: HistorySeries[]): Map<HistorySeries, string> {
   return map
 }
 
-/** Build a flat dataset. Each row carries raw + normalised value plus grouping keys. */
 function flatten(nonEmpty: HistorySeries[], labels: Map<HistorySeries, string>): FlatPoint[] {
   const out: FlatPoint[] = []
   for (const s of nonEmpty) {
@@ -77,12 +83,25 @@ function flatten(nonEmpty: HistorySeries[], labels: Map<HistorySeries, string>):
   return out
 }
 
+function legendCfg(seriesCount: number): TopLevelSpec['encoding'] extends infer _ ? any : never {
+  if (seriesCount <= 1) return null
+  if (seriesCount <= 3) return { title: null, orient: 'bottom', direction: 'horizontal', columns: 0, labelLimit: 360, symbolSize: 80, padding: 8 }
+  return { title: null, orient: 'right', direction: 'vertical', columns: 1, labelLimit: 280, symbolSize: 80, rowPadding: 4 }
+}
+
+const baseConfig = {
+  view: { stroke: 'transparent' },
+  axis: { labelColor: '#64748b', titleColor: '#64748b', gridColor: '#e2e8f0' },
+  legend: { labelColor: '#334155', titleColor: '#334155', labelFontSize: 11 },
+} as const
+
 export async function renderHistoryChart(
   series: HistorySeries[],
   from: number,
   to: number,
   title: string,
   ylabel: string,
+  chartType: ChartType = 'line',
 ): Promise<string> {
   const nonEmpty = series.filter(s => s.points.length > 0)
   if (!nonEmpty.length) return emptySvg('Нет данных за выбранный период')
@@ -96,7 +115,7 @@ export async function renderHistoryChart(
   const seriesCount = nonEmpty.length
 
   const xScaleDomain = [new Date(from * 1000).toISOString(), new Date(to * 1000).toISOString()]
-  const xEnc = {
+  const xTimeEnc = {
     field: 't',
     type: 'temporal',
     axis: { title: null, format: timeFormat, labelAngle: -30, labelOverlap: 'parity' },
@@ -105,32 +124,15 @@ export async function renderHistoryChart(
 
   const colorRange = nonEmpty.map((_, i) => PALETTE[i % PALETTE.length] ?? '#000')
   const allLabels = nonEmpty.map(s => labelMap.get(s)!)
-
-  // Legend layout: bottom row(s) for ≤ 3 series, side panel for many series.
-  // Both with generous labelLimit so nothing gets the "…" treatment.
-  const legendCfg =
-    seriesCount <= 1
-      ? null
-      : seriesCount <= 3
-        ? { title: null as null, orient: 'bottom' as const, direction: 'horizontal' as const, columns: 0, labelLimit: 360, symbolSize: 80, padding: 8 }
-        : { title: null as null, orient: 'right' as const, direction: 'vertical' as const, columns: 1, labelLimit: 280, symbolSize: 80, rowPadding: 4 }
-
   const colorEnc = {
     field: 'series',
     type: 'nominal',
     scale: { domain: allLabels, range: colorRange },
-    legend: legendCfg,
-  } as const
+    legend: legendCfg(seriesCount),
+  }
 
-  const baseConfig = {
-    view: { stroke: 'transparent' },
-    axis: { labelColor: '#64748b', titleColor: '#64748b', gridColor: '#e2e8f0' },
-    legend: { labelColor: '#334155', titleColor: '#334155', labelFontSize: 11 },
-  } as const
-
-  // Side legends eat horizontal space; widen the canvas to keep the plot area readable
-  const width = legendCfg?.orient === 'right' ? 980 : 880
-
+  const sideLegend = legendCfg(seriesCount)?.orient === 'right'
+  const width = sideLegend ? 980 : 880
   const baseSpec: Omit<TopLevelSpec, 'data'> = {
     $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
     width,
@@ -140,40 +142,114 @@ export async function renderHistoryChart(
     config: baseConfig,
   }
 
-  let spec: TopLevelSpec
-
-  if (groupCount === 1) {
-    // Single Y axis — all series share units
-    const onlyUnit = [...groups.keys()][0] ?? ''
-    spec = {
+  // ─── histogram: распределение значений по бинам ──────────────────────
+  if (chartType === 'histogram') {
+    return await renderSpec({
       ...baseSpec,
       data: { values },
-      mark: { type: 'line', strokeWidth: 1.6, interpolate: 'monotone' },
+      mark: { type: 'bar', tooltip: true },
       encoding: {
-        x: xEnc,
+        x: {
+          field: 'v', type: 'quantitative', bin: { maxbins: 30 },
+          axis: { title: ylabel || groups.size === 1 ? [...groups.keys()][0] || null : null, grid: false },
+        },
+        y: { aggregate: 'count', type: 'quantitative', axis: { title: 'кол-во', grid: true } },
+        color: colorEnc,
+        ...(seriesCount > 1 ? { xOffset: { field: 'series', type: 'nominal' } } : {}),
+      },
+    })
+  }
+
+  // ─── heatmap: x=время-биннированное, y=значение-биннированное ────────
+  if (chartType === 'heatmap') {
+    const tu = durationSec <= 7 * 86400 ? 'yearmonthdatehours' : 'yearmonthdate'
+    const heatmapMark = { type: 'rect' as const, tooltip: true }
+    if (seriesCount > 1) {
+      // Один heatmap на каждую серию, идут вертикально друг над другом
+      return await renderSpec({
+        ...baseSpec,
+        data: { values },
+        facet: { row: { field: 'series', type: 'nominal', header: { title: null, labelAngle: 0, labelAlign: 'left', labelAnchor: 'start' } } },
+        spec: {
+          width,
+          height: Math.max(120, Math.floor(360 / seriesCount)),
+          mark: heatmapMark,
+          encoding: {
+            x: { field: 't', type: 'temporal', timeUnit: tu, axis: { title: null, format: timeFormat, labelAngle: -30 } },
+            y: { field: 'v', type: 'quantitative', bin: { maxbins: 24 }, axis: { title: null } },
+            color: { aggregate: 'count', type: 'quantitative', scale: { scheme: 'blues' }, legend: { title: 'плотность', orient: 'right' } },
+          },
+        },
+      } as any)
+    }
+    const onlyUnit = [...groups.keys()][0] ?? ''
+    return await renderSpec({
+      ...baseSpec,
+      data: { values },
+      mark: heatmapMark,
+      encoding: {
+        x: { field: 't', type: 'temporal', timeUnit: tu, axis: { title: null, format: timeFormat, labelAngle: -30 } },
+        y: { field: 'v', type: 'quantitative', bin: { maxbins: 30 }, axis: { title: ylabel || onlyUnit || null } },
+        color: { aggregate: 'count', type: 'quantitative', scale: { scheme: 'blues' }, legend: { title: 'плотность', orient: 'right' } },
+      },
+    })
+  }
+
+  // ─── boxplot: разброс по периодам (час / день в зависимости от длины) ─
+  if (chartType === 'boxplot') {
+    const tu = durationSec <= 86400 ? 'hours' : durationSec <= 7 * 86400 ? 'yearmonthdate' : 'yearmonthweek'
+    return await renderSpec({
+      ...baseSpec,
+      data: { values },
+      mark: { type: 'boxplot', extent: 1.5 },
+      encoding: {
+        x: { field: 't', type: 'temporal', timeUnit: tu, axis: { title: null, format: timeFormat, labelAngle: -30 } },
+        y: { field: 'v', type: 'quantitative', axis: { title: ylabel || (groups.size === 1 ? [...groups.keys()][0] : null) || null, grid: true }, scale: { zero: false } },
+        color: colorEnc,
+      },
+    })
+  }
+
+  // ─── line / bar / area / point — все time-series виды ────────────────
+  const markType: 'line' | 'bar' | 'area' | 'point' =
+    chartType === 'bar' ? 'bar' :
+    chartType === 'area' ? 'area' :
+    chartType === 'point' ? 'point' :
+    'line'
+  const markCfg: Record<string, unknown> = { type: markType, tooltip: true }
+  if (markType === 'line' || markType === 'area') { markCfg['interpolate'] = 'monotone'; markCfg['strokeWidth'] = 1.6 }
+  if (markType === 'point') { markCfg['filled'] = true; markCfg['size'] = 30 }
+  if (markType === 'area') { markCfg['opacity'] = 0.55 }
+
+  if (groupCount === 1) {
+    const onlyUnit = [...groups.keys()][0] ?? ''
+    return await renderSpec({
+      ...baseSpec,
+      data: { values },
+      mark: markCfg as any,
+      encoding: {
+        x: xTimeEnc,
         y: {
-          field: 'v',
-          type: 'quantitative',
+          field: 'v', type: 'quantitative',
           axis: { title: ylabel || onlyUnit || null, grid: true },
           scale: { zero: false, nice: true },
         },
         color: colorEnc,
       },
-    } as TopLevelSpec
-  } else if (groupCount === 2) {
-    // Twin Y axes — one layer per unit group
+    })
+  }
+  if (groupCount === 2) {
     const groupArr = [...groups.entries()]
     const layers = groupArr.map(([unit, grpSeries], gIdx) => {
       const grpLabels = grpSeries.map(s => labelMap.get(s)!)
       const filterExpr = grpLabels.map(l => `'${l.replace(/'/g, "\\'")}'`).join(',')
       return {
         transform: [{ filter: `indexof([${filterExpr}], datum.series) >= 0` }],
-        mark: { type: 'line', strokeWidth: 1.6, interpolate: 'monotone' },
+        mark: markCfg as any,
         encoding: {
-          x: xEnc,
+          x: xTimeEnc,
           y: {
-            field: 'v',
-            type: 'quantitative',
+            field: 'v', type: 'quantitative',
             axis: {
               title: unit || (gIdx === 0 ? ylabel : ''),
               orient: gIdx === 0 ? 'left' : 'right',
@@ -185,44 +261,38 @@ export async function renderHistoryChart(
         },
       }
     })
-    spec = {
-      ...baseSpec,
-      data: { values },
-      layer: layers as any,
-      resolve: { scale: { y: 'independent' } },
-    } as TopLevelSpec
-  } else {
-    // 3+ unit groups → normalise everything to 0..1, show actual ranges in legend
-    const legendLabels = nonEmpty.map(s => {
-      const base = labelMap.get(s)!
-      const range = `${s.min.toFixed(2)}…${s.max.toFixed(2)}${s.units ? ` ${s.units}` : ''}`
-      return `${base} · ${range}`
-    })
-    const seriesToLegend = new Map<string, string>()
-    nonEmpty.forEach((s, i) => seriesToLegend.set(labelMap.get(s)!, legendLabels[i] ?? ''))
-    const normedValues = values.map(p => ({ ...p, seriesLegend: seriesToLegend.get(p.series) ?? p.series }))
-    spec = {
-      ...baseSpec,
-      data: { values: normedValues },
-      mark: { type: 'line', strokeWidth: 1.6, interpolate: 'monotone' },
-      encoding: {
-        x: xEnc,
-        y: {
-          field: 'vn',
-          type: 'quantitative',
-          axis: { title: 'нормализовано (0…1)', grid: true, format: '.1f' },
-          scale: { domain: [0, 1] },
-        },
-        color: {
-          field: 'seriesLegend',
-          type: 'nominal',
-          scale: { domain: legendLabels, range: colorRange },
-          legend: legendCfg,
-        },
-      },
-    } as TopLevelSpec
+    return await renderSpec({ ...baseSpec, data: { values }, layer: layers, resolve: { scale: { y: 'independent' } } } as any)
   }
+  // 3+ единиц — нормализация
+  const legendLabels = nonEmpty.map(s => {
+    const base = labelMap.get(s)!
+    const range = `${s.min.toFixed(2)}…${s.max.toFixed(2)}${s.units ? ` ${s.units}` : ''}`
+    return `${base} · ${range}`
+  })
+  const seriesToLegend = new Map<string, string>()
+  nonEmpty.forEach((s, i) => seriesToLegend.set(labelMap.get(s)!, legendLabels[i] ?? ''))
+  const normedValues = values.map(p => ({ ...p, seriesLegend: seriesToLegend.get(p.series) ?? p.series }))
+  return await renderSpec({
+    ...baseSpec,
+    data: { values: normedValues },
+    mark: markCfg as any,
+    encoding: {
+      x: xTimeEnc,
+      y: {
+        field: 'vn', type: 'quantitative',
+        axis: { title: 'нормализовано (0…1)', grid: true, format: '.1f' },
+        scale: { domain: [0, 1] },
+      },
+      color: {
+        field: 'seriesLegend', type: 'nominal',
+        scale: { domain: legendLabels, range: colorRange },
+        legend: legendCfg(seriesCount),
+      },
+    },
+  })
+}
 
+async function renderSpec(spec: TopLevelSpec): Promise<string> {
   const compiled = compile(spec).spec
   const view = new vega.View(vega.parse(compiled), { renderer: 'none' })
   return await view.toSVG()

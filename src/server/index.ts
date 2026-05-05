@@ -32,6 +32,41 @@ initAttachments(attachmentsRoot)
 setInterval(() => cleanupExpired(), 60 * 60 * 1000)
 
 /** Pick a baseURL: explicit user value wins; otherwise fall back to the provider's default. */
+/** Run `ss -tlnp` over SSH and pull a tidy list of TCP ports the controller exposes. */
+async function listOpenPorts(ctrl: { sn: string; host: string }): Promise<{ port: number; addr: string; process: string }[]> {
+  const r = await ssh.exec(ctrl as any, "ss -tlnH 2>/dev/null || netstat -tln 2>/dev/null", 8000)
+  if (r.code !== 0) return []
+  const seen = new Map<string, { port: number; addr: string; process: string }>()
+  for (const raw of r.stdout.split('\n')) {
+    const line = raw.trim()
+    if (!line) continue
+    // ss -tlnH:  LISTEN 0  4096  0.0.0.0:80   0.0.0.0:*    users:(("nginx",pid=1,fd=6))
+    // netstat:   tcp  0  0   0.0.0.0:80      0.0.0.0:*     LISTEN
+    const cols = line.split(/\s+/)
+    let listenCol = ''
+    let proc = ''
+    if (line.startsWith('LISTEN')) {
+      listenCol = cols[3] ?? ''
+      const m = raw.match(/\(\("([^"]+)"/)
+      if (m) proc = m[1] ?? ''
+    } else if (cols[0] === 'tcp' || cols[0] === 'tcp6') {
+      if (!cols.includes('LISTEN')) continue
+      listenCol = cols[3] ?? ''
+    } else continue
+    const colon = listenCol.lastIndexOf(':')
+    if (colon < 0) continue
+    const portNum = parseInt(listenCol.slice(colon + 1), 10)
+    if (!Number.isFinite(portNum) || portNum <= 0 || portNum > 65535) continue
+    const addr = listenCol.slice(0, colon)
+    // Hide loopback-only services — not reachable from the user's browser anyway
+    if (addr === '127.0.0.1' || addr === '[::1]' || addr === '::1') continue
+    const key = `${portNum}`
+    if (!seen.has(key)) seen.set(key, { port: portNum, addr, process: proc })
+    else if (proc && !seen.get(key)!.process) seen.get(key)!.process = proc
+  }
+  return [...seen.values()].sort((a, b) => a.port - b.port)
+}
+
 function resolveBaseUrl(s: Settings): string | undefined {
   const cur = s.providers[s.provider]
   if (cur.baseURL && cur.baseURL.trim()) return cur.baseURL
@@ -60,6 +95,8 @@ function buildLlmClient(s: Settings): LlmClient | null {
     llmProxyUser: cur.llmProxyUser || undefined,
     llmProxyPassword: cur.llmProxyPassword || undefined,
     tlsInsecure: cur.tlsInsecure,
+    caCert: cur.caCert || undefined,
+    apiFormat: cur.apiFormat,
   })
 }
 
@@ -96,12 +133,15 @@ app.get('/api/settings', (c) => c.json(settingsStore.toPublic()))
 app.put('/api/settings', async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
   const patch: Record<string, unknown> = {}
-  const stringFields = ['apiKey', 'baseURL', 'model', 'llmProxy', 'llmProxyUser', 'llmProxyPassword', 'mqttUser', 'mqttPassword', 'sshUser', 'sshPassword', 'sshKeyPath']
+  const stringFields = ['apiKey', 'baseURL', 'model', 'llmProxy', 'llmProxyUser', 'llmProxyPassword', 'mqttUser', 'mqttPassword', 'sshUser', 'sshPassword', 'sshKeyPath', 'caCert']
   for (const f of stringFields) {
     if (typeof body[f] === 'string') patch[f] = body[f]
   }
-  if (typeof body['provider'] === 'string' && ['openai', 'vsegpt', 'custom'].includes(body['provider'] as string)) {
+  if (typeof body['provider'] === 'string' && ['openai', 'custom', 'custom_proxy'].includes(body['provider'] as string)) {
     patch['provider'] = body['provider']
+  }
+  if (typeof body['apiFormat'] === 'string' && ['openai'].includes(body['apiFormat'] as string)) {
+    patch['apiFormat'] = body['apiFormat']
   }
   if (typeof body['discoveryInterval'] === 'number') patch['discoveryInterval'] = body['discoveryInterval']
   if (typeof body['openBrowser'] === 'boolean') patch['openBrowser'] = body['openBrowser']
@@ -116,6 +156,29 @@ app.put('/api/settings', async (c) => {
   return c.json(settingsStore.toPublic())
 })
 
+app.get('/api/settings/export', () => {
+  // Export EVERYTHING incl. secrets — assumed local-only. Don't share the file blindly.
+  const s = settingsStore.get()
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  return new Response(JSON.stringify(s, null, 2), {
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Disposition': `attachment; filename="wb-ai-helper-settings-${ts}.json"`,
+    },
+  })
+})
+
+app.post('/api/settings/import', async (c) => {
+  let body: unknown
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid JSON' }, 400) }
+  if (!body || typeof body !== 'object') return c.json({ error: 'object expected' }, 400)
+  await settingsStore.update(body as Record<string, unknown>)
+  if (typeof (body as any)['discoveryInterval'] === 'number') {
+    discovery.setInterval((body as any)['discoveryInterval'])
+  }
+  return c.json(settingsStore.toPublic())
+})
+
 app.delete('/api/settings/api-key', async (c) => {
   await settingsStore.clearKey()
   return c.json(settingsStore.toPublic())
@@ -126,7 +189,13 @@ app.get('/api/models', async (c) => {
   const cur = s.providers[s.provider]
   if (!cur.apiKey) return c.json({ error: 'apiKey не задан' }, 400)
   try {
-    const models = await listModels(cur.apiKey, resolveBaseUrl(s))
+    const models = await listModels(cur.apiKey, resolveBaseUrl(s), {
+      proxy: cur.llmProxy || undefined,
+      proxyUser: cur.llmProxyUser || undefined,
+      proxyPassword: cur.llmProxyPassword || undefined,
+      tlsInsecure: cur.tlsInsecure,
+      caCert: cur.caCert || undefined,
+    })
     return c.json({ models })
   } catch (e: any) {
     return c.json({ error: e?.message ?? String(e) }, 502)
@@ -151,6 +220,18 @@ app.post('/api/controllers/refresh', async (c) => {
 app.delete('/api/controllers/:sn', (c) => {
   discovery.remove(c.req.param('sn'))
   return c.json({ ok: true })
+})
+
+app.get('/api/controllers/:sn/ports', async (c) => {
+  const sn = c.req.param('sn')
+  const ctrl = discovery.get(sn) ?? discovery.getOrCreate(sn)
+  if (!ctrl) return c.json({ error: 'controller not found' }, 404)
+  try {
+    const ports = await listOpenPorts(ctrl)
+    return c.json({ ports })
+  } catch (e: unknown) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 502)
+  }
 })
 
 app.get('/api/stats', (c) => c.json(chats.globalStats()))
@@ -249,6 +330,7 @@ app.post('/api/chats/:id/message', async (c) => {
     let assistantText = ''
     const pendingToolCalls: { id: string; name: string; arguments: string }[] = []
     let pendingUsage: { promptTokens?: number; completionTokens?: number; cachedTokens?: number; totalCost?: number } | null = null
+    let finishReason: string | null = null
 
     try {
       for await (const ev of activeLlm.runAgent(
@@ -256,7 +338,7 @@ app.post('/api/chats/:id/message', async (c) => {
         toolSchemas(),
         (name, args) => dispatch(name, args, ctx),
         {
-          maxTurns: 10,
+          maxTurns: 20,
           agentState,
           getExtraSystemMsgs: () => {
             const skills = listSkills(db)
@@ -314,6 +396,7 @@ app.post('/api/chats/:id/message', async (c) => {
           }
           chats.appendTurn(id, { role: 'tool', toolCallId: ev.id, content: ev.ok ? ev.result : `\x01${ev.result}` })
         }
+        if (ev.type === 'done') finishReason = ev.finish_reason
       }
     } catch (e: any) {
       await send('error', { message: e?.message ?? String(e) })
@@ -329,6 +412,13 @@ app.post('/api/chats/:id/message', async (c) => {
         },
         pendingUsage ?? undefined,
       )
+    }
+    // Если агент упёрся в max_turns без финального текста — пишем явное
+    // системное сообщение, чтобы пользователь не сидел перед пустым чатом.
+    if (finishReason === 'max_turns' && !assistantText) {
+      const hint = 'Агент исчерпал бюджет шагов (20 итераций) и не успел подвести итог. Скажи «продолжай» — я продолжу с того места, или переформулируй задачу.'
+      chats.appendTurn(id, { role: 'assistant', content: hint })
+      await send('text-delta', { text: hint })
     }
     await send('end', { chatId: id })
   }, async (err, s) => {
@@ -361,10 +451,12 @@ app.get('/api/events', (c) => {
 // Attachments API
 app.get('/api/attachments', (c) => {
   const chatId = c.req.query('chatId') ?? ''
+  const source = c.req.query('source') as 'user' | 'assistant' | undefined
   if (!chatId) return c.json({ error: 'chatId required' }, 400)
-  // Input strip only shows files the user uploaded — assistant-produced
-  // attachments live in the chat as messages, not in the strip.
-  return c.json({ items: listAttachmentFiles(chatId, 'user') })
+  // Default — return ALL files (used by the chat header popup).
+  // The input strip on the bottom asks for `?source=user` so it doesn't echo
+  // assistant-produced files back into the next prompt.
+  return c.json({ items: listAttachmentFiles(chatId, source) })
 })
 
 app.post('/api/attachments', async (c) => {
@@ -414,14 +506,78 @@ app.get('/assets/*', (c) => {
 })
 app.get('/favicon.ico', (c) => embeddedAsset('favicon.ico') ?? c.notFound())
 
-const server = Bun.serve({
+interface ShellSession {
+  shell: { write: (s: string) => void; resize: (c: number, r: number) => void; close: () => void }
+}
+
+const server = Bun.serve<ShellSession, never>({
   port: PORT,
   hostname: '127.0.0.1',
   // Bun's default 10s idleTimeout rips long-lived SSE streams mid-flight
   // (tool-calling LLM turns easily exceed 10s between tokens). 0 disables it;
   // browser-side timeouts still apply.
   idleTimeout: 0,
-  fetch: app.fetch,
+  async fetch(req, srv) {
+    const url = new URL(req.url)
+    // SSH terminal: ws upgrade at /api/ssh/<sn>/shell
+    const sshMatch = url.pathname.match(/^\/api\/ssh\/([^/]+)\/shell$/)
+    if (sshMatch && req.headers.get('upgrade') === 'websocket') {
+      const sn = decodeURIComponent(sshMatch[1]!)
+      const ctrl = discovery.get(sn) ?? discovery.getOrCreate(sn)
+      if (!ctrl) return new Response('controller not found', { status: 404 })
+      // Stash sn on the WS so `open` can spin up the SSH shell asynchronously
+      const ok = srv.upgrade(req, { data: { shell: undefined as unknown as ShellSession['shell'] }, headers: { 'X-WB-Controller': sn } })
+      if (!ok) return new Response('upgrade failed', { status: 500 })
+      return undefined
+    }
+    return app.fetch(req, srv)
+  },
+  websocket: {
+    async open(ws) {
+      // The handshake didn't have access to the SN reliably; pull it back from the path
+      // by examining the upgrade headers. As a fallback we keep `data.sn` if set.
+      const url = new URL(`http://x${ws.data ? '' : ''}`)
+      void url
+      const sn = (ws.remoteAddress, '') // placeholder
+      void sn
+    },
+    async message(ws, message) {
+      try {
+        const text = typeof message === 'string' ? message : message.toString('utf8')
+        const msg = JSON.parse(text) as
+          | { t: 'init'; sn: string; cols: number; rows: number }
+          | { t: 'data'; d: string }
+          | { t: 'resize'; cols: number; rows: number }
+        if (msg.t === 'init') {
+          const ctrl = discovery.get(msg.sn) ?? discovery.getOrCreate(msg.sn)
+          if (!ctrl) { ws.send(JSON.stringify({ t: 'error', e: 'controller not found' })); ws.close(); return }
+          try {
+            const shell = await ssh.openShell(ctrl,
+              (chunk) => { try { ws.send(JSON.stringify({ t: 'data', d: chunk.toString('utf8') })) } catch { /* */ } },
+              () => { try { ws.send(JSON.stringify({ t: 'close' })); ws.close() } catch { /* */ } },
+              msg.cols, msg.rows,
+            )
+            ws.data.shell = shell
+            ws.send(JSON.stringify({ t: 'ready' }))
+          } catch (e: unknown) {
+            ws.send(JSON.stringify({ t: 'error', e: e instanceof Error ? e.message : String(e) }))
+            ws.close()
+          }
+          return
+        }
+        if (msg.t === 'data' && ws.data.shell) {
+          ws.data.shell.write(msg.d)
+        } else if (msg.t === 'resize' && ws.data.shell) {
+          ws.data.shell.resize(msg.cols, msg.rows)
+        }
+      } catch (e: unknown) {
+        try { ws.send(JSON.stringify({ t: 'error', e: e instanceof Error ? e.message : String(e) })) } catch { /* */ }
+      }
+    },
+    close(ws) {
+      ws.data.shell?.close()
+    },
+  },
 })
 
 console.log(`WB Helper запущен:          http://${server.hostname}:${server.port}/`)

@@ -131,7 +131,8 @@ export type Health = {
   discoveryInterval: number
 }
 
-export type LlmProvider = 'openai' | 'vsegpt' | 'custom'
+export type LlmProvider = 'openai' | 'custom' | 'custom_proxy'
+export type ApiFormat = 'openai'
 
 export interface ProviderInfo {
   label: string
@@ -142,20 +143,28 @@ export interface ProviderInfo {
   signupUrl: string | null
 }
 
-export const PROVIDER_INFO: Record<LlmProvider, ProviderInfo> = {
+export const PROVIDER_INFO: Record<LlmProvider, ProviderInfo & { apiFormat: ApiFormat; baseURLEditable: boolean; supportsCaCert: boolean; apiFormatEditable: boolean }> = {
   openai: {
     label: 'OpenAI',
     defaultBaseURL: 'https://api.openai.com/v1',
     currency: 'USD',
     pricesEditable: true,
     signupUrl: 'https://platform.openai.com/api-keys',
+    apiFormat: 'openai',
+    baseURLEditable: false,
+    supportsCaCert: false,
+    apiFormatEditable: false,
   },
-  vsegpt: {
-    label: 'VseGPT.Ru',
-    defaultBaseURL: 'https://api.vsegpt.ru/v1',
-    currency: 'RUB',
-    pricesEditable: false,
-    signupUrl: 'https://vsegpt.ru/User/API',
+  anthropic: {
+    label: 'Anthropic',
+    defaultBaseURL: 'https://api.anthropic.com',
+    currency: 'USD',
+    pricesEditable: true,
+    signupUrl: 'https://console.anthropic.com/settings/keys',
+    apiFormat: 'anthropic',
+    baseURLEditable: false,
+    supportsCaCert: false,
+    apiFormatEditable: false,
   },
   custom: {
     label: 'Custom',
@@ -163,6 +172,21 @@ export const PROVIDER_INFO: Record<LlmProvider, ProviderInfo> = {
     currency: null,
     pricesEditable: false,
     signupUrl: null,
+    apiFormat: 'openai',
+    baseURLEditable: true,
+    supportsCaCert: false,
+    apiFormatEditable: true,
+  },
+  custom_proxy: {
+    label: 'Custom AI Proxy',
+    defaultBaseURL: '',
+    currency: null,
+    pricesEditable: false,
+    signupUrl: null,
+    apiFormat: 'openai',
+    baseURLEditable: true,
+    supportsCaCert: true,
+    apiFormatEditable: true,
   },
 }
 
@@ -172,6 +196,8 @@ export type ProviderConfigPublic = {
   llmProxy: string
   llmProxyUser: string
   tlsInsecure: boolean
+  caCert: string
+  apiFormat: ApiFormat
   priceInput: number | null
   priceOutput: number | null
   priceCached: number | null

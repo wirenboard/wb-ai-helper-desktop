@@ -7,6 +7,8 @@ const props = defineProps<{
   placeholder?: string
   /** When true, free typing isn't accepted — input snaps back to a valid option on blur. */
   strict?: boolean
+  /** Optional map of `option → badge`. Rendered after the option name. */
+  badges?: Record<string, string>
 }>()
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 
@@ -104,7 +106,10 @@ onBeforeUnmount(() => window.removeEventListener('mousedown', onDocClick))
         :class="{ active: i === highlight, picked: o === modelValue }"
         @mousedown.prevent="select(o)"
         @mouseenter="highlight = i"
-      >{{ o }}</li>
+      >
+        <span>{{ o }}</span>
+        <span v-if="badges?.[o]" class="cb-badge">{{ badges[o] }}</span>
+      </li>
     </ul>
     <div v-else-if="open" class="cb-empty">ничего не найдено</div>
   </div>

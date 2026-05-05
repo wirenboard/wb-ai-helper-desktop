@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { api, PROVIDER_INFO, type LlmProvider, type Settings } from '../api'
+import { api, PROVIDER_INFO, type ApiFormat, type LlmProvider, type Settings } from '../api'
 import ComboboxSearch from './ComboboxSearch.vue'
 
 const props = defineProps<{ settings: Settings | null; open: boolean; version?: string; fontSize?: number }>()
@@ -18,6 +18,8 @@ const llmProxy = ref('')
 const llmProxyUser = ref('')
 const llmProxyPassword = ref('')
 const tlsInsecure = ref(false)
+const caCert = ref('')
+const apiFormat = ref<ApiFormat>('openai')
 const priceInput = ref<number | null>(null)
 const priceOutput = ref<number | null>(null)
 const priceCached = ref<number | null>(null)
@@ -35,6 +37,7 @@ const llmProxyPasswordConfiguredForProvider = computed(
 /** Load the saved fields for `next` into the form. */
 function loadProviderFields(next: LlmProvider) {
   const cfg = props.settings?.providers?.[next]
+  const info = PROVIDER_INFO[next]
   apiKey.value = ''
   llmProxyPassword.value = ''
   if (cfg) {
@@ -43,21 +46,25 @@ function loadProviderFields(next: LlmProvider) {
     llmProxy.value = cfg.llmProxy
     llmProxyUser.value = cfg.llmProxyUser
     tlsInsecure.value = cfg.tlsInsecure
+    caCert.value = cfg.caCert
+    apiFormat.value = cfg.apiFormat ?? info.apiFormat
     priceInput.value = cfg.priceInput
     priceOutput.value = cfg.priceOutput
     priceCached.value = cfg.priceCached
   } else {
-    baseURL.value = PROVIDER_INFO[next].defaultBaseURL
+    baseURL.value = info.defaultBaseURL
     model.value = ''
     llmProxy.value = ''
     llmProxyUser.value = ''
     tlsInsecure.value = false
+    caCert.value = ''
+    apiFormat.value = info.apiFormat
     priceInput.value = null
     priceOutput.value = null
     priceCached.value = null
   }
   // If the loaded baseURL is empty (user never customised), suggest provider's default
-  if (!baseURL.value) baseURL.value = PROVIDER_INFO[next].defaultBaseURL
+  if (!baseURL.value) baseURL.value = info.defaultBaseURL
 }
 
 function onProviderChange(next: LlmProvider) {
@@ -81,12 +88,63 @@ const saving = ref(false)
 const saveError = ref<string | null>(null)
 
 const canFetchModels = computed(() => {
-  const hasKey = !!apiKey.value || apiKeyConfiguredForProvider.value
-  if (!hasKey) return false
-  // Custom requires an explicit Base URL — OpenAI/VseGPT use the hard-coded default
-  if (provider.value === 'custom' && !baseURL.value.trim()) return false
+  // For Custom AI Proxy auth often comes from the proxy itself (CA cert + URL-embedded
+  // creds), not from a Bearer token. Allow fetching with cert-only.
+  const hasAuth = !!apiKey.value || apiKeyConfiguredForProvider.value || (provider.value === 'custom_proxy' && !!caCert.value)
+  if (!hasAuth) return false
+  if (providerInfo.value.baseURLEditable && !baseURL.value.trim()) return false
   return true
 })
+
+async function loadCaCertFromFile(file: File) {
+  try {
+    const text = await file.text()
+    if (!/-----BEGIN CERTIFICATE-----/.test(text)) {
+      saveError.value = 'Файл не похож на PEM-сертификат (нет -----BEGIN CERTIFICATE-----)'
+      return
+    }
+    caCert.value = text
+    saveError.value = null
+  } catch (e: any) {
+    saveError.value = `Не удалось прочитать файл: ${e?.message ?? e}`
+  }
+}
+
+async function exportSettings() {
+  try {
+    const r = await fetch('/api/settings/export')
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    const blob = await r.blob()
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    a.download = `wb-ai-helper-settings-${ts}.json`
+    document.body.appendChild(a); a.click(); a.remove()
+    setTimeout(() => URL.revokeObjectURL(a.href), 0)
+  } catch (e: any) {
+    saveError.value = `Экспорт не удался: ${e?.message ?? e}`
+  }
+}
+
+async function importSettings(file: File) {
+  try {
+    const text = await file.text()
+    const json = JSON.parse(text)
+    const r = await fetch('/api/settings/import', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(json),
+    })
+    if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text().catch(() => '')}`)
+    const next = await r.json() as Settings
+    emit('saved', next)
+    // Re-load the form from imported state
+    provider.value = next.provider
+    loadProviderFields(provider.value)
+  } catch (e: any) {
+    saveError.value = `Импорт не удался: ${e?.message ?? e}`
+  }
+}
 
 watch(
   () => props.open,
@@ -116,7 +174,7 @@ async function fetchModels() {
     // so the backend uses the right provider's key/baseURL for the lookup.
     const patch: any = { provider: provider.value }
     if (apiKey.value) patch.apiKey = apiKey.value
-    patch.baseURL = provider.value === 'custom' ? baseURL.value : ''
+    patch.baseURL = providerInfo.value.baseURLEditable ? baseURL.value : ''
     await api.saveSettings(patch)
     apiKey.value = ''
     const r = await api.models()
@@ -137,16 +195,20 @@ async function save() {
   saving.value = true
   saveError.value = null
   try {
-    // Only Custom carries an explicit baseURL; OpenAI/VseGPT always use the
-    // hard-coded provider default on the backend.
-    const baseURLForSave = provider.value === 'custom' ? baseURL.value : ''
+    // Only providers with editable baseURL send it; OpenAI/Anthropic use defaults.
+    const baseURLForSave = providerInfo.value.baseURLEditable ? baseURL.value : ''
+    // For Custom AI Proxy: proxy creds belong inside the URL, force the
+    // separate fields empty so they don't override URL-embedded basic auth.
+    const proxyUserForSave = provider.value === 'custom_proxy' ? '' : llmProxyUser.value
     const patch: any = {
       provider: provider.value,
       baseURL: baseURLForSave,
       model: model.value,
       llmProxy: llmProxy.value,
-      llmProxyUser: llmProxyUser.value,
+      llmProxyUser: proxyUserForSave,
       tlsInsecure: tlsInsecure.value,
+      caCert: caCert.value,
+      apiFormat: apiFormat.value,
       mqttUser: mqttUser.value,
       sshUser: sshUser.value,
       sshKeyPath: sshKeyPath.value,
@@ -157,7 +219,12 @@ async function save() {
       priceCached: priceCached.value != null ? Number(priceCached.value) : null,
     }
     if (apiKey.value) patch.apiKey = apiKey.value
-    if (llmProxyPassword.value) patch.llmProxyPassword = llmProxyPassword.value
+    if (provider.value === 'custom_proxy') {
+      // Same reason — wipe any previously stored proxy password
+      patch.llmProxyPassword = ''
+    } else if (llmProxyPassword.value) {
+      patch.llmProxyPassword = llmProxyPassword.value
+    }
     if (mqttPassword.value) patch.mqttPassword = mqttPassword.value
     if (sshPassword.value) patch.sshPassword = sshPassword.value
     const next = await api.saveSettings(patch)
@@ -229,16 +296,41 @@ async function removeKey() {
             </div>
           </label>
 
-          <label v-if="provider === 'custom'" class="field">
+          <label v-if="providerInfo.supportsCaCert" class="field">
+            <span>CA-сертификат прокси (PEM)</span>
+            <div v-if="caCert" class="ca-loaded">
+              <span>✓ сертификат загружен ({{ Math.round(caCert.length / 1024 * 10) / 10 }} КБ)</span>
+              <button type="button" class="ghost danger" @click="caCert = ''">удалить</button>
+            </div>
+            <div v-else class="row" style="gap:6px">
+              <input ref="caFileInput" type="file" accept=".pem,.crt,.cer,.txt" hidden @change="(e: Event) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) loadCaCertFromFile(f); (e.target as HTMLInputElement).value = '' }" />
+              <button type="button" class="small" @click="($refs.caFileInput as HTMLInputElement).click()">📁 Загрузить .pem</button>
+              <span class="muted small">для MITM-прокси типа Claude proxy</span>
+            </div>
+          </label>
+
+          <label v-if="providerInfo.baseURLEditable" class="field">
             <span>Base URL</span>
             <input v-model="baseURL" :placeholder="baseURLPlaceholder" />
+          </label>
+
+          <label v-if="providerInfo.apiFormatEditable" class="field">
+            <span>Формат API</span>
+            <div class="row" style="gap:14px">
+              <label style="display:inline-flex;align-items:center;gap:4px;font-weight:normal">
+                <input type="radio" :value="'openai'" v-model="apiFormat" /> OpenAI
+              </label>
+              <label style="display:inline-flex;align-items:center;gap:4px;font-weight:normal">
+                <input type="radio" :value="'anthropic'" v-model="apiFormat" /> Anthropic
+              </label>
+            </div>
           </label>
 
           <label class="field">
             <span>Прокси для LLM <span class="muted small">(необязательно)</span></span>
             <input v-model="llmProxy" placeholder="http://proxy-host:8080" />
           </label>
-          <div v-if="llmProxy" class="proxy-auth-row">
+          <div v-if="llmProxy && provider !== 'custom_proxy'" class="proxy-auth-row">
             <label class="field" style="flex:1;margin-bottom:0">
               <span>Логин прокси <span class="muted small">(опционально)</span></span>
               <input v-model="llmProxyUser" placeholder="user" autocomplete="off" />
@@ -253,6 +345,9 @@ async function removeKey() {
               />
             </label>
           </div>
+          <p v-else-if="provider === 'custom_proxy' && llmProxy" class="muted small" style="margin: -4px 0 8px;">
+            Логин/пароль прокси держи прямо в URL: <code>https://USER:PASS@host:port</code>
+          </p>
 
           <label class="field checkbox-field">
             <input type="checkbox" v-model="tlsInsecure" />
@@ -271,7 +366,7 @@ async function removeKey() {
             <div v-if="!apiKeyConfiguredForProvider && !apiKey" class="muted small" style="margin-top:4px">
               Введите API-ключ, чтобы загрузить список моделей.
             </div>
-            <div v-else-if="provider === 'custom' && !baseURL.trim()" class="muted small" style="margin-top:4px">
+            <div v-else-if="providerInfo.baseURLEditable && !baseURL.trim()" class="muted small" style="margin-top:4px">
               Укажите Base URL.
             </div>
             <ComboboxSearch
@@ -305,9 +400,6 @@ async function removeKey() {
               <input type="number" min="0" step="0.01" v-model.number="priceCached" placeholder="напр. 0.075" />
             </label>
           </template>
-          <p v-else-if="provider === 'vsegpt'" class="muted small" style="margin:6px 0 0">
-            Стоимость приходит от VseGPT в ответе API (₽). Задавать вручную не нужно.
-          </p>
         </section>
 
         <section>
@@ -384,6 +476,10 @@ async function removeKey() {
         </div>
       </div>
       <div class="modal-footer">
+        <button class="ghost small" @click="exportSettings" title="Сохранить все настройки в файл">📤 Экспорт</button>
+        <input ref="importInput" type="file" accept=".json,application/json" hidden @change="(e: Event) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) importSettings(f); (e.target as HTMLInputElement).value = '' }" />
+        <button class="ghost small" @click="($refs.importInput as HTMLInputElement).click()" title="Загрузить настройки из файла">📥 Импорт</button>
+        <span style="flex:1"></span>
         <button @click="emit('close')">Отмена</button>
         <button class="primary" :disabled="saving" @click="save">
           {{ saving ? 'Сохраняю…' : 'Сохранить' }}
@@ -400,7 +496,7 @@ async function removeKey() {
 }
 .modal {
   background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
-  width: min(560px, 92vw); max-height: 90vh; display: flex; flex-direction: column;
+  width: min(720px, 92vw); max-height: 90vh; display: flex; flex-direction: column;
   box-shadow: 0 10px 40px rgba(0,0,0,0.25);
 }
 .modal-header {
@@ -439,4 +535,10 @@ code { background: var(--bg-mute); padding: 2px 4px; border-radius: 3px; font-si
   text-decoration: none; white-space: nowrap;
 }
 .key-link:hover { text-decoration: underline; }
+.ca-loaded {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 10px; border: 1px solid var(--border); border-radius: 4px;
+  background: color-mix(in srgb, #22c55e 10%, var(--bg));
+  font-size: 0.8rem;
+}
 </style>
