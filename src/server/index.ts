@@ -12,12 +12,16 @@ import { dispatch, toolSchemas } from './tools.ts'
 import { embeddedAsset, embeddedIndex } from './embed.ts'
 import { SettingsStore, listModels } from './settings.ts'
 import { openDb } from './db.ts'
+import { getTodos, formatTodos } from './todos.ts'
+import { listSkills, getLoadedSkills, seedSystemSkills } from './skills.ts'
 
 const PORT = Number(process.env['WB_HELPER_PORT'] ?? 17321)
 
 const settingsStore = new SettingsStore()
 const settings = await settingsStore.load()
 const db = await openDb()
+
+seedSystemSkills(db)
 
 const discovery = new Discovery(db)
 let mqtt = new MqttPool({ user: settings.mqttUser, password: settings.mqttPassword })
@@ -166,7 +170,8 @@ app.post('/api/chats/:id/message', async (c) => {
     const send = (event: string, data: unknown) => s.write(formatSse(event, data))
     await send('user', { text: userText })
 
-    const ctx = { discovery, mqtt, ssh, contextSns: chat.contextSns }
+    const agentState: { checkpointSummary?: string } = {}
+    const ctx = { discovery, mqtt, ssh, contextSns: chat.contextSns, db, sessionId: id, agentState }
     let assistantText = ''
     const pendingToolCalls: { id: string; name: string; arguments: string }[] = []
     let pendingUsage: { promptTokens: number; completionTokens: number } | null = null
@@ -176,7 +181,28 @@ app.post('/api/chats/:id/message', async (c) => {
         chat.turns,
         toolSchemas(),
         (name, args) => dispatch(name, args, ctx),
-        { maxTurns: 8 },
+        {
+          maxTurns: 10,
+          agentState,
+          getExtraSystemMsgs: () => {
+            const skills = listSkills(db)
+            const catalog = skills.length
+              ? skills.map((s) => `- ${s.name} — ${s.description}`).join('\n')
+              : '(нет доступных скиллов)'
+            const todos = getTodos(id)
+            const loadedSkills = getLoadedSkills(id)
+            return [
+              chat.contextSns.length
+                ? `Текущий контекст — выбранные контроллеры: ${chat.contextSns.join(', ')}. Когда пользователь говорит «текущий», «этот», «он» про контроллер без явного SN — это эти SN. Если пользователь явно называет другой SN — ориентируйся на него.`
+                : `Контекст не выбран — пользователь не выбрал ни одного контроллера в UI. Если задача требует SN — вызови list_controllers или спроси пользователя.`,
+              `Каталог скиллов (подгружай через load_skill("<name>") ДО действий с контроллером):\n${catalog}`,
+              todos.length
+                ? `Текущий план работы (редактируй через todo_write):\n${formatTodos(todos)}`
+                : 'План работы не задан. На задачах в 3+ шага сначала вызови todo_write.',
+              ...loadedSkills.map((s) => `Инструкции загруженного скилла "${s.name}" (активны в этой сессии):\n${s.content}`),
+            ]
+          },
+        },
       )) {
         await send(ev.type, ev)
         if (ev.type === 'text-delta') assistantText += ev.text

@@ -3,6 +3,12 @@ import type { Discovery, Controller } from './discovery.ts'
 import type { MqttPool } from './mqtt-pool.ts'
 import type { SshPool } from './ssh.ts'
 import { probe } from './http-probe.ts'
+import type { DbHandle } from './db.ts'
+import { getTodos, setTodos, formatTodos, type TodoItem, type TodoStatus } from './todos.ts'
+import {
+  getSkill, upsertUserSkill, deleteUserSkill,
+  trackLoadedSkill, unloadSkillFromSession, extractDescription, SKILL_NAME_RE,
+} from './skills.ts'
 
 export function toolSchemas(): ChatCompletionTool[] {
   return [
@@ -162,6 +168,107 @@ export function toolSchemas(): ChatCompletionTool[] {
         },
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: 'todo_write',
+        description: 'Записать план подзадач для текущей сессии. Перезаписывает список ЦЕЛИКОМ. Используй на задачах в 3+ шага. Ровно один пункт может быть "in_progress". После каждого шага обновляй статус.',
+        parameters: {
+          type: 'object',
+          properties: {
+            todos: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  content: { type: 'string' },
+                  status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
+                },
+                required: ['content', 'status'],
+              },
+            },
+          },
+          required: ['todos'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'checkpoint',
+        description: 'Зафиксировать итог этапа и сжать контекст. Вызывай когда: (1) выполнено 5-7+ инструментов, (2) завершён логический этап. summary — 3-7 предложений: что сделано, что нашли, что дальше.',
+        parameters: {
+          type: 'object',
+          properties: {
+            summary: { type: 'string' },
+          },
+          required: ['summary'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'load_skill',
+        description: 'Подгрузить скилл (markdown с инструкциями) ДО действий по профильной теме. Список скиллов — в системном промпте. После завершения задачи выгрузи через unload_skill.',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Имя скилла из каталога, kebab-case.' },
+          },
+          required: ['name'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'unload_skill',
+        description: 'Выгрузить загруженный скилл из контекста сессии. Вызывай после завершения задачи.',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+          },
+          required: ['name'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'create_skill',
+        description: 'Создать или обновить скилл в каталоге. Формат: `# skill-name` первой строкой, пустая строка, затем абзац-описание (>=20 символов), потом содержимое.',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'kebab-case, 1-63 символа.' },
+            content: { type: 'string', description: 'Markdown. Обязательно: # <name>, пустая строка, описание, содержимое.' },
+          },
+          required: ['name', 'content'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'delete_skill',
+        description: 'Удалить скилл из каталога.',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+          },
+          required: ['name'],
+          additionalProperties: false,
+        },
+      },
+    },
   ]
 }
 
@@ -171,6 +278,9 @@ type Ctx = {
   ssh: SshPool
   /** SNs выбранные в текущем чате; если пусто — операции на массиве требуют явного sn. */
   contextSns: string[]
+  db: DbHandle
+  sessionId: string
+  agentState: { checkpointSummary?: string }
 }
 
 export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promise<string> {
@@ -285,6 +395,74 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
       } catch (e: any) {
         return JSON.stringify({ error: e?.message ?? String(e) })
       }
+    }
+    case 'todo_write': {
+      const raw = Array.isArray(args['todos']) ? args['todos'] : null
+      if (!raw) return JSON.stringify({ error: 'todos required' })
+      const allowed: TodoStatus[] = ['pending', 'in_progress', 'completed']
+      const items: TodoItem[] = []
+      for (const r of raw as Array<Record<string, unknown>>) {
+        const content = typeof r?.['content'] === 'string' ? r['content'].trim() : ''
+        const status = typeof r?.['status'] === 'string' ? r['status'] : ''
+        if (!content) return JSON.stringify({ error: 'каждый пункт должен иметь непустой content' })
+        if (!allowed.includes(status as TodoStatus)) return JSON.stringify({ error: `status должен быть pending|in_progress|completed` })
+        items.push({ content, status: status as TodoStatus })
+      }
+      const inProgress = items.filter((t) => t.status === 'in_progress').length
+      if (inProgress > 1) return JSON.stringify({ error: `ровно один пункт может быть in_progress, получил ${inProgress}` })
+      setTodos(ctx.sessionId, items)
+      return JSON.stringify({ count: items.length, plan: formatTodos(items) })
+    }
+
+    case 'checkpoint': {
+      const summary = String(args['summary'] ?? '').trim()
+      if (!summary) return JSON.stringify({ error: 'summary required' })
+      const currentTodos = getTodos(ctx.sessionId)
+      const pending = currentTodos.filter((t) => t.status !== 'completed')
+      const todosPart = pending.length ? `\nОставшийся план:\n${formatTodos(pending)}` : ''
+      ctx.agentState.checkpointSummary = summary + todosPart
+      return JSON.stringify({ ok: true, message: 'Чекпоинт принят. Контекст будет сжат после этого хода.' })
+    }
+
+    case 'load_skill': {
+      const name = String(args['name'] ?? '').trim()
+      if (!SKILL_NAME_RE.test(name)) return JSON.stringify({ error: 'name должен быть kebab-case' })
+      const skill = getSkill(ctx.db, name)
+      if (!skill) return JSON.stringify({ error: `скилл "${name}" не найден` })
+      trackLoadedSkill(ctx.sessionId, skill.name, skill.content)
+      return JSON.stringify({ name: skill.name, content: skill.content })
+    }
+
+    case 'unload_skill': {
+      const name = String(args['name'] ?? '').trim()
+      if (!SKILL_NAME_RE.test(name)) return JSON.stringify({ error: 'name должен быть kebab-case' })
+      const removed = unloadSkillFromSession(ctx.sessionId, name)
+      if (!removed) return JSON.stringify({ error: `скилл "${name}" не был загружен` })
+      return JSON.stringify({ ok: true, message: `Скилл "${name}" выгружен.` })
+    }
+
+    case 'create_skill': {
+      const name = String(args['name'] ?? '').trim()
+      const content = String(args['content'] ?? '').trim()
+      if (!SKILL_NAME_RE.test(name)) return JSON.stringify({ error: 'name должен быть kebab-case (a-z, 0-9, "-"), 1-63 символа' })
+      if (content.length < 100) return JSON.stringify({ error: 'content слишком короткий (100+ символов)' })
+      let description: string
+      try {
+        description = extractDescription(content, name)
+      } catch (e: any) {
+        return JSON.stringify({ error: e?.message ?? String(e) })
+      }
+      const r = upsertUserSkill(ctx.db, { name, description, content })
+      if (!r.ok) return JSON.stringify({ error: r.error })
+      return JSON.stringify({ name, description, status: 'saved' })
+    }
+
+    case 'delete_skill': {
+      const name = String(args['name'] ?? '').trim()
+      if (!SKILL_NAME_RE.test(name)) return JSON.stringify({ error: 'name должен быть kebab-case' })
+      const r = deleteUserSkill(ctx.db, name)
+      if (!r.ok) return JSON.stringify({ error: r.error })
+      return JSON.stringify({ name, status: 'deleted' })
     }
   }
   return JSON.stringify({ error: `unknown tool ${name}` })

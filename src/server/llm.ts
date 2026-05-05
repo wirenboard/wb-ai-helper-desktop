@@ -40,7 +40,12 @@ export class LlmClient {
     history: ChatTurn[],
     tools: ChatCompletionTool[],
     runTool: (name: string, args: string) => Promise<string>,
-    opts?: { maxTurns?: number; signal?: AbortSignal },
+    opts?: {
+      maxTurns?: number
+      signal?: AbortSignal
+      agentState?: { checkpointSummary?: string }
+      getExtraSystemMsgs?: () => string[]
+    },
   ): AsyncGenerator<StreamEvent> {
     const maxTurns = opts?.maxTurns ?? 8
     const messages = history.map(toApi)
@@ -48,12 +53,28 @@ export class LlmClient {
     let totalCompletionTokens = 0
 
     for (let turn = 0; turn < maxTurns; turn++) {
+      const isLastTurn = turn === maxTurns - 1
+      const extraMsgs = opts?.getExtraSystemMsgs?.() ?? []
+      const injected: ChatCompletionMessageParam[] = extraMsgs.map((content) => ({
+        role: 'system' as const,
+        content,
+      }))
+      if (isLastTurn) {
+        injected.push({
+          role: 'system',
+          content: '⚠ ПОСЛЕДНЯЯ ИТЕРАЦИЯ АГЕНТНОГО ЦИКЛА. НЕ вызывай инструменты. Дай финальный ответ на основе уже собранной информации.',
+        })
+      }
+      const messagesForApi: ChatCompletionMessageParam[] = messages.length > 0
+        ? [messages[0]!, ...injected, ...messages.slice(1)]
+        : [...injected]
+
       let stream: Stream<ChatCompletionChunk>
       try {
         stream = await this.client.chat.completions.create({
           model: this.model,
-          messages,
-          tools: tools.length ? tools : undefined,
+          messages: messagesForApi,
+          tools: isLastTurn ? undefined : (tools.length ? tools : undefined),
           stream: true,
           stream_options: { include_usage: true },
         })
@@ -130,6 +151,19 @@ export class LlmClient {
         }
         yield { type: 'tool-result', id: t.id, name: t.name, result, ok }
         messages.push({ role: 'tool', tool_call_id: t.id, content: result })
+      }
+
+      // Handle checkpoint: compress working messages
+      if (opts?.agentState?.checkpointSummary) {
+        const summary = opts.agentState.checkpointSummary
+        delete opts.agentState.checkpointSummary
+        const thisRoundCount = toolCalls.length + 1  // assistant msg + tool results
+        const thisRound = messages.slice(-thisRoundCount)
+        const sysMsg = messages[0]
+        messages.length = 0
+        if (sysMsg) messages.push(sysMsg)
+        messages.push({ role: 'system', content: `Чекпоинт — итог предыдущего этапа:\n${summary}` })
+        messages.push(...thisRound)
       }
     }
 
