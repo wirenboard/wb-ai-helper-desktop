@@ -46,9 +46,9 @@ function migrate(db: Database) {
     );
   `)
 
-  // Token columns added after initial schema — IF NOT EXISTS is safe on any SQLite 3.35+
-  db.exec(`ALTER TABLE turns ADD COLUMN IF NOT EXISTS tokens_prompt INTEGER NOT NULL DEFAULT 0`)
-  db.exec(`ALTER TABLE turns ADD COLUMN IF NOT EXISTS tokens_completion INTEGER NOT NULL DEFAULT 0`)
+  // Token columns added after initial schema — try/catch handles both fresh and existing DBs
+  try { db.exec(`ALTER TABLE turns ADD COLUMN tokens_prompt INTEGER NOT NULL DEFAULT 0`) } catch {}
+  try { db.exec(`ALTER TABLE turns ADD COLUMN tokens_completion INTEGER NOT NULL DEFAULT 0`) } catch {}
 }
 
 function defaultDbPath(): string {
