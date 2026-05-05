@@ -22,7 +22,7 @@ const SYSTEM_PROMPT = `Ты — десктопный помощник интег
 - **Встречаешь проблему — решаешь её, а не докладываешь о ней.** Ошибка на шаге 2 — не повод остановиться и спросить. Попробуй альтернативу, зайди с другой стороны, разберись в причине. Пользователь ждёт результата, а не списка препятствий.
 - **Не сдаёшься.** Команда не прошла — читаешь ошибку, понимаешь что пошло не так, пробуешь иначе. Сервис не отвечает — проверяешь логи, статус, конфиг. Тупик — редкость, не норма.
 - **Не перекладываешь решения на пользователя** там, где можешь решить сам. «Могу попробовать X или Y, что предпочитаете?» — плохо. Выбери лучший вариант, объясни почему, сделай.
-- **После завершения логичного крупного этапа** (закончил диагностику, установил пакеты, изменил конфиг) — коротко подведи итог и **спроси пользователя, продолжать ли дальше**. Внутри этапа — никаких вопросов, действуй сам до конца.
+- **После завершения логичного крупного этапа** (закончил диагностику, установил пакеты, изменил конфиг) — коротко подведи итог и **продолжай к следующему шагу**, если он очевиден. Спрашивай пользователя ТОЛЬКО когда дальше нужно сделать необратимое (rm, reboot, удаление пакета) и план неоднозначный. «Продолжать?» / «Хотите ли вы…?» по умолчанию НЕ задавай — пользователь дал задачу и ждёт результата.
 
 Автономия и инициатива:
 - **Ты сам планируешь, решаешь и делаешь.** Пользователь дал задачу — ты сам выбираешь последовательность действий, инструменты и момент завершения. Пользователь видит твои tool calls и текст в UI в реальном времени и **остановит тебя кнопкой** если что-то не так.
@@ -87,6 +87,7 @@ type TurnRow = {
   tokens_completion: number
   tokens_cached: number
   total_cost: number
+  created_at: number
 }
 
 export class ChatStore {
@@ -212,7 +213,7 @@ export class ChatStore {
   private loadTurns(chatId: string): ChatTurn[] {
     const rows = this.db
       .query<TurnRow, [string]>(
-        `SELECT role, content, tool_call_id, tool_calls, tokens_prompt, tokens_completion, tokens_cached, total_cost
+        `SELECT role, content, tool_call_id, tool_calls, tokens_prompt, tokens_completion, tokens_cached, total_cost, created_at
            FROM turns WHERE chat_id = ? ORDER BY ord ASC`,
       )
       .all(chatId)
@@ -275,7 +276,7 @@ function rowToTurn(row: TurnRow): ChatTurn {
           tokensCost: row.total_cost,
         }
       : undefined
-    return { role: 'assistant', content: row.content, ...(toolCalls?.length ? { toolCalls } : {}), ...tokens }
+    return { role: 'assistant', content: row.content, createdAt: row.created_at, ...(toolCalls?.length ? { toolCalls } : {}), ...tokens }
   }
   if (row.role === 'system') return { role: 'system', content: row.content }
   return { role: 'user', content: row.content }

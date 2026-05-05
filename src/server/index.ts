@@ -15,7 +15,7 @@ import { SettingsStore, listModels, PROVIDER_DEFAULTS, type Settings } from './s
 import { openDb } from './db.ts'
 import { getTodos, formatTodos } from './todos.ts'
 import { listSkills, getLoadedSkills, seedSystemSkills } from './skills.ts'
-import { initAttachments, listSession as listAttachmentFiles, getAttachment, readAttachment, saveAttachment, deleteAttachment, cleanupExpired } from './attachments.ts'
+import { initAttachments, listSession as listAttachmentFiles, getAttachment, readAttachment, saveAttachment, deleteAttachment, clearSession as clearAttachmentSession, cleanupExpired } from './attachments.ts'
 import { getJobsForSession, updateJobState, removeJob } from './jobs.ts'
 
 const PORT = Number(process.env['WB_HELPER_PORT'] ?? 17321)
@@ -179,7 +179,10 @@ app.patch('/api/chats/:id', async (c) => {
 })
 
 app.delete('/api/chats/:id', (c) => {
-  chats.remove(c.req.param('id'))
+  const id = c.req.param('id')
+  chats.remove(id)
+  // Drop user uploads + assistant-produced files for this chat
+  clearAttachmentSession(id)
   return c.json({ ok: true })
 })
 
@@ -262,7 +265,9 @@ app.post('/api/chats/:id/message', async (c) => {
               : '(нет доступных скиллов)'
             const todos = getTodos(id)
             const loadedSkills = getLoadedSkills(id)
-            const attachments = listAttachmentFiles(id)
+            // Only user uploads are shown to the LLM — assistant-produced files
+            // are already covered by the tool result that created them.
+            const attachments = listAttachmentFiles(id, 'user')
             const sessionJobs = getJobsForSession(id)
             const runningJobs = sessionJobs.filter((j) => j.state === 'running')
             return [
@@ -331,8 +336,13 @@ app.post('/api/chats/:id/message', async (c) => {
   })
 })
 
-app.get('/api/events', (c) =>
-  stream(c, async (s) => {
+app.get('/api/events', (c) => {
+  // Hono's stream() defaults to text/plain — Chrome's EventSource refuses
+  // anything that isn't text/event-stream and silently aborts.
+  c.header('Content-Type', 'text/event-stream')
+  c.header('Cache-Control', 'no-cache, no-transform')
+  c.header('X-Accel-Buffering', 'no')
+  return stream(c, async (s) => {
     const send = (event: string, data: unknown) => s.write(formatSse(event, data))
     await send('hello', { ts: Date.now() })
     await send('controllers', discovery.list())
@@ -345,14 +355,16 @@ app.get('/api/events', (c) =>
       if (active) await send('ping', { ts: Date.now() })
     }
     sseClients.delete(push)
-  }),
-)
+  })
+})
 
 // Attachments API
 app.get('/api/attachments', (c) => {
   const chatId = c.req.query('chatId') ?? ''
   if (!chatId) return c.json({ error: 'chatId required' }, 400)
-  return c.json({ items: listAttachmentFiles(chatId) })
+  // Input strip only shows files the user uploaded — assistant-produced
+  // attachments live in the chat as messages, not in the strip.
+  return c.json({ items: listAttachmentFiles(chatId, 'user') })
 })
 
 app.post('/api/attachments', async (c) => {

@@ -14,13 +14,13 @@ export type AssistantToolCall = { id: string; name: string; arguments: string }
 
 export type ChatTurn =
   | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string; toolCalls?: AssistantToolCall[]; tokensPrompt?: number; tokensCompletion?: number; tokensCached?: number; tokensCost?: number }
+  | { role: 'assistant'; content: string; createdAt?: number; toolCalls?: AssistantToolCall[]; tokensPrompt?: number; tokensCompletion?: number; tokensCached?: number; tokensCost?: number }
   | { role: 'tool'; toolCallId: string; content: string }
   | { role: 'system'; content: string }
 
 // ── Chat items (UI layer, derived from ChatTurn[]) ────────────────────────
 export type ChatItemUser = { type: 'user'; text: string }
-export type ChatItemAssistantText = { type: 'assistant_text'; text: string; tokensPrompt?: number; tokensCompletion?: number; tokensCached?: number; tokensCost?: number }
+export type ChatItemAssistantText = { type: 'assistant_text'; text: string; createdAt?: number; tokensPrompt?: number; tokensCompletion?: number; tokensCached?: number; tokensCost?: number }
 export type ChatItemToolCall = { type: 'tool_call'; id: string; name: string; input: Record<string, unknown>; result?: { content: string; isError: boolean } }
 export type ChatItemAssistantFile = { type: 'assistant_file'; attachmentId: string; name: string; mime: string; size: number; url: string; sourceSn?: string; sourcePath?: string }
 export type ChatItemError = { type: 'error'; message: string }
@@ -48,7 +48,7 @@ export function turnsToItems(turns: ChatTurn[], chatId: string): ChatItem[] {
         items.push(item)
       }
       if (t.content) {
-        items.push({ type: 'assistant_text', text: t.content, tokensPrompt: t.tokensPrompt, tokensCompletion: t.tokensCompletion, tokensCached: t.tokensCached, tokensCost: t.tokensCost })
+        items.push({ type: 'assistant_text', text: t.content, createdAt: t.createdAt, tokensPrompt: t.tokensPrompt, tokensCompletion: t.tokensCompletion, tokensCached: t.tokensCached, tokensCost: t.tokensCost })
       }
     } else if (t.role === 'tool') {
       const callId = (t as { toolCallId?: string }).toolCallId
@@ -285,6 +285,10 @@ export const api = {
     }).then((r) => json<Chat>(r)),
   deleteChat: (id: string) =>
     fetch(`/api/chats/${id}`, { method: 'DELETE' }).then((r) => json<{ ok: true }>(r)),
+
+  deleteAttachment: (chatId: string, attachmentId: string) =>
+    fetch(`/api/attachments/${encodeURIComponent(attachmentId)}?chatId=${encodeURIComponent(chatId)}`, { method: 'DELETE' })
+      .then((r) => json<{ ok: true }>(r)),
 
   /** Send a message and stream SSE events. */
   sendMessage(

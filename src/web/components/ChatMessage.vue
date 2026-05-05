@@ -13,8 +13,8 @@ import sql from 'highlight.js/lib/languages/sql'
 import yaml from 'highlight.js/lib/languages/yaml'
 import ini from 'highlight.js/lib/languages/ini'
 import type { ChatItem, ChatItemToolCall, Settings } from '../api'
-import { calcCost } from '../api'
-import { fmtCost, fmtSize } from '../utils'
+import { api, calcCost } from '../api'
+import { fmtCost, fmtSize, fmtTime } from '../utils'
 
 hljs.registerLanguage('bash', bash); hljs.registerLanguage('sh', bash)
 hljs.registerLanguage('json', json)
@@ -123,6 +123,13 @@ async function copyResult() {
   setTimeout(() => { resultCopied.value = false }, 1500)
 }
 
+const deletedAttachments = ref<Set<string>>(new Set())
+
+async function deleteFileFromChat(attachmentId: string) {
+  await api.deleteAttachment(props.chatId, attachmentId).catch(() => {})
+  deletedAttachments.value = new Set([...deletedAttachments.value, attachmentId])
+}
+
 async function downloadViaFetch(url: string, name: string) {
   const res = await fetch(url)
   const blob = await res.blob()
@@ -152,8 +159,8 @@ async function downloadViaFetch(url: string, name: string) {
         {{ copied ? '✓' : '⎘' }}
       </button>
       <div ref="bubbleEl" v-html="assistantHtml" />
-      <div v-if="item.tokensPrompt || item.tokensCompletion || item.tokensCost" class="msg-footer">
-        <span class="token-meta">↑{{ item.tokensPrompt ?? 0 }} ↓{{ item.tokensCompletion ?? 0 }}<template v-if="item.tokensCached"> ⊙{{ item.tokensCached }}</template><template v-if="messageCost"> · {{ fmtCost(messageCost) }}</template></span>
+      <div v-if="item.tokensPrompt || item.tokensCompletion || item.tokensCost || item.createdAt" class="msg-footer">
+        <span class="token-meta"><template v-if="item.createdAt">{{ fmtTime(item.createdAt) }}<template v-if="item.tokensPrompt || item.tokensCompletion"> · </template></template>↑{{ item.tokensPrompt ?? 0 }} ↓{{ item.tokensCompletion ?? 0 }}<template v-if="item.tokensCached"> ⊙{{ item.tokensCached }}</template><template v-if="messageCost"> · {{ fmtCost(messageCost) }}</template></span>
       </div>
     </div>
   </div>
@@ -181,23 +188,34 @@ async function downloadViaFetch(url: string, name: string) {
 
   <!-- File from controller -->
   <div v-else-if="item.type === 'assistant_file'" class="msg assistant">
-    <div v-if="item.mime?.startsWith('image/')" class="file-image-wrap">
-      <img :src="item.url" :alt="item.name" class="file-image" />
-      <a href="#" @click.prevent="downloadViaFetch(item.url, item.name)" class="file-image-dl">Скачать</a>
+    <div v-if="deletedAttachments.has(item.attachmentId)" class="file-deleted">
+      📎 {{ item.name }} — удалено
     </div>
-    <a v-else class="file-card" href="#" @click.prevent="downloadViaFetch(item.url, item.name)">
-      <span class="file-icon">📎</span>
-      <div class="file-meta">
-        <div class="file-name">{{ item.name }}</div>
-        <div class="file-sub">
-          <span>{{ fmtSize(item.size) }}</span>
-          <span v-if="item.sourcePath" class="file-src" :title="item.sourcePath">
-            · с контроллера{{ item.sourceSn ? ` ${item.sourceSn}` : '' }}
-          </span>
+    <template v-else>
+      <div v-if="item.mime?.startsWith('image/')" class="file-image-wrap">
+        <img :src="item.url" :alt="item.name" class="file-image" />
+        <div class="row" style="gap:6px">
+          <a href="#" @click.prevent="downloadViaFetch(item.url, item.name)" class="file-image-dl">Скачать</a>
+          <button class="file-image-dl danger" @click="deleteFileFromChat(item.attachmentId)">Удалить</button>
         </div>
       </div>
-      <span class="file-dl">Скачать</span>
-    </a>
+      <div v-else class="file-card-wrap">
+        <a class="file-card" href="#" @click.prevent="downloadViaFetch(item.url, item.name)">
+          <span class="file-icon">📎</span>
+          <div class="file-meta">
+            <div class="file-name">{{ item.name }}</div>
+            <div class="file-sub">
+              <span>{{ fmtSize(item.size) }}</span>
+              <span v-if="item.sourcePath" class="file-src" :title="item.sourcePath">
+                · с контроллера{{ item.sourceSn ? ` ${item.sourceSn}` : '' }}
+              </span>
+            </div>
+          </div>
+          <span class="file-dl">Скачать</span>
+        </a>
+        <button class="file-delete" title="Удалить вложение" @click="deleteFileFromChat(item.attachmentId)">×</button>
+      </div>
+    </template>
   </div>
 
   <!-- Error -->
@@ -377,6 +395,18 @@ async function downloadViaFetch(url: string, name: string) {
 .file-dl { flex: none; padding: 4px 12px; background: var(--accent); color: #fff; border-radius: 5px; font-size: 0.8rem; font-weight: 600; }
 .file-image-wrap { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 .file-image { max-width: 100%; border-radius: 6px; border: 1px solid var(--border); display: block; }
-.file-image-dl { font-size: 0.8rem; color: var(--accent); text-decoration: none; }
+.file-image-dl { font-size: 0.8rem; color: var(--accent); text-decoration: none; background: none; border: none; cursor: pointer; padding: 0; }
 .file-image-dl:hover { text-decoration: underline; }
+.file-image-dl.danger { color: var(--danger); }
+.file-card-wrap { display: inline-flex; align-items: center; gap: 4px; }
+.file-delete {
+  border: none; background: transparent; color: var(--text-mute); cursor: pointer;
+  font-size: 1rem; padding: 4px 8px; border-radius: 4px;
+}
+.file-delete:hover { background: #fee; color: var(--danger); }
+.file-deleted {
+  font-size: 0.85rem; color: var(--text-mute); font-style: italic;
+  padding: 8px 12px; border: 1px dashed var(--border); border-radius: 6px;
+  display: inline-block;
+}
 </style>

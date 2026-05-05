@@ -23,6 +23,19 @@ export function fmtTok(n: number): string {
   return String(n)
 }
 
+export function fmtTime(ts: number | undefined): string {
+  if (!ts) return ''
+  const d = new Date(ts)
+  const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString()
+  const now = new Date()
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mm = String(d.getMinutes()).padStart(2, '0')
+  if (sameDay(d, now)) return `${hh}:${mm}`
+  const dd = String(d.getDate()).padStart(2, '0')
+  const mo = String(d.getMonth() + 1).padStart(2, '0')
+  return `${dd}.${mo} ${hh}:${mm}`
+}
+
 export function fmtSize(n: number): string {
   if (n < 1024) return `${n} Б`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} КБ`
