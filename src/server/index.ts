@@ -391,6 +391,10 @@ app.get('/favicon.ico', (c) => embeddedAsset('favicon.ico') ?? c.notFound())
 const server = Bun.serve({
   port: PORT,
   hostname: '127.0.0.1',
+  // Bun's default 10s idleTimeout rips long-lived SSE streams mid-flight
+  // (tool-calling LLM turns easily exceed 10s between tokens). 0 disables it;
+  // browser-side timeouts still apply.
+  idleTimeout: 0,
   fetch: app.fetch,
 })
 
