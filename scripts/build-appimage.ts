@@ -77,21 +77,48 @@ Terminal=false
 StartupNotify=true
 `)
 
-// Loading page HTML — polls /api/health then redirects; PORT injected via sed
-const LOADING_HTML = String.raw`<!DOCTYPE html><html><head><meta charset="utf-8"><title>WB AI Helper</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0f172a;color:#94a3b8;font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:20px}.sp{width:48px;height:48px;border:3px solid #1e293b;border-top:3px solid #3b82f6;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}h1{color:#e2e8f0;font-size:1.5rem;font-weight:600}p{font-size:.85rem}</style></head><body><div class="sp"></div><h1>WB AI Helper</h1><p id="s">Запуск&hellip;</p><script>const u="__APP_URL__";let n=0,dead=false;(function t(){if(dead)return;fetch(u+"api/health",{cache:"no-store",mode:"cors"}).then(r=>{r.ok?location.href=u:retry()}).catch(retry);function retry(){if(++n>90){dead=true;document.getElementById("s").textContent="Не удалось запустить. Откройте: "+u;return;}document.getElementById("s").textContent="Запуск… ("+n+")";setTimeout(t,500);}}())</script></body></html>`
-
-// AppRun launcher — starts the server, opens a Chrome/Chromium app window with loading page
+// AppRun launcher — starts the server, waits for it to be ready, then opens Chrome
 writeFileSync(path.join(APPDIR, 'AppRun'), `#!/bin/bash
 set -euo pipefail
 
 APPDIR="$(dirname "$(readlink -f "$0")")"
 SERVER="$APPDIR/usr/bin/wb-ai-helper"
 
-# Bypass proxy for localhost
 export NO_PROXY="127.0.0.1,localhost"
 export no_proxy="127.0.0.1,localhost"
 
-# Pick a free port starting from 17321
+open_window() {
+  local url="$1"
+  local server_pid="\${2:-}"
+  BROWSER=""
+  for b in google-chrome google-chrome-stable chromium chromium-browser; do
+    if command -v "$b" &>/dev/null; then BROWSER="$b"; break; fi
+  done
+  if [ -n "$BROWSER" ]; then
+    "$BROWSER" \\
+      --app="$url" \\
+      --window-size=1280,900 \\
+      --disable-extensions \\
+      --no-first-run \\
+      --no-default-browser-check \\
+      --disable-background-networking \\
+      --user-data-dir="$HOME/.config/wb-ai-helper/chrome-profile" \\
+      2>/dev/null || true
+  else
+    xdg-open "$url" 2>/dev/null || open "$url" 2>/dev/null || echo "Open $url in your browser"
+    [ -n "$server_pid" ] && wait "$server_pid" || true
+  fi
+  [ -n "$server_pid" ] && kill "$server_pid" 2>/dev/null || true
+}
+
+# If our server is already running on the default port, just open a window
+DEFAULT_URL="http://127.0.0.1:17321/"
+if curl -sf "\${DEFAULT_URL}api/health" >/dev/null 2>&1; then
+  open_window "$DEFAULT_URL"
+  exit 0
+fi
+
+# Pick a free port
 PORT=17321
 while ss -tlnp 2>/dev/null | grep -q ":$PORT "; do
   PORT=$((PORT + 1))
@@ -99,49 +126,23 @@ done
 
 APP_URL="http://127.0.0.1:$PORT/"
 
-# Start the server on the chosen port
+# Start server on the chosen port
 export WB_HELPER_OPEN_BROWSER=0
 export WB_HELPER_PORT=$PORT
-"$SERVER" &
+"$SERVER" > /tmp/wb-ai-helper.log 2>&1 &
 SERVER_PID=$!
 
-# Build loading page data: URI (polls /api/health then redirects to app)
-LOADING_HTML=${JSON.stringify(LOADING_HTML).replace(/`/g, '\\`')}
-LOADING_HTML="\${LOADING_HTML/__APP_URL__/$APP_URL}"
-LOADING_B64=$(printf '%s' "$LOADING_HTML" | base64 -w0 2>/dev/null || printf '%s' "$LOADING_HTML" | base64)
-DATA_URI="data:text/html;base64,$LOADING_B64"
-
-# Open in Chrome/Chromium app mode — show loading page immediately while server starts
-BROWSER=""
-for b in google-chrome google-chrome-stable chromium chromium-browser; do
-  if command -v "$b" &>/dev/null; then
-    BROWSER="$b"
-    break
+# Wait up to 20 seconds for server to be ready
+for i in $(seq 1 40); do
+  if ! kill -0 $SERVER_PID 2>/dev/null; then
+    echo "WB AI Helper: server crashed on startup. See /tmp/wb-ai-helper.log" >&2
+    exit 1
   fi
+  curl -sf "\${APP_URL}api/health" >/dev/null 2>&1 && break
+  sleep 0.5
 done
 
-if [ -n "$BROWSER" ]; then
-  "$BROWSER" \\
-    --app="$DATA_URI" \\
-    --window-size=1280,900 \\
-    --disable-extensions \\
-    --no-first-run \\
-    --no-default-browser-check \\
-    --disable-background-networking \\
-    --user-data-dir="$HOME/.config/wb-ai-helper/chrome-profile" \\
-    2>/dev/null
-else
-  # Fallback: wait for server then open in default browser
-  for i in $(seq 1 60); do
-    curl -sf "$APP_URL/api/health" >/dev/null 2>&1 && break
-    sleep 0.5
-  done
-  xdg-open "$APP_URL" 2>/dev/null || open "$APP_URL" 2>/dev/null || echo "Open $APP_URL in your browser"
-  wait $SERVER_PID
-fi
-
-# Kill server when window is closed
-kill $SERVER_PID 2>/dev/null || true
+open_window "$APP_URL" "$SERVER_PID"
 `)
 chmodSync(path.join(APPDIR, 'AppRun'), 0o755)
 
