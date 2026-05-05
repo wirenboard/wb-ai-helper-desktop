@@ -9,6 +9,28 @@ import SettingsPanel from './components/SettingsPanel.vue'
 
 const leftOpen = ref(true)
 const rightOpen = ref(true)
+
+type Theme = 'auto' | 'light' | 'dark'
+const THEME_KEY = 'wb-theme'
+const themeOrder: Theme[] = ['auto', 'light', 'dark']
+const themeIcon: Record<Theme, string> = { auto: '◑', light: '☀', dark: '☾' }
+const themeLabel: Record<Theme, string> = { auto: 'Авто', light: 'Светлая', dark: 'Тёмная' }
+
+const theme = ref<Theme>((localStorage.getItem(THEME_KEY) as Theme) ?? 'auto')
+
+function applyTheme(t: Theme) {
+  if (t === 'auto') delete document.documentElement.dataset['theme']
+  else document.documentElement.dataset['theme'] = t
+}
+
+function cycleTheme() {
+  const next = themeOrder[(themeOrder.indexOf(theme.value) + 1) % themeOrder.length]!
+  theme.value = next
+  localStorage.setItem(THEME_KEY, next)
+  applyTheme(next)
+}
+
+applyTheme(theme.value)
 const leftWidth = ref(260)
 const rightWidth = ref(320)
 
@@ -54,6 +76,14 @@ const liveTurns = reactive<{ [chatId: string]: ChatTurn[] }>({})
 const streaming = ref(false)
 const scanning = ref(false)
 const errorBanner = ref<string | null>(null)
+const toast = ref<string | null>(null)
+let toastTimer: ReturnType<typeof setTimeout> | null = null
+
+function showToast(msg: string, ms = 3000) {
+  toast.value = msg
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { toast.value = null }, ms)
+}
 const totalStats = ref<TokenStats | null>(null)
 let unsubscribe: (() => void) | null = null
 let abortStream: AbortController | null = null
@@ -111,9 +141,14 @@ async function refreshControllers() {
 
 async function rescan() {
   scanning.value = true
+  showToast('Сканирую сеть…')
   try {
     const r = await api.refresh()
     controllers.value = r.controllers
+    const n = r.controllers.length
+    showToast(n ? `Нашёл ${n} контроллер${n === 1 ? '' : n < 5 ? 'а' : 'ов'}` : 'Ничего не нашли')
+  } catch (e: any) {
+    showToast(`Ошибка сканирования: ${e?.message ?? String(e)}`)
   } finally {
     scanning.value = false
   }
@@ -290,6 +325,7 @@ const visibleTurns = computed<ChatTurn[]>(() => {
           class="chat-tokens small muted"
           title="Токены в этом чате: ↑ prompt / ↓ completion"
         >↑{{ fmtTok(currentChatTokens.prompt) }} ↓{{ fmtTok(currentChatTokens.completion) }}</div>
+        <button class="ghost" :title="`Тема: ${themeLabel[theme]}`" @click="cycleTheme">{{ themeIcon[theme] }}</button>
         <button class="ghost" title="Настройки" @click="settingsOpen = true">⚙</button>
       </div>
       <div v-if="errorBanner" class="error">{{ errorBanner }}</div>
@@ -305,7 +341,10 @@ const visibleTurns = computed<ChatTurn[]>(() => {
       <div v-else class="welcome">
         <h2>WB AI Helper</h2>
         <p>Помощник интегратора Wiren Board. Создайте чат слева — справа выберите контроллеры из локальной сети.</p>
-        <button class="primary" @click="settingsOpen = true">Настройки</button>
+        <div style="display:flex;gap:8px;justify-content:center">
+          <button class="primary" @click="settingsOpen = true">Настройки</button>
+          <button @click="cycleTheme" :title="`Тема: ${themeLabel[theme]}`">{{ themeIcon[theme] }} {{ themeLabel[theme] }}</button>
+        </div>
       </div>
     </div>
 
@@ -338,4 +377,19 @@ const visibleTurns = computed<ChatTurn[]>(() => {
       @clear="setChatContext([])"
     />
   </div>
+
+  <Transition name="toast">
+    <div v-if="toast" class="toast">{{ toast }}</div>
+  </Transition>
 </template>
+
+<style scoped>
+.toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  background: var(--text); color: var(--bg);
+  padding: 8px 18px; border-radius: 20px; font-size: 13px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.2); z-index: 9999; white-space: nowrap;
+}
+.toast-enter-active, .toast-leave-active { transition: opacity 0.2s, transform 0.2s; }
+.toast-enter-from, .toast-leave-to { opacity: 0; transform: translateX(-50%) translateY(8px); }
+</style>
