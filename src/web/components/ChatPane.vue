@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { nextTick, onMounted, ref, watch } from 'vue'
 import { marked } from 'marked'
 import type { ChatTurn } from '../api'
 import { useAttachments } from '../composables/useAttachments'
@@ -154,6 +154,7 @@ function scrollBottom() {
   nextTick(() => { if (body.value) body.value.scrollTop = body.value.scrollHeight })
 }
 
+onMounted(scrollBottom)
 watch(() => props.turns.length, scrollBottom)
 watch(() => props.turns[props.turns.length - 1]?.content, scrollBottom)
 watch(() => props.streaming, (v) => { if (!v) scrollBottom() })
