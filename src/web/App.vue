@@ -6,6 +6,13 @@ import ChatPane from './components/ChatPane.vue'
 import ControllerList from './components/ControllerList.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 
+const leftOpen = ref(true)
+const rightOpen = ref(true)
+
+const gridCols = computed(() =>
+  `${leftOpen.value ? '260px' : '28px'} 1fr ${rightOpen.value ? '320px' : '28px'}`,
+)
+
 const health = ref<Health | null>(null)
 const settings = ref<Settings | null>(null)
 const settingsOpen = ref(false)
@@ -222,14 +229,16 @@ const visibleTurns = computed<ChatTurn[]>(() => {
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app-shell" :style="{ gridTemplateColumns: gridCols }">
     <ChatList
       :chats="chats"
       :active-id="activeChatId"
       :total-stats="totalStats"
+      :open="leftOpen"
       @new="newChat"
       @select="selectChat"
       @delete="deleteChat"
+      @toggle="leftOpen = !leftOpen"
     />
 
     <div class="chat-pane">
@@ -259,7 +268,7 @@ const visibleTurns = computed<ChatTurn[]>(() => {
         @rename="renameChat"
       />
       <div v-else class="welcome">
-        <h2>WB Helper</h2>
+        <h2>WB AI Helper</h2>
         <p>Помощник интегратора Wiren Board. Создайте чат слева — справа выберите контроллеры из локальной сети.</p>
         <button class="primary" @click="settingsOpen = true">Настройки</button>
       </div>
@@ -275,6 +284,8 @@ const visibleTurns = computed<ChatTurn[]>(() => {
     <ControllerList
       :controllers="controllers"
       :selected="selectedSns"
+      :open="rightOpen"
+      @toggle-panel="rightOpen = !rightOpen"
       @rescan="rescan"
       @add-manual="(host) => api.addController(host).then(refreshControllers)"
       @remove="(sn) => api.removeController(sn).then(refreshControllers)"

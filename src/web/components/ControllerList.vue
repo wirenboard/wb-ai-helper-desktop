@@ -2,8 +2,9 @@
 import { ref } from 'vue'
 import type { Controller } from '../api'
 
-defineProps<{ controllers: Controller[]; selected: string[] }>()
+defineProps<{ controllers: Controller[]; selected: string[]; open: boolean }>()
 const emit = defineEmits<{
+  'toggle-panel': []
   rescan: []
   'add-manual': [host: string]
   remove: [sn: string]
@@ -29,11 +30,17 @@ function add() {
 </script>
 
 <template>
-  <aside class="sidebar right">
+  <aside class="sidebar right" :class="{ collapsed: !open }">
     <div class="sidebar-header">
-      <span>Контроллеры</span>
-      <button @click="emit('rescan')" title="Пересканировать сеть">↻</button>
+      <button class="ghost collapse-btn" :title="open ? 'Свернуть' : 'Развернуть'" @click="emit('toggle-panel')">
+        {{ open ? '›' : '‹' }}
+      </button>
+      <template v-if="open">
+        <span>Контроллеры</span>
+        <button @click="emit('rescan')" title="Пересканировать сеть">↻</button>
+      </template>
     </div>
+    <template v-if="open">
     <div class="sidebar-body">
       <div v-if="!controllers.length" class="empty">
         Никого не нашли. Контроллер должен быть в той же сети и публиковать
@@ -96,5 +103,6 @@ function add() {
         <button @click="add">+</button>
       </div>
     </div>
+    </template>
   </aside>
 </template>
