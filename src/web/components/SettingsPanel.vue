@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { api, PROVIDER_INFO, type ApiFormat, type LlmProvider, type Settings } from '../api'
+import { api, COPILOT_MULTIPLIERS, PROVIDER_INFO, type ApiFormat, type LlmProvider, type Settings } from '../api'
 import ComboboxSearch from './ComboboxSearch.vue'
 
 const props = defineProps<{ settings: Settings | null; open: boolean; version?: string; fontSize?: number }>()
@@ -195,7 +195,7 @@ async function save() {
   saving.value = true
   saveError.value = null
   try {
-    // Only providers with editable baseURL send it; OpenAI/Anthropic use defaults.
+    // Only providers with editable baseURL send it; OpenAI uses its default.
     const baseURLForSave = providerInfo.value.baseURLEditable ? baseURL.value : ''
     // For Custom AI Proxy: proxy creds belong inside the URL, force the
     // separate fields empty so they don't override URL-embedded basic auth.
@@ -314,18 +314,6 @@ async function removeKey() {
             <input v-model="baseURL" :placeholder="baseURLPlaceholder" />
           </label>
 
-          <label v-if="providerInfo.apiFormatEditable" class="field">
-            <span>Формат API</span>
-            <div class="row" style="gap:14px">
-              <label style="display:inline-flex;align-items:center;gap:4px;font-weight:normal">
-                <input type="radio" :value="'openai'" v-model="apiFormat" /> OpenAI
-              </label>
-              <label style="display:inline-flex;align-items:center;gap:4px;font-weight:normal">
-                <input type="radio" :value="'anthropic'" v-model="apiFormat" /> Anthropic
-              </label>
-            </div>
-          </label>
-
           <label class="field">
             <span>Прокси для LLM <span class="muted small">(необязательно)</span></span>
             <input v-model="llmProxy" placeholder="http://proxy-host:8080" />
@@ -373,6 +361,7 @@ async function removeKey() {
               v-else-if="models.length"
               :modelValue="model"
               :options="models"
+              :badges="provider === 'custom_proxy' ? COPILOT_MULTIPLIERS : undefined"
               placeholder="начните печатать для поиска…"
               @update:modelValue="model = $event"
             />

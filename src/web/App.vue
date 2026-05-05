@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { api, calcCost, type Chat, type ChatTurn, type Controller, type Health, type Settings, type TokenStats, type TrackedJob } from './api'
+import { api, calcCost, contextWindowOf, type Chat, type ChatTurn, type Controller, type Health, type Settings, type TokenStats, type TrackedJob } from './api'
 import { fmtCost, fmtTok } from './utils'
 import ChatList from './components/ChatList.vue'
 import ChatPane from './components/ChatPane.vue'
@@ -131,6 +131,31 @@ const currentChatTokensCost = computed(() => {
     0,
   )
 })
+
+/** Заполнение контекстного окна: берём prompt_tokens ПОСЛЕДНЕГО ответа,
+ * а не сумму — это и есть размер текущего активного контекста. */
+const currentContextUsage = computed(() => {
+  if (!settings.value || !activeChat.value) return null
+  const ctx = contextWindowOf(settings.value.model, settings.value.contextWindow)
+  if (!ctx) return null
+  const turns = activeChat.value.turns
+  let last = 0
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const t = turns[i]
+    if (t?.role === 'assistant' && (t.tokensPrompt ?? 0) > 0) {
+      last = t.tokensPrompt!
+      break
+    }
+  }
+  if (!last) return null
+  return { used: last, total: ctx, ratio: last / ctx }
+})
+
+function compactContext() {
+  // Просим модель сжать историю — вызвать tool `checkpoint`. Сама модель решит
+  // что положить в summary. Текст подсказывающий, остальное — её ответственность.
+  void sendMessage('Контекст приближается к лимиту. Вызови сейчас checkpoint(summary=...) с кратким итогом текущего этапа, чтобы освободить память.')
+}
 
 const currentChatCost = computed(() => {
   if (!settings.value) return null
@@ -600,8 +625,23 @@ const visibleTurns = computed<ChatTurn[]>(() => {
         <div
           v-if="currentChatTokens.prompt + currentChatTokens.completion"
           class="chat-tokens small muted"
-          :title="`Токены в этом чате: ↑${fmtTok(currentChatTokens.prompt)} prompt${currentChatTokens.cached ? ` (⊙${fmtTok(currentChatTokens.cached)} кэш)` : ''} / ↓${fmtTok(currentChatTokens.completion)} completion`"
+          :title="`Сколько потратили токенов в чате (биллинг): ↑${fmtTok(currentChatTokens.prompt)} prompt${currentChatTokens.cached ? ` (⊙${fmtTok(currentChatTokens.cached)} кэш)` : ''} / ↓${fmtTok(currentChatTokens.completion)} completion`"
         >↑{{ fmtTok(currentChatTokens.prompt) }} ↓{{ fmtTok(currentChatTokens.completion) }}<template v-if="currentChatTokens.cached"> ⊙{{ fmtTok(currentChatTokens.cached) }}</template><template v-if="currentChatCost != null"> · {{ fmtCost(currentChatCost) }}</template></div>
+        <div
+          v-if="currentContextUsage"
+          class="ctx-meter small"
+          :class="{ warn: currentContextUsage.ratio >= 0.8, crit: currentContextUsage.ratio >= 0.95 }"
+          :title="`Текущий активный контекст ${fmtTok(currentContextUsage.used)} из ${fmtTok(currentContextUsage.total)} (${Math.round(currentContextUsage.ratio * 100)}%)`"
+        >
+          <span class="ctx-bar"><span class="ctx-fill" :style="{ width: Math.min(100, Math.round(currentContextUsage.ratio * 100)) + '%' }"/></span>
+          {{ fmtTok(currentContextUsage.used) }} / {{ fmtTok(currentContextUsage.total) }}
+          <button
+            v-if="currentContextUsage.ratio >= 0.5 && !streaming"
+            class="ctx-compact ghost small"
+            title="Сжать историю — модель вызовет checkpoint и заменит старые tool-results кратким суммари"
+            @click="compactContext"
+          >📦 сжать</button>
+        </div>
         <button class="ghost" :title="`Тема: ${themeLabel[theme]}`" @click="cycleTheme">{{ themeIcon[theme] }}</button>
         <button class="ghost" title="Настройки" @click="settingsOpen = true">⚙</button>
       </div>
@@ -683,4 +723,29 @@ const visibleTurns = computed<ChatTurn[]>(() => {
 .toast-enter-active, .toast-leave-active { transition: opacity 0.2s, transform 0.2s; }
 .toast-enter-from, .toast-leave-to { opacity: 0; transform: translateX(-50%) translateY(8px); }
 
+/* ── Context fill meter ─────────────────────────────────────── */
+.ctx-meter {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: 'JetBrains Mono', monospace; font-size: 0.7rem;
+  color: var(--text-mute);
+}
+.ctx-bar {
+  display: inline-block; width: 64px; height: 6px;
+  background: var(--bg-mute, var(--border)); border-radius: 3px; overflow: hidden;
+}
+.ctx-fill {
+  display: block; height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease, background 0.2s ease;
+}
+.ctx-meter.warn .ctx-fill { background: #d97706; }
+.ctx-meter.warn { color: #b45309; }
+.ctx-meter.crit .ctx-fill { background: #dc2626; }
+.ctx-meter.crit { color: #dc2626; }
+.ctx-compact {
+  margin-left: 4px; padding: 2px 6px;
+  border-radius: 4px; background: var(--bg); border: 1px solid var(--border);
+  cursor: pointer; font-family: inherit; font-size: 0.7rem;
+}
+.ctx-compact:hover { border-color: var(--accent); color: var(--accent); }
 </style>
