@@ -77,14 +77,17 @@ Terminal=false
 StartupNotify=true
 `)
 
-// AppRun launcher — starts the server, opens a Chrome/Chromium app window
+// Loading page HTML — polls /api/health then redirects; PORT injected via sed
+const LOADING_HTML = String.raw`<!DOCTYPE html><html><head><meta charset="utf-8"><title>WB AI Helper</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0f172a;color:#94a3b8;font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:20px}.sp{width:48px;height:48px;border:3px solid #1e293b;border-top:3px solid #3b82f6;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}h1{color:#e2e8f0;font-size:1.5rem;font-weight:600}p{font-size:.85rem}</style></head><body><div class="sp"></div><h1>WB AI Helper</h1><p id="s">Запуск&hellip;</p><script>const u="__APP_URL__";let n=0,dead=false;(function t(){if(dead)return;fetch(u+"api/health",{cache:"no-store",mode:"cors"}).then(r=>{r.ok?location.href=u:retry()}).catch(retry);function retry(){if(++n>90){dead=true;document.getElementById("s").textContent="Не удалось запустить. Откройте: "+u;return;}document.getElementById("s").textContent="Запуск… ("+n+")";setTimeout(t,500);}}())</script></body></html>`
+
+// AppRun launcher — starts the server, opens a Chrome/Chromium app window with loading page
 writeFileSync(path.join(APPDIR, 'AppRun'), `#!/bin/bash
 set -euo pipefail
 
 APPDIR="$(dirname "$(readlink -f "$0")")"
 SERVER="$APPDIR/usr/bin/wb-ai-helper"
 
-# Bypass proxy for localhost (curl and fetch)
+# Bypass proxy for localhost
 export NO_PROXY="127.0.0.1,localhost"
 export no_proxy="127.0.0.1,localhost"
 
@@ -94,22 +97,21 @@ while ss -tlnp 2>/dev/null | grep -q ":$PORT "; do
   PORT=$((PORT + 1))
 done
 
-# Start the server
+APP_URL="http://127.0.0.1:$PORT/"
+
+# Start the server on the chosen port
 export WB_HELPER_OPEN_BROWSER=0
+export WB_HELPER_PORT=$PORT
 "$SERVER" &
 SERVER_PID=$!
 
-# Wait up to 8 seconds for the server to be ready
-for i in $(seq 1 40); do
-  if curl -sf "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.2
-done
+# Build loading page data: URI (polls /api/health then redirects to app)
+LOADING_HTML=${JSON.stringify(LOADING_HTML).replace(/`/g, '\\`')}
+LOADING_HTML="\${LOADING_HTML/__APP_URL__/$APP_URL}"
+LOADING_B64=$(printf '%s' "$LOADING_HTML" | base64 -w0 2>/dev/null || printf '%s' "$LOADING_HTML" | base64)
+DATA_URI="data:text/html;base64,$LOADING_B64"
 
-URL="http://127.0.0.1:$PORT/"
-
-# Open in Chrome/Chromium app mode (no browser chrome — looks like a native window)
+# Open in Chrome/Chromium app mode — show loading page immediately while server starts
 BROWSER=""
 for b in google-chrome google-chrome-stable chromium chromium-browser; do
   if command -v "$b" &>/dev/null; then
@@ -120,7 +122,7 @@ done
 
 if [ -n "$BROWSER" ]; then
   "$BROWSER" \\
-    --app="$URL" \\
+    --app="$DATA_URI" \\
     --window-size=1280,900 \\
     --disable-extensions \\
     --no-first-run \\
@@ -129,9 +131,12 @@ if [ -n "$BROWSER" ]; then
     --user-data-dir="$HOME/.config/wb-ai-helper/chrome-profile" \\
     2>/dev/null
 else
-  # Fallback: open in default browser
-  xdg-open "$URL" 2>/dev/null || open "$URL" 2>/dev/null || echo "Open $URL in your browser"
-  # Keep server alive until user presses Ctrl+C
+  # Fallback: wait for server then open in default browser
+  for i in $(seq 1 60); do
+    curl -sf "$APP_URL/api/health" >/dev/null 2>&1 && break
+    sleep 0.5
+  done
+  xdg-open "$APP_URL" 2>/dev/null || open "$APP_URL" 2>/dev/null || echo "Open $APP_URL in your browser"
   wait $SERVER_PID
 fi
 
