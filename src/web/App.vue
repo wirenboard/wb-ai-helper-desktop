@@ -235,8 +235,9 @@ async function sendMessage(text: string) {
   const id = activeChat.value.id
   streaming.value = true
   errorBanner.value = null
+  const prevHistory = liveTurns[id] ?? activeChat.value.turns.filter((t) => t.role !== 'system')
   liveTurns[id] = [
-    ...(liveTurns[id] ?? []),
+    ...prevHistory,
     { role: 'user', content: text },
     { role: 'assistant', content: '' },
   ]
