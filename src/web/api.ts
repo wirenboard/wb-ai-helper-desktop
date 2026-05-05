@@ -119,6 +119,8 @@ export type Health = {
 export type Settings = {
   baseURL: string
   model: string
+  llmProxy: string
+  tlsInsecure: boolean
   mqttUser: string
   sshUser: string
   sshKeyPath: string
@@ -137,6 +139,8 @@ export type SettingsPatch = Partial<{
   apiKey: string
   baseURL: string
   model: string
+  llmProxy: string
+  tlsInsecure: boolean
   mqttUser: string
   mqttPassword: string
   sshUser: string

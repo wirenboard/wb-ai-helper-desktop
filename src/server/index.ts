@@ -45,6 +45,8 @@ let llm: LlmClient | null = settings.apiKey
       apiKey: settings.apiKey,
       baseURL: settings.baseURL || undefined,
       model: settings.model || 'gpt-4.1-mini',
+      llmProxy: settings.llmProxy || undefined,
+      tlsInsecure: settings.tlsInsecure,
     })
   : null
 
@@ -54,6 +56,8 @@ settingsStore.onChange((s) => {
         apiKey: s.apiKey,
         baseURL: s.baseURL || undefined,
         model: s.model || 'gpt-4.1-mini',
+        llmProxy: s.llmProxy || undefined,
+        tlsInsecure: s.tlsInsecure,
       })
     : null
   void mqtt.close()
@@ -85,12 +89,13 @@ app.get('/api/settings', (c) => c.json(settingsStore.toPublic()))
 app.put('/api/settings', async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
   const patch: Record<string, unknown> = {}
-  const stringFields = ['apiKey', 'baseURL', 'model', 'mqttUser', 'mqttPassword', 'sshUser', 'sshPassword', 'sshKeyPath']
+  const stringFields = ['apiKey', 'baseURL', 'model', 'llmProxy', 'mqttUser', 'mqttPassword', 'sshUser', 'sshPassword', 'sshKeyPath']
   for (const f of stringFields) {
     if (typeof body[f] === 'string') patch[f] = body[f]
   }
   if (typeof body['discoveryInterval'] === 'number') patch['discoveryInterval'] = body['discoveryInterval']
   if (typeof body['openBrowser'] === 'boolean') patch['openBrowser'] = body['openBrowser']
+  if (typeof body['tlsInsecure'] === 'boolean') patch['tlsInsecure'] = body['tlsInsecure']
   for (const f of ['priceInput', 'priceOutput', 'priceCached']) {
     if (typeof body[f] === 'number' || body[f] === null) patch[f] = body[f]
   }

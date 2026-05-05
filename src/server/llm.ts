@@ -8,7 +8,7 @@ import type { Stream } from 'openai/streaming.mjs'
 
 export type ChatTurn =
   | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string; toolCalls?: AssistantToolCall[]; tokensPrompt?: number; tokensCompletion?: number }
+  | { role: 'assistant'; content: string; toolCalls?: AssistantToolCall[]; tokensPrompt?: number; tokensCompletion?: number; tokensCached?: number }
   | { role: 'tool'; toolCallId: string; content: string }
   | { role: 'system'; content: string }
 
@@ -22,7 +22,7 @@ export type StreamEvent =
   | { type: 'text-delta'; text: string }
   | { type: 'tool-call'; id: string; name: string; arguments: string }
   | { type: 'tool-result'; id: string; name: string; result: string; ok: boolean }
-  | { type: 'usage'; promptTokens: number; completionTokens: number }
+  | { type: 'usage'; promptTokens: number; completionTokens: number; cachedTokens: number }
   | { type: 'done'; finish_reason: string | null }
   | { type: 'error'; message: string }
 
@@ -30,8 +30,17 @@ export class LlmClient {
   private client: OpenAI
   readonly model: string
 
-  constructor(opts: { apiKey: string; baseURL?: string; model?: string }) {
-    this.client = new OpenAI({ apiKey: opts.apiKey, baseURL: opts.baseURL })
+  constructor(opts: { apiKey: string; baseURL?: string; model?: string; llmProxy?: string; tlsInsecure?: boolean }) {
+    const needCustomFetch = opts.llmProxy || opts.tlsInsecure
+    const fetchFn = needCustomFetch
+      ? (url: string | URL, init?: RequestInit) => {
+          const extra: Record<string, unknown> = {}
+          if (opts.llmProxy) extra['proxy'] = opts.llmProxy
+          if (opts.tlsInsecure) extra['tls'] = { rejectUnauthorized: false }
+          return fetch(url, { ...init, ...extra } as RequestInit)
+        }
+      : undefined
+    this.client = new OpenAI({ apiKey: opts.apiKey, baseURL: opts.baseURL, fetch: fetchFn })
     this.model = opts.model ?? 'gpt-4.1-mini'
   }
 
@@ -51,6 +60,7 @@ export class LlmClient {
     const messages = history.map(toApi)
     let totalPromptTokens = 0
     let totalCompletionTokens = 0
+    let totalCachedTokens = 0
 
     for (let turn = 0; turn < maxTurns; turn++) {
       const isLastTurn = turn === maxTurns - 1
@@ -96,6 +106,7 @@ export class LlmClient {
           if (chunk.usage) {
             totalPromptTokens += chunk.usage.prompt_tokens
             totalCompletionTokens += chunk.usage.completion_tokens
+            totalCachedTokens += chunk.usage.prompt_tokens_details?.cached_tokens ?? 0
           }
           const choice = chunk.choices[0]
           if (!choice) continue
@@ -123,7 +134,7 @@ export class LlmClient {
       const toolCalls = [...toolBuf.values()].filter((t) => t.id && t.name)
       if (!toolCalls.length) {
         if (totalPromptTokens || totalCompletionTokens) {
-          yield { type: 'usage', promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens }
+          yield { type: 'usage', promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens, cachedTokens: totalCachedTokens }
         }
         yield { type: 'done', finish_reason: finish }
         return
@@ -168,7 +179,7 @@ export class LlmClient {
     }
 
     if (totalPromptTokens || totalCompletionTokens) {
-      yield { type: 'usage', promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens }
+      yield { type: 'usage', promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens, cachedTokens: totalCachedTokens }
     }
     yield { type: 'done', finish_reason: 'max_turns' }
   }

@@ -7,6 +7,8 @@ export type Settings = {
   apiKey: string
   baseURL: string
   model: string
+  llmProxy: string
+  tlsInsecure: boolean
   mqttUser: string
   mqttPassword: string
   sshUser: string
@@ -30,6 +32,8 @@ const DEFAULTS: Settings = {
   apiKey: '',
   baseURL: '',
   model: '',
+  llmProxy: '',
+  tlsInsecure: false,
   mqttUser: '',
   mqttPassword: '',
   sshUser: 'root',
@@ -81,6 +85,8 @@ export class SettingsStore {
     return {
       baseURL: this.cache.baseURL,
       model: this.cache.model,
+      llmProxy: this.cache.llmProxy,
+      tlsInsecure: this.cache.tlsInsecure,
       mqttUser: this.cache.mqttUser,
       sshUser: this.cache.sshUser,
       sshKeyPath: this.cache.sshKeyPath,
