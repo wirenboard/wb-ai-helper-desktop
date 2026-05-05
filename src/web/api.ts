@@ -14,13 +14,13 @@ export type AssistantToolCall = { id: string; name: string; arguments: string }
 
 export type ChatTurn =
   | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string; toolCalls?: AssistantToolCall[]; tokensPrompt?: number; tokensCompletion?: number; tokensCached?: number }
+  | { role: 'assistant'; content: string; createdAt?: number; toolCalls?: AssistantToolCall[]; tokensPrompt?: number; tokensCompletion?: number; tokensCached?: number; tokensCost?: number }
   | { role: 'tool'; toolCallId: string; content: string }
   | { role: 'system'; content: string }
 
 // ── Chat items (UI layer, derived from ChatTurn[]) ────────────────────────
 export type ChatItemUser = { type: 'user'; text: string }
-export type ChatItemAssistantText = { type: 'assistant_text'; text: string; tokensPrompt?: number; tokensCompletion?: number; tokensCached?: number }
+export type ChatItemAssistantText = { type: 'assistant_text'; text: string; createdAt?: number; tokensPrompt?: number; tokensCompletion?: number; tokensCached?: number; tokensCost?: number }
 export type ChatItemToolCall = { type: 'tool_call'; id: string; name: string; input: Record<string, unknown>; result?: { content: string; isError: boolean } }
 export type ChatItemAssistantFile = { type: 'assistant_file'; attachmentId: string; name: string; mime: string; size: number; url: string; sourceSn?: string; sourcePath?: string }
 export type ChatItemError = { type: 'error'; message: string }
@@ -48,7 +48,7 @@ export function turnsToItems(turns: ChatTurn[], chatId: string): ChatItem[] {
         items.push(item)
       }
       if (t.content) {
-        items.push({ type: 'assistant_text', text: t.content, tokensPrompt: t.tokensPrompt, tokensCompletion: t.tokensCompletion, tokensCached: t.tokensCached })
+        items.push({ type: 'assistant_text', text: t.content, createdAt: t.createdAt, tokensPrompt: t.tokensPrompt, tokensCompletion: t.tokensCompletion, tokensCached: t.tokensCached, tokensCost: t.tokensCost })
       }
     } else if (t.role === 'tool') {
       const callId = (t as { toolCallId?: string }).toolCallId
@@ -104,12 +104,14 @@ export type Chat = {
   tokensPrompt: number
   tokensCompletion: number
   tokensCached: number
+  totalCost: number
 }
 
 export type TokenStats = {
   totalPromptTokens: number
   totalCompletionTokens: number
   totalCachedTokens?: number
+  totalCost?: number
 }
 
 export type TrackedJob = {
@@ -129,28 +131,82 @@ export type Health = {
   discoveryInterval: number
 }
 
-export type Settings = {
+export type LlmProvider = 'openai' | 'vsegpt' | 'custom'
+
+export interface ProviderInfo {
+  label: string
+  defaultBaseURL: string
+  currency: 'USD' | 'RUB' | null
+  pricesEditable: boolean
+  /** Where the user can sign up / get an API key. Shown as "Получить ключ ↗". */
+  signupUrl: string | null
+}
+
+export const PROVIDER_INFO: Record<LlmProvider, ProviderInfo> = {
+  openai: {
+    label: 'OpenAI',
+    defaultBaseURL: 'https://api.openai.com/v1',
+    currency: 'USD',
+    pricesEditable: true,
+    signupUrl: 'https://platform.openai.com/api-keys',
+  },
+  vsegpt: {
+    label: 'VseGPT.Ru',
+    defaultBaseURL: 'https://api.vsegpt.ru/v1',
+    currency: 'RUB',
+    pricesEditable: false,
+    signupUrl: 'https://vsegpt.ru/User/API',
+  },
+  custom: {
+    label: 'Custom',
+    defaultBaseURL: '',
+    currency: null,
+    pricesEditable: false,
+    signupUrl: null,
+  },
+}
+
+export type ProviderConfigPublic = {
   baseURL: string
   model: string
   llmProxy: string
   llmProxyUser: string
   tlsInsecure: boolean
+  priceInput: number | null
+  priceOutput: number | null
+  priceCached: number | null
+  apiKeyConfigured: boolean
+  llmProxyPasswordConfigured: boolean
+}
+
+export type Settings = {
+  provider: LlmProvider
+  /** Per-provider configs; the active one is providers[provider]. */
+  providers: Record<LlmProvider, ProviderConfigPublic>
+  // Flat view of the *current* provider — these are the same as providers[provider].
+  baseURL: string
+  model: string
+  llmProxy: string
+  llmProxyUser: string
+  tlsInsecure: boolean
+  apiKeyConfigured: boolean
+  llmProxyPasswordConfigured: boolean
+  priceInput?: number | null
+  priceOutput?: number | null
+  priceCached?: number | null
+  // Shared (controller / UI):
   mqttUser: string
   sshUser: string
   sshKeyPath: string
   discoveryInterval: number
   openBrowser: boolean
-  apiKeyConfigured: boolean
   mqttPasswordConfigured: boolean
   sshPasswordConfigured: boolean
-  llmProxyPasswordConfigured: boolean
   storagePath: string
-  priceInput?: number | null
-  priceOutput?: number | null
-  priceCached?: number | null
 }
 
 export type SettingsPatch = Partial<{
+  provider: LlmProvider
   apiKey: string
   baseURL: string
   model: string
@@ -230,6 +286,10 @@ export const api = {
   deleteChat: (id: string) =>
     fetch(`/api/chats/${id}`, { method: 'DELETE' }).then((r) => json<{ ok: true }>(r)),
 
+  deleteAttachment: (chatId: string, attachmentId: string) =>
+    fetch(`/api/attachments/${encodeURIComponent(attachmentId)}?chatId=${encodeURIComponent(chatId)}`, { method: 'DELETE' })
+      .then((r) => json<{ ok: true }>(r)),
+
   /** Send a message and stream SSE events. */
   sendMessage(
     id: string,
@@ -299,15 +359,39 @@ export const api = {
   },
 }
 
+export type Cost = { value: number; currency: 'USD' | 'RUB' }
+
+/**
+ * Compute display-ready cost for a turn or chat.
+ *
+ * Strategy depends on the provider:
+ *  - VseGPT (and any provider that returns `usage.total_cost`): use `tokensCost` directly. RUB.
+ *  - OpenAI / Custom-with-prices: compute from settings.priceInput/Output/Cached. USD.
+ *  - Custom without prices: no cost.
+ */
 export function calcCost(
   promptTokens: number,
   completionTokens: number,
   cachedTokens: number,
-  prices: { priceInput?: number | null; priceOutput?: number | null; priceCached?: number | null },
-): number | null {
-  if (prices.priceInput == null && prices.priceOutput == null) return null
-  const input = (promptTokens - cachedTokens) * (prices.priceInput ?? 0) / 1_000_000
-  const cached = cachedTokens * (prices.priceCached ?? prices.priceInput ?? 0) / 1_000_000
-  const output = completionTokens * (prices.priceOutput ?? 0) / 1_000_000
-  return input + cached + output
+  source: {
+    provider?: LlmProvider
+    tokensCost?: number
+    priceInput?: number | null
+    priceOutput?: number | null
+    priceCached?: number | null
+  },
+): Cost | null {
+  // Provider returned the cost server-side (VseGPT)
+  if (typeof source.tokensCost === 'number' && source.tokensCost > 0) {
+    const currency = source.provider ? (PROVIDER_INFO[source.provider].currency ?? 'RUB') : 'RUB'
+    return { value: source.tokensCost, currency }
+  }
+  // Provider doesn't expose prices — nothing to compute
+  if (source.provider && !PROVIDER_INFO[source.provider].pricesEditable) return null
+  // Need at least one price to estimate
+  if (source.priceInput == null && source.priceOutput == null) return null
+  const input = (promptTokens - cachedTokens) * (source.priceInput ?? 0) / 1_000_000
+  const cached = cachedTokens * (source.priceCached ?? source.priceInput ?? 0) / 1_000_000
+  const output = completionTokens * (source.priceOutput ?? 0) / 1_000_000
+  return { value: input + cached + output, currency: 'USD' }
 }

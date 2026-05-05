@@ -123,18 +123,38 @@ const currentChatTokens = computed(() => {
   )
 })
 
+const currentChatTokensCost = computed(() => {
+  // Sum of provider-reported tokensCost across assistant turns (VseGPT only — 0 for OpenAI)
+  return (activeChat.value?.turns ?? []).reduce(
+    (acc, t) => acc + (t.role === 'assistant' ? (t.tokensCost ?? 0) : 0),
+    0,
+  )
+})
+
 const currentChatCost = computed(() => {
   if (!settings.value) return null
   const { prompt, completion, cached } = currentChatTokens.value
-  if (!prompt && !completion) return null
-  return calcCost(prompt, completion, cached, settings.value)
+  if (!prompt && !completion && !currentChatTokensCost.value) return null
+  return calcCost(prompt, completion, cached, {
+    provider: settings.value.provider,
+    tokensCost: currentChatTokensCost.value,
+    priceInput: settings.value.priceInput,
+    priceOutput: settings.value.priceOutput,
+    priceCached: settings.value.priceCached,
+  })
 })
 
 const totalCost = computed(() => {
   if (!settings.value || !totalStats.value) return null
-  const { totalPromptTokens, totalCompletionTokens, totalCachedTokens } = totalStats.value
-  if (!totalPromptTokens && !totalCompletionTokens) return null
-  return calcCost(totalPromptTokens, totalCompletionTokens, totalCachedTokens ?? 0, settings.value)
+  const { totalPromptTokens, totalCompletionTokens, totalCachedTokens, totalCost: serverCost } = totalStats.value
+  if (!totalPromptTokens && !totalCompletionTokens && !serverCost) return null
+  return calcCost(totalPromptTokens, totalCompletionTokens, totalCachedTokens ?? 0, {
+    provider: settings.value.provider,
+    tokensCost: serverCost,
+    priceInput: settings.value.priceInput,
+    priceOutput: settings.value.priceOutput,
+    priceCached: settings.value.priceCached,
+  })
 })
 
 
@@ -219,6 +239,35 @@ async function deleteChat(id: string) {
     if (chats.value.length) await selectChat(chats.value[0]!.id)
     else await newChat()
   }
+}
+
+const pendingDeleteAll = ref<{ timer: ReturnType<typeof setTimeout>; remaining: number; tick: ReturnType<typeof setInterval> } | null>(null)
+
+function scheduleDeleteAllChats() {
+  if (pendingDeleteAll.value) return
+  const timer = setTimeout(async () => {
+    if (pendingDeleteAll.value) clearInterval(pendingDeleteAll.value.tick)
+    pendingDeleteAll.value = null
+    for (const c of [...chats.value]) await api.deleteChat(c.id).catch(() => {})
+    chats.value = []
+    activeChatId.value = null
+    activeChat.value = null
+    for (const k of Object.keys(liveTurns)) delete liveTurns[k]
+    await newChat()
+    void api.stats().then((s) => { totalStats.value = s }).catch(() => {})
+  }, UNDO_DELAY_MS)
+  const tick = setInterval(() => {
+    if (!pendingDeleteAll.value) return
+    pendingDeleteAll.value = { ...pendingDeleteAll.value, remaining: pendingDeleteAll.value.remaining - 1 }
+  }, 1000)
+  pendingDeleteAll.value = { timer, remaining: UNDO_DELAY_MS / 1000, tick }
+}
+
+function undoDeleteAllChats() {
+  if (!pendingDeleteAll.value) return
+  clearTimeout(pendingDeleteAll.value.timer)
+  clearInterval(pendingDeleteAll.value.tick)
+  pendingDeleteAll.value = null
 }
 
 function patchLocalChat(c: Chat) {
@@ -364,6 +413,58 @@ function stopJobPolling() {
   runningJobs.value = []
 }
 
+/**
+ * Pending cancellations: clicking «Отменить» schedules a real cancel 10 s later
+ * and shows an undo toast. If the user hits «Отмена» within that window, we
+ * just clear the timer — no API call ever fires. This is the Gmail-undo
+ * pattern, applied to long-running SSH jobs (which would otherwise be
+ * irreversible the moment systemd kills them).
+ */
+const pendingCancels = ref<Record<string, { timer: ReturnType<typeof setTimeout>; remaining: number }>>({})
+let undoTickTimer: ReturnType<typeof setInterval> | null = null
+const UNDO_DELAY_MS = 5000
+
+function scheduleCancelJob(jobId: string) {
+  if (!activeChatId.value || pendingCancels.value[jobId]) return
+  const timer = setTimeout(() => doCancelJob(jobId), UNDO_DELAY_MS)
+  pendingCancels.value = {
+    ...pendingCancels.value,
+    [jobId]: { timer, remaining: UNDO_DELAY_MS / 1000 },
+  }
+  ensureUndoTicker()
+}
+
+function ensureUndoTicker() {
+  if (undoTickTimer) return
+  undoTickTimer = setInterval(() => {
+    const next: typeof pendingCancels.value = {}
+    for (const [id, p] of Object.entries(pendingCancels.value)) {
+      const r = p.remaining - 1
+      if (r > 0) next[id] = { timer: p.timer, remaining: r }
+    }
+    pendingCancels.value = next
+    if (Object.keys(next).length === 0 && undoTickTimer) {
+      clearInterval(undoTickTimer); undoTickTimer = null
+    }
+  }, 1000)
+}
+
+function undoCancelJob(jobId: string) {
+  const p = pendingCancels.value[jobId]
+  if (!p) return
+  clearTimeout(p.timer)
+  const next = { ...pendingCancels.value }
+  delete next[jobId]
+  pendingCancels.value = next
+}
+
+async function doCancelJob(jobId: string) {
+  const next = { ...pendingCancels.value }
+  delete next[jobId]
+  pendingCancels.value = next
+  await cancelJob(jobId)
+}
+
 async function cancelJob(jobId: string) {
   if (!activeChatId.value) return
   try {
@@ -387,6 +488,8 @@ onBeforeUnmount(() => {
   unsubscribe?.()
   abortStream?.abort()
   stopJobPolling()
+  for (const p of Object.values(pendingCancels.value)) clearTimeout(p.timer)
+  if (undoTickTimer) { clearInterval(undoTickTimer); undoTickTimer = null }
 })
 
 const visibleTurns = computed<ChatTurn[]>(() => {
@@ -407,9 +510,12 @@ const visibleTurns = computed<ChatTurn[]>(() => {
       :total-cost="totalCost"
       :settings="settings"
       :open="leftOpen"
+      :pending-delete-all="pendingDeleteAll"
       @new="newChat"
       @select="selectChat"
       @delete="deleteChat"
+      @delete-all="scheduleDeleteAllChats"
+      @undo-delete-all="undoDeleteAllChats"
       @rename="(id, title) => api.patchChat(id, { title }).then(patchLocalChat)"
       @toggle="leftOpen = !leftOpen"
     />
@@ -431,16 +537,21 @@ const visibleTurns = computed<ChatTurn[]>(() => {
           class="chat-tokens small muted"
           :title="`Токены в этом чате: ↑${fmtTok(currentChatTokens.prompt)} prompt${currentChatTokens.cached ? ` (⊙${fmtTok(currentChatTokens.cached)} кэш)` : ''} / ↓${fmtTok(currentChatTokens.completion)} completion`"
         >↑{{ fmtTok(currentChatTokens.prompt) }} ↓{{ fmtTok(currentChatTokens.completion) }}<template v-if="currentChatTokens.cached"> ⊙{{ fmtTok(currentChatTokens.cached) }}</template><template v-if="currentChatCost != null"> · {{ fmtCost(currentChatCost) }}</template></div>
-        <button class="ghost small" title="Новый чат" @click="newChat" style="white-space:nowrap">+ Новый</button>
         <button class="ghost" :title="`Тема: ${themeLabel[theme]}`" @click="cycleTheme">{{ themeIcon[theme] }}</button>
         <button class="ghost" title="Настройки" @click="settingsOpen = true">⚙</button>
       </div>
       <div v-if="errorBanner" class="error">{{ errorBanner }}</div>
-      <div v-for="job in runningJobs" :key="job.jobId" class="job-banner job-banner--running">
-        <span class="job-spinner">⟳</span>
-        <span class="job-label">{{ job.label }} <span class="job-sn">{{ job.sn }}</span></span>
-        <button class="job-cancel ghost small" @click="cancelJob(job.jobId)" title="Отменить задачу">✕ Отменить</button>
-      </div>
+      <template v-for="job in runningJobs" :key="job.jobId">
+        <div v-if="pendingCancels[job.jobId]" class="job-banner job-banner--cancelling">
+          <span>⏳ Отмена через {{ pendingCancels[job.jobId].remaining }} с — {{ job.label }}</span>
+          <button class="job-cancel ghost small" @click="undoCancelJob(job.jobId)">продолжить</button>
+        </div>
+        <div v-else class="job-banner job-banner--running">
+          <span class="job-spinner">⟳</span>
+          <span class="job-label">{{ job.label }} <span class="job-sn">{{ job.sn }}</span></span>
+          <button class="job-cancel ghost small" @click="scheduleCancelJob(job.jobId)" title="Отменить задачу (с возможностью отката)">✕ Отменить</button>
+        </div>
+      </template>
       <div v-for="job in completedJobs" :key="job.jobId" class="job-banner job-banner--done">
         <span>✓ Задача завершена: {{ job.label }}</span>
       </div>
@@ -450,11 +561,14 @@ const visibleTurns = computed<ChatTurn[]>(() => {
         :streaming="streaming"
         :llm-configured="health?.llmConfigured ?? true"
         :chat-id="activeChat.id"
+        :settings="settings"
         :running-jobs="runningJobs"
         @send="sendMessage"
         @stop="stopStreaming"
         @rename="renameChat"
-        @cancel-job="cancelJob"
+        @cancel-job="scheduleCancelJob"
+        :pending-cancels="pendingCancels"
+        @undo-cancel-job="undoCancelJob"
       />
       <div v-else class="welcome">
         <h2>WB AI Helper</h2>
@@ -525,6 +639,11 @@ const visibleTurns = computed<ChatTurn[]>(() => {
 .job-banner--done {
   background: color-mix(in srgb, #22c55e 12%, var(--bg));
   color: #16a34a;
+}
+.job-banner--cancelling {
+  background: color-mix(in srgb, #f59e0b 14%, var(--bg));
+  color: #b45309;
+  justify-content: space-between;
 }
 .job-spinner {
   display: inline-block;

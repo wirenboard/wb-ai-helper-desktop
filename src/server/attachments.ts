@@ -26,12 +26,23 @@ export const limits = {
   ttlMs: 24 * 60 * 60 * 1000
 }
 
+export type AttachmentSource = 'user' | 'assistant'
+
 export interface AttachmentMeta {
   id: string
   name: string
   mime: string
   size: number
   createdAt: number
+  /**
+   * Where the attachment came from:
+   *  - 'user': uploaded by the user via the UI; lives in the input strip and
+   *    is sent back to the LLM with the user's next message.
+   *  - 'assistant': produced by a tool call (fetch_from_controller, get_history_chart…);
+   *    rendered inline in chat as a message; NOT shown in the input strip; NOT
+   *    re-sent to the LLM.
+   */
+  source: AttachmentSource
 }
 
 function sessionDir(sessionId: string): string {
@@ -52,13 +63,19 @@ function genId(): string {
   return out
 }
 
-function parseFilename(fname: string): { id: string; name: string } | null {
+function parseFilename(fname: string): { id: string; name: string; source: AttachmentSource } | null {
   const idx = fname.indexOf('__')
   if (idx < 0) return null
-  const id = fname.slice(0, idx)
+  const head = fname.slice(0, idx)
   const name = fname.slice(idx + 2)
-  if (!ID_RE.test(id) || !name) return null
-  return { id, name }
+  if (!name) return null
+  // New format: ${id}_${u|a}, e.g. "ab12cd34_u". Old format: just ${id}.
+  let id = head
+  let source: AttachmentSource = 'user'
+  const m = head.match(/^([a-z0-9]{8})_([ua])$/)
+  if (m) { id = m[1]!; source = m[2] === 'a' ? 'assistant' : 'user' }
+  if (!ID_RE.test(id)) return null
+  return { id, name, source }
 }
 
 const MIME_TABLE: Record<string, string> = {
@@ -96,31 +113,33 @@ function mimeOf(name: string): string {
   return MIME_TABLE[ext] ?? 'application/octet-stream'
 }
 
-function findFile(sessionId: string, id: string): { path: string; name: string } | null {
+function findFile(sessionId: string, id: string): { path: string; name: string; source: AttachmentSource } | null {
   if (!ID_RE.test(id)) return null
   const dir = sessionDir(sessionId)
   if (!existsSync(dir)) return null
   for (const fname of readdirSync(dir)) {
     const parsed = parseFilename(fname)
-    if (parsed?.id === id) return { path: join(dir, fname), name: parsed.name }
+    if (parsed?.id === id) return { path: join(dir, fname), name: parsed.name, source: parsed.source }
   }
   return null
 }
 
-export function listSession(sessionId: string): AttachmentMeta[] {
+export function listSession(sessionId: string, source?: AttachmentSource): AttachmentMeta[] {
   const dir = sessionDir(sessionId)
   if (!existsSync(dir)) return []
   const out: AttachmentMeta[] = []
   for (const fname of readdirSync(dir)) {
     const parsed = parseFilename(fname)
     if (!parsed) continue
+    if (source && parsed.source !== source) continue
     const st = statSync(join(dir, fname))
     out.push({
       id: parsed.id,
       name: parsed.name,
       mime: mimeOf(parsed.name),
       size: st.size,
-      createdAt: st.mtimeMs
+      createdAt: st.mtimeMs,
+      source: parsed.source,
     })
   }
   return out.sort((a, b) => a.createdAt - b.createdAt)
@@ -135,7 +154,8 @@ export function getAttachment(sessionId: string, id: string): AttachmentMeta | n
     name: f.name,
     mime: mimeOf(f.name),
     size: st.size,
-    createdAt: st.mtimeMs
+    createdAt: st.mtimeMs,
+    source: f.source,
   }
 }
 
@@ -152,7 +172,8 @@ export type SaveResult =
 export function saveAttachment(
   sessionId: string,
   name: string,
-  content: Buffer
+  content: Buffer,
+  source: AttachmentSource = 'user',
 ): SaveResult {
   let cleanName: string
   try {
@@ -175,7 +196,8 @@ export function saveAttachment(
   const dir = sessionDir(sessionId)
   mkdirSync(dir, { recursive: true })
   const id = genId()
-  const path = join(dir, `${id}__${cleanName}`)
+  const sourceTag = source === 'assistant' ? 'a' : 'u'
+  const path = join(dir, `${id}_${sourceTag}__${cleanName}`)
   writeFileSync(path, content)
   const st = statSync(path)
   return {
@@ -185,7 +207,8 @@ export function saveAttachment(
       name: cleanName,
       mime: mimeOf(cleanName),
       size: st.size,
-      createdAt: st.mtimeMs
+      createdAt: st.mtimeMs,
+      source,
     }
   }
 }

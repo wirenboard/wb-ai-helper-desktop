@@ -11,11 +11,11 @@ import { ChatStore } from './chats.ts'
 import { LlmClient } from './llm.ts'
 import { dispatch, toolSchemas } from './tools.ts'
 import { embeddedAsset, embeddedIndex } from './embed.ts'
-import { SettingsStore, listModels } from './settings.ts'
+import { SettingsStore, listModels, PROVIDER_DEFAULTS, type Settings } from './settings.ts'
 import { openDb } from './db.ts'
 import { getTodos, formatTodos } from './todos.ts'
 import { listSkills, getLoadedSkills, seedSystemSkills } from './skills.ts'
-import { initAttachments, listSession as listAttachmentFiles, getAttachment, readAttachment, saveAttachment, deleteAttachment, cleanupExpired } from './attachments.ts'
+import { initAttachments, listSession as listAttachmentFiles, getAttachment, readAttachment, saveAttachment, deleteAttachment, clearSession as clearAttachmentSession, cleanupExpired } from './attachments.ts'
 import { getJobsForSession, updateJobState, removeJob } from './jobs.ts'
 
 const PORT = Number(process.env['WB_HELPER_PORT'] ?? 17321)
@@ -31,6 +31,14 @@ initAttachments(attachmentsRoot)
 // Cleanup expired attachments every hour
 setInterval(() => cleanupExpired(), 60 * 60 * 1000)
 
+/** Pick a baseURL: explicit user value wins; otherwise fall back to the provider's default. */
+function resolveBaseUrl(s: Settings): string | undefined {
+  const cur = s.providers[s.provider]
+  if (cur.baseURL && cur.baseURL.trim()) return cur.baseURL
+  const def = PROVIDER_DEFAULTS[s.provider]?.baseURL
+  return def || undefined
+}
+
 seedSystemSkills(db)
 
 const discovery = new Discovery(db)
@@ -41,30 +49,24 @@ const ssh = new SshPool({
   keyPath: settings.sshKeyPath,
 })
 const chats = new ChatStore(db)
-let llm: LlmClient | null = settings.apiKey
-  ? new LlmClient({
-      apiKey: settings.apiKey,
-      baseURL: settings.baseURL || undefined,
-      model: settings.model || 'gpt-4.1-mini',
-      llmProxy: settings.llmProxy || undefined,
-      llmProxyUser: settings.llmProxyUser || undefined,
-      llmProxyPassword: settings.llmProxyPassword || undefined,
-      tlsInsecure: settings.tlsInsecure,
-    })
-  : null
+function buildLlmClient(s: Settings): LlmClient | null {
+  const cur = s.providers[s.provider]
+  if (!cur.apiKey) return null
+  return new LlmClient({
+    apiKey: cur.apiKey,
+    baseURL: resolveBaseUrl(s),
+    model: cur.model || 'gpt-4.1-mini',
+    llmProxy: cur.llmProxy || undefined,
+    llmProxyUser: cur.llmProxyUser || undefined,
+    llmProxyPassword: cur.llmProxyPassword || undefined,
+    tlsInsecure: cur.tlsInsecure,
+  })
+}
+
+let llm: LlmClient | null = buildLlmClient(settings)
 
 settingsStore.onChange((s) => {
-  llm = s.apiKey
-    ? new LlmClient({
-        apiKey: s.apiKey,
-        baseURL: s.baseURL || undefined,
-        model: s.model || 'gpt-4.1-mini',
-        llmProxy: s.llmProxy || undefined,
-        llmProxyUser: s.llmProxyUser || undefined,
-        llmProxyPassword: s.llmProxyPassword || undefined,
-        tlsInsecure: s.tlsInsecure,
-      })
-    : null
+  llm = buildLlmClient(s)
   void mqtt.close()
   mqtt = new MqttPool({ user: s.mqttUser, password: s.mqttPassword })
   ssh.setAuth({ user: s.sshUser, password: s.sshPassword, keyPath: s.sshKeyPath })
@@ -98,6 +100,9 @@ app.put('/api/settings', async (c) => {
   for (const f of stringFields) {
     if (typeof body[f] === 'string') patch[f] = body[f]
   }
+  if (typeof body['provider'] === 'string' && ['openai', 'vsegpt', 'custom'].includes(body['provider'] as string)) {
+    patch['provider'] = body['provider']
+  }
   if (typeof body['discoveryInterval'] === 'number') patch['discoveryInterval'] = body['discoveryInterval']
   if (typeof body['openBrowser'] === 'boolean') patch['openBrowser'] = body['openBrowser']
   if (typeof body['tlsInsecure'] === 'boolean') patch['tlsInsecure'] = body['tlsInsecure']
@@ -118,9 +123,10 @@ app.delete('/api/settings/api-key', async (c) => {
 
 app.get('/api/models', async (c) => {
   const s = settingsStore.get()
-  if (!s.apiKey) return c.json({ error: 'apiKey не задан' }, 400)
+  const cur = s.providers[s.provider]
+  if (!cur.apiKey) return c.json({ error: 'apiKey не задан' }, 400)
   try {
-    const models = await listModels(s.apiKey, s.baseURL || undefined)
+    const models = await listModels(cur.apiKey, resolveBaseUrl(s))
     return c.json({ models })
   } catch (e: any) {
     return c.json({ error: e?.message ?? String(e) }, 502)
@@ -173,7 +179,10 @@ app.patch('/api/chats/:id', async (c) => {
 })
 
 app.delete('/api/chats/:id', (c) => {
-  chats.remove(c.req.param('id'))
+  const id = c.req.param('id')
+  chats.remove(id)
+  // Drop user uploads + assistant-produced files for this chat
+  clearAttachmentSession(id)
   return c.json({ ok: true })
 })
 
@@ -239,7 +248,7 @@ app.post('/api/chats/:id/message', async (c) => {
     const ctx = { discovery, mqtt, ssh, contextSns: chat.contextSns, db, sessionId: id, agentState, braveApiKey: process.env['BRAVE_SEARCH_API_KEY'] }
     let assistantText = ''
     const pendingToolCalls: { id: string; name: string; arguments: string }[] = []
-    let pendingUsage: { promptTokens: number; completionTokens: number; cachedTokens: number } | null = null
+    let pendingUsage: { promptTokens?: number; completionTokens?: number; cachedTokens?: number; totalCost?: number } | null = null
 
     try {
       for await (const ev of activeLlm.runAgent(
@@ -256,7 +265,9 @@ app.post('/api/chats/:id/message', async (c) => {
               : '(нет доступных скиллов)'
             const todos = getTodos(id)
             const loadedSkills = getLoadedSkills(id)
-            const attachments = listAttachmentFiles(id)
+            // Only user uploads are shown to the LLM — assistant-produced files
+            // are already covered by the tool result that created them.
+            const attachments = listAttachmentFiles(id, 'user')
             const sessionJobs = getJobsForSession(id)
             const runningJobs = sessionJobs.filter((j) => j.state === 'running')
             return [
@@ -281,7 +292,12 @@ app.post('/api/chats/:id/message', async (c) => {
         await send(ev.type, ev)
         if (ev.type === 'text-delta') assistantText += ev.text
         if (ev.type === 'usage') {
-          pendingUsage = { promptTokens: ev.promptTokens, completionTokens: ev.completionTokens, cachedTokens: ev.cachedTokens }
+          pendingUsage = {
+            promptTokens: ev.promptTokens,
+            completionTokens: ev.completionTokens,
+            cachedTokens: ev.cachedTokens,
+            ...(ev.totalCost != null ? { totalCost: ev.totalCost } : {}),
+          }
         }
         if (ev.type === 'tool-call') {
           pendingToolCalls.push({ id: ev.id, name: ev.name, arguments: ev.arguments })
@@ -320,8 +336,13 @@ app.post('/api/chats/:id/message', async (c) => {
   })
 })
 
-app.get('/api/events', (c) =>
-  stream(c, async (s) => {
+app.get('/api/events', (c) => {
+  // Hono's stream() defaults to text/plain — Chrome's EventSource refuses
+  // anything that isn't text/event-stream and silently aborts.
+  c.header('Content-Type', 'text/event-stream')
+  c.header('Cache-Control', 'no-cache, no-transform')
+  c.header('X-Accel-Buffering', 'no')
+  return stream(c, async (s) => {
     const send = (event: string, data: unknown) => s.write(formatSse(event, data))
     await send('hello', { ts: Date.now() })
     await send('controllers', discovery.list())
@@ -334,14 +355,16 @@ app.get('/api/events', (c) =>
       if (active) await send('ping', { ts: Date.now() })
     }
     sseClients.delete(push)
-  }),
-)
+  })
+})
 
 // Attachments API
 app.get('/api/attachments', (c) => {
   const chatId = c.req.query('chatId') ?? ''
   if (!chatId) return c.json({ error: 'chatId required' }, 400)
-  return c.json({ items: listAttachmentFiles(chatId) })
+  // Input strip only shows files the user uploaded — assistant-produced
+  // attachments live in the chat as messages, not in the strip.
+  return c.json({ items: listAttachmentFiles(chatId, 'user') })
 })
 
 app.post('/api/attachments', async (c) => {
@@ -403,7 +426,7 @@ const server = Bun.serve({
 
 console.log(`WB Helper запущен:          http://${server.hostname}:${server.port}/`)
 console.log(`Настройки:                  ${settingsStore.storagePath()}`)
-console.log(`LLM:                        ${llm ? `${llm.model} (${settings.baseURL || 'OpenAI'})` : 'не настроен — введите ключ через UI'}`)
+console.log(`LLM:                        ${llm ? `${llm.model} (${PROVIDER_DEFAULTS[settings.provider].label})` : 'не настроен — введите ключ через UI'}`)
 console.log(`mDNS-сканирование:          каждые ${settings.discoveryInterval} мс`)
 
 if (settings.openBrowser) openBrowser(`http://127.0.0.1:${server.port}/`)

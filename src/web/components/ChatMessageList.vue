@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
-import type { ChatItem, ChatItemToolCall, TrackedJob } from '../api'
+import type { ChatItem, ChatItemToolCall, Settings, TrackedJob } from '../api'
 import { fmtSize, plural } from '../utils'
 import ChatMessage from './ChatMessage.vue'
 
@@ -8,9 +8,11 @@ const props = defineProps<{
   items: ChatItem[]
   streaming: boolean
   chatId: string
+  settings: Settings | null
   runningJobs?: TrackedJob[]
+  pendingCancels?: Record<string, { remaining: number }>
 }>()
-const emit = defineEmits<{ suggest: [text: string]; cancelJob: [jobId: string] }>()
+const emit = defineEmits<{ suggest: [text: string]; cancelJob: [jobId: string]; undoCancelJob: [jobId: string] }>()
 
 const JOB_TOOLS = new Set(['wb_bus_scan', 'ssh_exec_async', 'wb_serial_debug'])
 
@@ -129,7 +131,7 @@ onBeforeUnmount(() => ro?.disconnect())
 
     <!-- Message groups -->
     <template v-for="g in groups" :key="g.key">
-      <ChatMessage v-if="g.kind === 'single'" :item="g.item" :chatId="chatId" />
+      <ChatMessage v-if="g.kind === 'single'" :item="g.item" :chatId="chatId" :settings="settings" />
       <div v-else-if="g.kind === 'tools'" class="tool-group">
         <button class="tool-group-head" @click="toggle(g.key)">
           <span class="caret">{{ expanded[g.key] ? '▾' : '▸' }}</span>
@@ -139,16 +141,22 @@ onBeforeUnmount(() => ro?.disconnect())
           <span class="tool-group-names">{{ [...new Set(g.items.map(i => i.name))].join(', ') }}</span>
         </button>
         <div v-if="expanded[g.key]" class="tool-group-body">
-          <ChatMessage v-for="(it, k) in g.items" :key="k" :item="it" :chatId="chatId" />
+          <ChatMessage v-for="(it, k) in g.items" :key="k" :item="it" :chatId="chatId" :settings="settings" />
         </div>
       </div>
       <!-- Inline job indicators for this group -->
-      <div v-for="job in groupRunningJobs(g)" :key="'job-' + job.jobId" class="inline-job">
-        <span class="inline-job-spinner">⟳</span>
-        <span class="inline-job-label">{{ job.label }}</span>
-        <span class="inline-job-sn">{{ job.sn }}</span>
-        <button class="inline-job-cancel ghost small" @click="emit('cancelJob', job.jobId)">✕</button>
-      </div>
+      <template v-for="job in groupRunningJobs(g)" :key="'job-' + job.jobId">
+        <div v-if="pendingCancels?.[job.jobId]" class="inline-job inline-job--cancelling">
+          <span>⏳ Отмена через {{ pendingCancels[job.jobId].remaining }} с — {{ job.label }}</span>
+          <button class="inline-job-cancel ghost small" @click="emit('undoCancelJob', job.jobId)">продолжить</button>
+        </div>
+        <div v-else class="inline-job">
+          <span class="inline-job-spinner">⟳</span>
+          <span class="inline-job-label">{{ job.label }}</span>
+          <span class="inline-job-sn">{{ job.sn }}</span>
+          <button class="inline-job-cancel ghost small" @click="emit('cancelJob', job.jobId)" title="Отменить (с возможностью отката)">✕</button>
+        </div>
+      </template>
     </template>
 
     <!-- Typing indicator -->

@@ -8,7 +8,7 @@ import type { Stream } from 'openai/streaming.mjs'
 
 export type ChatTurn =
   | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string; toolCalls?: AssistantToolCall[]; tokensPrompt?: number; tokensCompletion?: number; tokensCached?: number }
+  | { role: 'assistant'; content: string; createdAt?: number; toolCalls?: AssistantToolCall[]; tokensPrompt?: number; tokensCompletion?: number; tokensCached?: number; tokensCost?: number }
   | { role: 'tool'; toolCallId: string; content: string }
   | { role: 'system'; content: string }
 
@@ -22,7 +22,7 @@ export type StreamEvent =
   | { type: 'text-delta'; text: string }
   | { type: 'tool-call'; id: string; name: string; arguments: string }
   | { type: 'tool-result'; id: string; name: string; result: string; ok: boolean }
-  | { type: 'usage'; promptTokens: number; completionTokens: number; cachedTokens: number }
+  | { type: 'usage'; promptTokens?: number; completionTokens?: number; cachedTokens?: number; totalCost?: number }
   | { type: 'done'; finish_reason: string | null }
   | { type: 'error'; message: string }
 
@@ -62,6 +62,7 @@ export class LlmClient {
     let totalPromptTokens = 0
     let totalCompletionTokens = 0
     let totalCachedTokens = 0
+    let totalCost = 0  // VseGPT/OpenRouter style — provider-reported cost in their currency
 
     for (let turn = 0; turn < maxTurns; turn++) {
       const isLastTurn = turn === maxTurns - 1
@@ -105,9 +106,13 @@ export class LlmClient {
             return
           }
           if (chunk.usage) {
-            totalPromptTokens += chunk.usage.prompt_tokens
-            totalCompletionTokens += chunk.usage.completion_tokens
+            // All usage fields are optional — VseGPT may omit any of them
+            totalPromptTokens += chunk.usage.prompt_tokens ?? 0
+            totalCompletionTokens += chunk.usage.completion_tokens ?? 0
             totalCachedTokens += chunk.usage.prompt_tokens_details?.cached_tokens ?? 0
+            // VseGPT extension: server-side billing in RUB
+            const c = (chunk.usage as { total_cost?: number }).total_cost
+            if (typeof c === 'number') totalCost += c
           }
           const choice = chunk.choices[0]
           if (!choice) continue
@@ -135,7 +140,13 @@ export class LlmClient {
       const toolCalls = [...toolBuf.values()].filter((t) => t.id && t.name)
       if (!toolCalls.length) {
         if (totalPromptTokens || totalCompletionTokens) {
-          yield { type: 'usage', promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens, cachedTokens: totalCachedTokens }
+          yield {
+            type: 'usage',
+            promptTokens: totalPromptTokens,
+            completionTokens: totalCompletionTokens,
+            cachedTokens: totalCachedTokens,
+            ...(totalCost > 0 ? { totalCost } : {}),
+          }
         }
         yield { type: 'done', finish_reason: finish }
         return

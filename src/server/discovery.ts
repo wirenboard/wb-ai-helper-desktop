@@ -125,7 +125,10 @@ export class Discovery {
 
   refresh = async () => {
     await Promise.all([this.resolveKnown(), this.avahiBrowse()])
-    this.notify()
+    // Periodic scans always emit so the UI can show "last scanned just now"
+    // even when nothing changed; signature dedup is preserved for high-frequency
+    // bonjour up/down chatter only.
+    this.notify(true)
   }
 
   private async resolveKnown() {
@@ -201,14 +204,12 @@ export class Discovery {
     this.notify()
   }
 
-  private notify() {
+  private notify(force: boolean = false) {
     const snapshot = this.list()
-    // Скан крутится каждые 15с; если ничего не поменялось — не дёргаем SSE-клиентов
-    // и не заставляем фронт перерендеривать список зря.
     const sig = snapshot
       .map((c) => `${c.sn}|${c.host}|${c.reachable ?? '?'}|${c.addresses.join(',')}`)
       .join(';')
-    if (sig === this.lastSig) return
+    if (!force && sig === this.lastSig) return
     this.lastSig = sig
     for (const fn of this.listeners) fn(snapshot)
   }

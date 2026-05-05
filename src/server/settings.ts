@@ -3,7 +3,10 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 
-export type Settings = {
+export type LlmProvider = 'openai' | 'vsegpt' | 'custom'
+
+/** All LLM-side settings live here, one set per provider. */
+export interface ProviderConfig {
   apiKey: string
   baseURL: string
   model: string
@@ -11,6 +14,23 @@ export type Settings = {
   llmProxyUser: string
   llmProxyPassword: string
   tlsInsecure: boolean
+  priceInput: number | null
+  priceOutput: number | null
+  priceCached: number | null
+}
+
+const EMPTY_PROVIDER: ProviderConfig = {
+  apiKey: '', baseURL: '', model: '',
+  llmProxy: '', llmProxyUser: '', llmProxyPassword: '',
+  tlsInsecure: false,
+  priceInput: null, priceOutput: null, priceCached: null,
+}
+
+export type Settings = {
+  provider: LlmProvider
+  /** Per-provider configs — switching provider swaps every LLM setting. */
+  providers: Record<LlmProvider, ProviderConfig>
+  // Non-LLM (controller / UI) — shared across providers:
   mqttUser: string
   mqttPassword: string
   sshUser: string
@@ -18,27 +38,52 @@ export type Settings = {
   sshKeyPath: string
   discoveryInterval: number
   openBrowser: boolean
+}
+
+export const PROVIDER_DEFAULTS: Record<LlmProvider, { baseURL: string; label: string }> = {
+  openai: { baseURL: 'https://api.openai.com/v1', label: 'OpenAI' },
+  vsegpt: { baseURL: 'https://api.vsegpt.ru/v1', label: 'VseGPT.Ru' },
+  custom: { baseURL: '', label: 'Custom' },
+}
+
+/** Redacted view of a provider's settings (no plaintext secrets). */
+export type ProviderConfigPublic = Omit<ProviderConfig, 'apiKey' | 'llmProxyPassword'> & {
+  apiKeyConfigured: boolean
+  llmProxyPasswordConfigured: boolean
+}
+
+export type PublicSettings = {
+  provider: LlmProvider
+  providers: Record<LlmProvider, ProviderConfigPublic>
+  // Flat view of the *current* provider, so existing UI code keeps working:
+  baseURL: string
+  model: string
+  llmProxy: string
+  llmProxyUser: string
+  tlsInsecure: boolean
   priceInput: number | null
   priceOutput: number | null
   priceCached: number | null
-}
-
-export type PublicSettings = Omit<Settings, 'apiKey' | 'mqttPassword' | 'sshPassword' | 'llmProxyPassword'> & {
   apiKeyConfigured: boolean
+  llmProxyPasswordConfigured: boolean
+  // Shared (controller/UI):
+  mqttUser: string
+  sshUser: string
+  sshKeyPath: string
+  discoveryInterval: number
+  openBrowser: boolean
   mqttPasswordConfigured: boolean
   sshPasswordConfigured: boolean
-  llmProxyPasswordConfigured: boolean
   storagePath: string
 }
 
 const DEFAULTS: Settings = {
-  apiKey: '',
-  baseURL: '',
-  model: '',
-  llmProxy: '',
-  llmProxyUser: '',
-  llmProxyPassword: '',
-  tlsInsecure: false,
+  provider: 'openai',
+  providers: {
+    openai: { ...EMPTY_PROVIDER },
+    vsegpt: { ...EMPTY_PROVIDER },
+    custom: { ...EMPTY_PROVIDER },
+  },
   mqttUser: '',
   mqttPassword: '',
   sshUser: 'root',
@@ -46,9 +91,6 @@ const DEFAULTS: Settings = {
   sshKeyPath: '',
   discoveryInterval: 15000,
   openBrowser: true,
-  priceInput: null,
-  priceOutput: null,
-  priceCached: null,
 }
 
 export class SettingsStore {
@@ -62,19 +104,17 @@ export class SettingsStore {
 
   /** Load: defaults < env (first-run hints) < settings file (user choices). */
   async load(): Promise<Settings> {
-    let onDisk: Partial<Settings> = {}
+    let onDisk: Record<string, unknown> = {}
     if (existsSync(this.file)) {
       try {
-        onDisk = JSON.parse(await readFile(this.file, 'utf8')) as Partial<Settings>
+        onDisk = JSON.parse(await readFile(this.file, 'utf8')) as Record<string, unknown>
       } catch {
         onDisk = {}
       }
     }
     const env = envOverrides()
-    // Если файла настроек ещё нет — env-переменные становятся стартовыми значениями
-    // и пишутся на диск, чтобы дальше юзер мог редактировать через UI.
     const fileMissing = !existsSync(this.file)
-    this.cache = { ...DEFAULTS, ...env, ...onDisk }
+    this.cache = mergeWithMigration(DEFAULTS, env, onDisk)
     if (fileMissing && Object.keys(env).length) {
       await this.persist()
     }
@@ -85,39 +125,81 @@ export class SettingsStore {
     return this.cache
   }
 
+  /** The currently active LLM-side config (keyed by `provider`). */
+  current(): ProviderConfig {
+    return this.cache.providers[this.cache.provider]
+  }
+
   /** Sanitize for the UI — never echo secrets. */
   toPublic(): PublicSettings {
+    const cur = this.current()
+    const providersPublic: Record<LlmProvider, ProviderConfigPublic> = {
+      openai: redactProvider(this.cache.providers.openai),
+      vsegpt: redactProvider(this.cache.providers.vsegpt),
+      custom: redactProvider(this.cache.providers.custom),
+    }
     return {
-      baseURL: this.cache.baseURL,
-      model: this.cache.model,
-      llmProxy: this.cache.llmProxy,
-      llmProxyUser: this.cache.llmProxyUser,
-      tlsInsecure: this.cache.tlsInsecure,
+      provider: this.cache.provider,
+      providers: providersPublic,
+      baseURL: cur.baseURL,
+      model: cur.model,
+      llmProxy: cur.llmProxy,
+      llmProxyUser: cur.llmProxyUser,
+      tlsInsecure: cur.tlsInsecure,
+      priceInput: cur.priceInput,
+      priceOutput: cur.priceOutput,
+      priceCached: cur.priceCached,
+      apiKeyConfigured: !!cur.apiKey,
+      llmProxyPasswordConfigured: !!cur.llmProxyPassword,
       mqttUser: this.cache.mqttUser,
       sshUser: this.cache.sshUser,
       sshKeyPath: this.cache.sshKeyPath,
       discoveryInterval: this.cache.discoveryInterval,
       openBrowser: this.cache.openBrowser,
-      priceInput: this.cache.priceInput,
-      priceOutput: this.cache.priceOutput,
-      priceCached: this.cache.priceCached,
-      apiKeyConfigured: !!this.cache.apiKey,
       mqttPasswordConfigured: !!this.cache.mqttPassword,
       sshPasswordConfigured: !!this.cache.sshPassword,
-      llmProxyPasswordConfigured: !!this.cache.llmProxyPassword,
       storagePath: this.file,
     }
   }
 
-  async update(patch: Partial<Settings>): Promise<Settings> {
-    this.cache = { ...this.cache, ...patch }
+  /**
+   * Update sub-fields. Provider-scoped flat keys (apiKey, baseURL, model, …)
+   * are routed into `providers[targetProvider]` — by default the active one,
+   * or the explicit `provider` field when the patch switches providers.
+   */
+  async update(patch: Record<string, unknown>): Promise<Settings> {
+    const targetProvider: LlmProvider =
+      typeof patch['provider'] === 'string' && isLlmProvider(patch['provider'])
+        ? patch['provider']
+        : this.cache.provider
+    if (targetProvider !== this.cache.provider) {
+      this.cache = { ...this.cache, provider: targetProvider }
+    }
+    const next: ProviderConfig = { ...this.cache.providers[targetProvider] }
+    let providerTouched = false
+    for (const k of PROVIDER_FIELDS) {
+      if (k in patch) {
+        ;(next as any)[k] = patch[k]
+        providerTouched = true
+      }
+    }
+    if (providerTouched) {
+      this.cache = {
+        ...this.cache,
+        providers: { ...this.cache.providers, [targetProvider]: next },
+      }
+    }
+    for (const k of SHARED_FIELDS) {
+      if (k in patch) (this.cache as any)[k] = patch[k]
+    }
     await this.persist()
     for (const fn of this.listeners) fn(this.cache)
     return this.cache
   }
 
   async clearKey() {
-    this.cache.apiKey = ''
+    const p = this.cache.provider
+    this.cache.providers[p] = { ...this.cache.providers[p], apiKey: '' }
     await this.persist()
     for (const fn of this.listeners) fn(this.cache)
   }
@@ -137,6 +219,87 @@ export class SettingsStore {
   }
 }
 
+const PROVIDER_FIELDS = [
+  'apiKey', 'baseURL', 'model',
+  'llmProxy', 'llmProxyUser', 'llmProxyPassword',
+  'tlsInsecure', 'priceInput', 'priceOutput', 'priceCached',
+] as const
+
+const SHARED_FIELDS = [
+  'mqttUser', 'mqttPassword',
+  'sshUser', 'sshPassword', 'sshKeyPath',
+  'discoveryInterval', 'openBrowser',
+] as const
+
+function isLlmProvider(v: unknown): v is LlmProvider {
+  return v === 'openai' || v === 'vsegpt' || v === 'custom'
+}
+
+function redactProvider(p: ProviderConfig): ProviderConfigPublic {
+  return {
+    baseURL: p.baseURL,
+    model: p.model,
+    llmProxy: p.llmProxy,
+    llmProxyUser: p.llmProxyUser,
+    tlsInsecure: p.tlsInsecure,
+    priceInput: p.priceInput,
+    priceOutput: p.priceOutput,
+    priceCached: p.priceCached,
+    apiKeyConfigured: !!p.apiKey,
+    llmProxyPasswordConfigured: !!p.llmProxyPassword,
+  }
+}
+
+/**
+ * Combine defaults, env overrides and on-disk JSON into a fully-formed
+ * Settings, transparently migrating the old flat schema (apiKey, baseURL,
+ * model, … at the top level) into the new per-provider `providers[…]` shape.
+ */
+function mergeWithMigration(defaults: Settings, env: Partial<Settings> & Partial<ProviderConfig>, disk: Record<string, unknown>): Settings {
+  const provider: LlmProvider = isLlmProvider(disk['provider']) ? disk['provider']
+    : isLlmProvider(env.provider) ? env.provider
+    : defaults.provider
+
+  // Start with defaults, then layer on disk shared fields
+  const result: Settings = {
+    ...defaults,
+    provider,
+    providers: {
+      openai: { ...defaults.providers.openai },
+      vsegpt: { ...defaults.providers.vsegpt },
+      custom: { ...defaults.providers.custom },
+    },
+  }
+  for (const k of SHARED_FIELDS) {
+    const v = (disk as any)[k]
+    if (v !== undefined) (result as any)[k] = v
+    else if ((env as any)[k] !== undefined) (result as any)[k] = (env as any)[k]
+  }
+
+  // New schema: providers map — copy directly
+  if (disk['providers'] && typeof disk['providers'] === 'object') {
+    const providersOnDisk = disk['providers'] as Record<string, Partial<ProviderConfig>>
+    for (const p of ['openai', 'vsegpt', 'custom'] as const) {
+      if (providersOnDisk[p]) {
+        result.providers[p] = { ...EMPTY_PROVIDER, ...providersOnDisk[p] }
+      }
+    }
+  }
+
+  // Legacy schema: flat fields at top level → fold into providers[provider]
+  // Each field migrates only if not already supplied via the new schema.
+  const legacy: Partial<ProviderConfig> = {}
+  for (const k of PROVIDER_FIELDS) {
+    if (disk[k] !== undefined) (legacy as any)[k] = disk[k]
+    else if ((env as any)[k] !== undefined) (legacy as any)[k] = (env as any)[k]
+  }
+  if (Object.keys(legacy).length > 0) {
+    result.providers[provider] = { ...result.providers[provider], ...legacy }
+  }
+
+  return result
+}
+
 /** Where to store settings: рядом с бинарём (USB-friendly), фолбэк — XDG/APPDATA. */
 function defaultStoragePath(): string {
   // process.execPath для bun-скомпилированного бинарника указывает на сам exe.
@@ -153,8 +316,13 @@ function defaultStoragePath(): string {
   return path.join(cfg, 'settings.json')
 }
 
-function envOverrides(): Partial<Settings> {
-  const out: Partial<Settings> = {}
+/**
+ * Env-var seeds for first launch. Values are returned in the legacy flat
+ * shape; mergeWithMigration takes care of folding LLM-side fields into
+ * `providers[currentProvider]`.
+ */
+function envOverrides(): Partial<Settings> & Partial<ProviderConfig> {
+  const out: Partial<Settings> & Partial<ProviderConfig> = {}
   if (process.env['OPENAI_API_KEY']) out.apiKey = process.env['OPENAI_API_KEY']!
   if (process.env['OPENAI_BASE_URL']) out.baseURL = process.env['OPENAI_BASE_URL']!
   if (process.env['OPENAI_MODEL']) out.model = process.env['OPENAI_MODEL']!

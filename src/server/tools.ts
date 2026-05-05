@@ -779,8 +779,16 @@ type Ctx = {
 export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promise<string> {
   const args = parseArgs(argsJson)
   switch (name) {
-    case 'list_controllers':
-      return JSON.stringify(ctx.discovery.list().map(toPublic), null, 2)
+    case 'list_controllers': {
+      // If the cache is empty (e.g. fresh start, periodic scan still in flight),
+      // kick off a refresh so the model never has to ask the user "rescan again".
+      let list = ctx.discovery.list()
+      if (!list.length) {
+        await ctx.discovery.refresh().catch(() => {})
+        list = ctx.discovery.list()
+      }
+      return JSON.stringify(list.map(toPublic), null, 2)
+    }
 
     case 'probe_controller': {
       const sn = String(args['sn'] ?? '')
@@ -1514,7 +1522,7 @@ import json as j; print(j.dumps(m))
       try {
         const svg = await renderHistoryChart(histData.series, from, to, title, ylabel)
         const fname = `chart-${c.sn}-${Date.now()}.svg`
-        const r = saveAttachment(ctx.sessionId, fname, Buffer.from(svg, 'utf-8'))
+        const r = saveAttachment(ctx.sessionId, fname, Buffer.from(svg, 'utf-8'), 'assistant')
         if (!r.ok) return JSON.stringify({ error: r.error })
         return JSON.stringify({
           fileId: r.meta.id,
@@ -1626,7 +1634,7 @@ import json as j; print(j.dumps(m))
       try {
         const buf = await ctx.ssh.downloadFile(c, path)
         const fileName = name || basename(path) || 'file'
-        const r = saveAttachment(ctx.sessionId, fileName, buf)
+        const r = saveAttachment(ctx.sessionId, fileName, buf, 'assistant')
         if (!r.ok) return JSON.stringify({ error: r.error })
         return JSON.stringify({ fileId: r.meta.id, fileName: r.meta.name, mime: r.meta.mime, size: r.meta.size, note: 'Файл сохранён как вложение. Пользователь видит его в UI и может скачать.' })
       } catch (e: any) {

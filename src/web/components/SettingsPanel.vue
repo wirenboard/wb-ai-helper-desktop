@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { api, type Settings } from '../api'
+import { api, PROVIDER_INFO, type LlmProvider, type Settings } from '../api'
+import ComboboxSearch from './ComboboxSearch.vue'
 
 const props = defineProps<{ settings: Settings | null; open: boolean; version?: string; fontSize?: number }>()
 const emit = defineEmits<{
@@ -9,23 +10,69 @@ const emit = defineEmits<{
   fontSizeChange: [number]
 }>()
 
+const provider = ref<LlmProvider>('openai')
 const apiKey = ref('')
 const baseURL = ref('')
 const model = ref('')
+const llmProxy = ref('')
+const llmProxyUser = ref('')
+const llmProxyPassword = ref('')
+const tlsInsecure = ref(false)
+const priceInput = ref<number | null>(null)
+const priceOutput = ref<number | null>(null)
+const priceCached = ref<number | null>(null)
+
+const providerInfo = computed(() => PROVIDER_INFO[provider.value])
+const showPriceFields = computed(() => providerInfo.value.pricesEditable)
+const baseURLPlaceholder = computed(() => providerInfo.value.defaultBaseURL || 'https://your-endpoint/v1')
+const apiKeyConfiguredForProvider = computed(
+  () => !!props.settings?.providers?.[provider.value]?.apiKeyConfigured,
+)
+const llmProxyPasswordConfiguredForProvider = computed(
+  () => !!props.settings?.providers?.[provider.value]?.llmProxyPasswordConfigured,
+)
+
+/** Load the saved fields for `next` into the form. */
+function loadProviderFields(next: LlmProvider) {
+  const cfg = props.settings?.providers?.[next]
+  apiKey.value = ''
+  llmProxyPassword.value = ''
+  if (cfg) {
+    baseURL.value = cfg.baseURL
+    model.value = cfg.model
+    llmProxy.value = cfg.llmProxy
+    llmProxyUser.value = cfg.llmProxyUser
+    tlsInsecure.value = cfg.tlsInsecure
+    priceInput.value = cfg.priceInput
+    priceOutput.value = cfg.priceOutput
+    priceCached.value = cfg.priceCached
+  } else {
+    baseURL.value = PROVIDER_INFO[next].defaultBaseURL
+    model.value = ''
+    llmProxy.value = ''
+    llmProxyUser.value = ''
+    tlsInsecure.value = false
+    priceInput.value = null
+    priceOutput.value = null
+    priceCached.value = null
+  }
+  // If the loaded baseURL is empty (user never customised), suggest provider's default
+  if (!baseURL.value) baseURL.value = PROVIDER_INFO[next].defaultBaseURL
+}
+
+function onProviderChange(next: LlmProvider) {
+  provider.value = next
+  loadProviderFields(next)
+  models.value = []
+  modelsError.value = null
+}
 const mqttUser = ref('')
 const mqttPassword = ref('')
 const sshUser = ref('root')
 const sshPassword = ref('')
 const sshKeyPath = ref('')
 const discoveryInterval = ref(15000)
-const llmProxy = ref('')
-const llmProxyUser = ref('')
-const llmProxyPassword = ref('')
-const tlsInsecure = ref(false)
 const openBrowser = ref(true)
-const priceInput = ref<number | null>(null)
-const priceOutput = ref<number | null>(null)
-const priceCached = ref<number | null>(null)
 
 const models = ref<string[]>([])
 const modelsError = ref<string | null>(null)
@@ -33,33 +80,29 @@ const loadingModels = ref(false)
 const saving = ref(false)
 const saveError = ref<string | null>(null)
 
-const canFetchModels = computed(
-  () => !!apiKey.value || !!props.settings?.apiKeyConfigured,
-)
+const canFetchModels = computed(() => {
+  const hasKey = !!apiKey.value || apiKeyConfiguredForProvider.value
+  if (!hasKey) return false
+  // Custom requires an explicit Base URL — OpenAI/VseGPT use the hard-coded default
+  if (provider.value === 'custom' && !baseURL.value.trim()) return false
+  return true
+})
 
 watch(
   () => props.open,
   (v) => {
     if (!v) return
     if (props.settings) {
-      apiKey.value = ''
-      baseURL.value = props.settings.baseURL
-      model.value = props.settings.model
+      provider.value = props.settings.provider
+      loadProviderFields(provider.value)
       mqttUser.value = props.settings.mqttUser
       mqttPassword.value = ''
       sshUser.value = props.settings.sshUser || 'root'
       sshPassword.value = ''
       sshKeyPath.value = props.settings.sshKeyPath
       discoveryInterval.value = props.settings.discoveryInterval
-      llmProxy.value = props.settings.llmProxy ?? ''
-      llmProxyUser.value = props.settings.llmProxyUser ?? ''
-      llmProxyPassword.value = ''
-      tlsInsecure.value = props.settings.tlsInsecure ?? false
       openBrowser.value = props.settings.openBrowser
-      priceInput.value = props.settings.priceInput ?? null
-      priceOutput.value = props.settings.priceOutput ?? null
-      priceCached.value = props.settings.priceCached ?? null
-      if (props.settings.apiKeyConfigured) void fetchModels()
+      if (apiKeyConfiguredForProvider.value) void fetchModels()
     }
   },
   { immediate: true },
@@ -69,14 +112,13 @@ async function fetchModels() {
   loadingModels.value = true
   modelsError.value = null
   try {
-    // If user typed a fresh key, save it first so /api/models can use it.
-    if (apiKey.value || baseURL.value !== props.settings?.baseURL) {
-      const patch: any = {}
-      if (apiKey.value) patch.apiKey = apiKey.value
-      if (baseURL.value !== props.settings?.baseURL) patch.baseURL = baseURL.value
-      await api.saveSettings(patch)
-      apiKey.value = ''
-    }
+    // Always sync the current UI provider + the bits relevant to /api/models
+    // so the backend uses the right provider's key/baseURL for the lookup.
+    const patch: any = { provider: provider.value }
+    if (apiKey.value) patch.apiKey = apiKey.value
+    patch.baseURL = provider.value === 'custom' ? baseURL.value : ''
+    await api.saveSettings(patch)
+    apiKey.value = ''
     const r = await api.models()
     models.value = r.models
     if (model.value && !r.models.includes(model.value)) {
@@ -95,8 +137,12 @@ async function save() {
   saving.value = true
   saveError.value = null
   try {
+    // Only Custom carries an explicit baseURL; OpenAI/VseGPT always use the
+    // hard-coded provider default on the backend.
+    const baseURLForSave = provider.value === 'custom' ? baseURL.value : ''
     const patch: any = {
-      baseURL: baseURL.value,
+      provider: provider.value,
+      baseURL: baseURLForSave,
       model: model.value,
       llmProxy: llmProxy.value,
       llmProxyUser: llmProxyUser.value,
@@ -149,25 +195,43 @@ async function removeKey() {
         <section>
           <h3>LLM</h3>
           <label class="field">
-            <span>API-ключ {{ settings?.apiKeyConfigured ? '(сохранён)' : '(не задан)' }}</span>
+            <span>Провайдер</span>
+            <div class="provider-row">
+              <label v-for="(info, key) in PROVIDER_INFO" :key="key" class="provider-opt" :class="{ active: provider === key }">
+                <input type="radio" :value="key" :checked="provider === key" @change="onProviderChange(key as LlmProvider)" />
+                <span>{{ info.label }}</span>
+              </label>
+            </div>
+          </label>
+          <label class="field">
+            <span>
+              API-ключ {{ apiKeyConfiguredForProvider ? '(сохранён)' : '(не задан)' }}
+              <a
+                v-if="providerInfo.signupUrl"
+                :href="providerInfo.signupUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="key-link"
+              >Получить ключ ↗</a>
+            </span>
             <div class="row">
               <input
                 type="password"
                 v-model="apiKey"
-                :placeholder="settings?.apiKeyConfigured ? '••• оставьте пустым чтобы не менять' : 'sk-...'"
+                :placeholder="apiKeyConfiguredForProvider ? '••• оставьте пустым чтобы не менять' : 'sk-...'"
                 autocomplete="off"
               />
               <button
-                v-if="settings?.apiKeyConfigured"
+                v-if="apiKeyConfiguredForProvider"
                 class="ghost danger"
                 @click="removeKey"
               >удалить</button>
             </div>
           </label>
 
-          <label class="field">
-            <span>Base URL <span class="muted small">(оставьте пустым для api.openai.com)</span></span>
-            <input v-model="baseURL" placeholder="https://api.openai.com/v1" />
+          <label v-if="provider === 'custom'" class="field">
+            <span>Base URL</span>
+            <input v-model="baseURL" :placeholder="baseURLPlaceholder" />
           </label>
 
           <label class="field">
@@ -180,11 +244,11 @@ async function removeKey() {
               <input v-model="llmProxyUser" placeholder="user" autocomplete="off" />
             </label>
             <label class="field" style="flex:1;margin-bottom:0">
-              <span>Пароль прокси {{ settings?.llmProxyPasswordConfigured ? '(сохранён)' : '' }}</span>
+              <span>Пароль прокси {{ llmProxyPasswordConfiguredForProvider ? '(сохранён)' : '' }}</span>
               <input
                 type="password"
                 v-model="llmProxyPassword"
-                :placeholder="settings?.llmProxyPasswordConfigured ? '••• оставьте пустым чтобы не менять' : ''"
+                :placeholder="llmProxyPasswordConfiguredForProvider ? '••• оставьте пустым чтобы не менять' : ''"
                 autocomplete="off"
               />
             </label>
@@ -204,35 +268,46 @@ async function removeKey() {
                 @click="fetchModels"
               >{{ loadingModels ? 'загрузка…' : 'обновить список' }}</button>
             </div>
-            <div v-if="!models.length" class="muted small" style="margin-top:4px">
-              Сохраните API-ключ и нажмите «обновить список».
+            <div v-if="!apiKeyConfiguredForProvider && !apiKey" class="muted small" style="margin-top:4px">
+              Введите API-ключ, чтобы загрузить список моделей.
             </div>
-            <select v-else v-model="model" style="margin-top:4px">
-              <option value="" disabled>— выберите модель —</option>
-              <option v-for="m in models" :key="m" :value="m">{{ m }}</option>
-            </select>
-            <div v-if="modelsError" class="error small">{{ modelsError }}</div>
-            <input
-              v-if="!models.length"
-              v-model="model"
-              placeholder="или впишите имя модели вручную"
-              style="margin-top:6px"
+            <div v-else-if="provider === 'custom' && !baseURL.trim()" class="muted small" style="margin-top:4px">
+              Укажите Base URL.
+            </div>
+            <ComboboxSearch
+              v-else-if="models.length"
+              :modelValue="model"
+              :options="models"
+              placeholder="начните печатать для поиска…"
+              @update:modelValue="model = $event"
             />
+            <input
+              v-else
+              v-model="model"
+              placeholder="нажмите «обновить список» или впишите имя модели"
+              style="margin-top:4px"
+            />
+            <div v-if="modelsError" class="error small">{{ modelsError }}</div>
           </label>
 
-          <div class="subsection-label">Стоимость</div>
-          <label class="field">
-            <span>Цена входных токенов ($/1M)</span>
-            <input type="number" min="0" step="0.01" v-model.number="priceInput" placeholder="напр. 0.15" />
-          </label>
-          <label class="field">
-            <span>Цена выходных токенов ($/1M)</span>
-            <input type="number" min="0" step="0.01" v-model.number="priceOutput" placeholder="напр. 0.60" />
-          </label>
-          <label class="field">
-            <span>Цена кэшированных токенов ($/1M) <span class="muted small">(по умолчанию — как входные)</span></span>
-            <input type="number" min="0" step="0.01" v-model.number="priceCached" placeholder="напр. 0.075" />
-          </label>
+          <template v-if="showPriceFields">
+            <div class="subsection-label">Стоимость</div>
+            <label class="field">
+              <span>Цена входных токенов ($/1M)</span>
+              <input type="number" min="0" step="0.01" v-model.number="priceInput" placeholder="напр. 0.15" />
+            </label>
+            <label class="field">
+              <span>Цена выходных токенов ($/1M)</span>
+              <input type="number" min="0" step="0.01" v-model.number="priceOutput" placeholder="напр. 0.60" />
+            </label>
+            <label class="field">
+              <span>Цена кэшированных токенов ($/1M) <span class="muted small">(по умолчанию — как входные)</span></span>
+              <input type="number" min="0" step="0.01" v-model.number="priceCached" placeholder="напр. 0.075" />
+            </label>
+          </template>
+          <p v-else-if="provider === 'vsegpt'" class="muted small" style="margin:6px 0 0">
+            Стоимость приходит от VseGPT в ответе API (₽). Задавать вручную не нужно.
+          </p>
         </section>
 
         <section>
@@ -346,4 +421,22 @@ section h3 { margin: 0 0 8px 0; font-size: 0.75rem; color: var(--text-mute); tex
 .checkbox-field input[type=checkbox] { width: auto; margin: 0; flex-shrink: 0; }
 code { background: var(--bg-mute); padding: 2px 4px; border-radius: 3px; font-size: 0.75rem; word-break: break-all; }
 .proxy-auth-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.provider-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.provider-opt {
+  flex: 1;
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border); border-radius: 5px;
+  cursor: pointer; user-select: none;
+  background: var(--bg);
+  transition: border-color 0.1s, background 0.1s;
+}
+.provider-opt:hover { background: var(--bg-soft); }
+.provider-opt.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
+.provider-opt input { width: auto; margin: 0; flex-shrink: 0; }
+.key-link {
+  margin-left: 8px; font-size: 0.75rem; color: var(--accent);
+  text-decoration: none; white-space: nowrap;
+}
+.key-link:hover { text-decoration: underline; }
 </style>
