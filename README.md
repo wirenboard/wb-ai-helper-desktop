@@ -16,8 +16,8 @@
    - Windows: `wb-ai-helper-windows-x64.exe`
 2. **Получить API-ключ** у любого OpenAI-совместимого провайдера:
    - **OpenAI** — [platform.openai.com/api-keys](https://platform.openai.com/api-keys); пополнить баланс через credit card. Дешёвая модель — `gpt-4o-mini`
-   - **Anthropic Claude** через прокси — [console.anthropic.com](https://console.anthropic.com), нужен Custom AI Proxy (см. ниже)
    - **Self-hosted** — Ollama / LiteLLM / vLLM на своём сервере, ключ необязателен
+   - **Корпоративный/MITM-прокси** с OpenAI-совместимым endpoint (Copilot и т.п.) — Custom AI Proxy с CA-сертификатом (см. ниже)
 3. **Запустить и настроить:**
    - `chmod +x ./WB-AI-Helper-x86_64.AppImage && ./WB-AI-Helper-x86_64.AppImage`
    - В шапке открыть «Настройки» (⚙)
@@ -38,7 +38,7 @@
 - 4 группы провайдеров в настройках:
   - **OpenAI** — прямой доступ к `api.openai.com`
   - **Custom** — произвольный OpenAI-совместимый endpoint (Ollama, LiteLLM, vLLM…)
-  - **Custom AI Proxy** — endpoint за MITM-прокси с CA-сертификатом (Claude proxy и т.п.)
+  - **Custom AI Proxy** — endpoint за MITM-прокси с CA-сертификатом (только OpenAI Chat Completions, например Copilot через прокси)
   - Каждый профиль помнит свой ключ/baseURL/model/прокси/CA — переключаются мгновенно
 - ~50 инструментов: `mqtt_*`, `ssh_*`, `wb_bus_scan`, `serial_debug_collect`, `audit_controller`, `get_history`/`get_history_chart` (графики через vega-lite — line/bar/area/point/histogram/heatmap/boxplot), `fetch_from_controller`/`upload_to_controller`, `save_rule`/`load_rule`/`delete_rule` (wb-rules через `wbrules/Editor`)
 - Скиллы (17 шт. в `src/server/fixtures/skills/`) — `controller-backup`, `controller-update`, `wb-mqtt-serial`, `wb-rules`, `troubleshooting-*`, `diagrams`, `history` и т.д. — подгружаются по запросу через `load_skill`
@@ -134,15 +134,17 @@ src/
 
 ## Custom AI Proxy
 
-Для прокси типа Claude Code Proxy (TLS-MITM):
+Для корпоративных прокси с TLS-MITM, которые проксируют OpenAI-совместимые endpoint (Copilot, корпоративный gateway и т.п.):
 
 1. Провайдер: **Custom AI Proxy**
-2. Base URL: реальный upstream (`https://api.githubcopilot.com`, `https://api.anthropic.com`)
-3. API-ключ: dummy (прокси сам подставит)
+2. Base URL: реальный upstream API (например `https://api.githubcopilot.com`)
+3. API-ключ: можно dummy, если прокси сам подставит реальный
 4. Прокси для LLM: `https://USER:PASS@host:port` (auth прямо в URL — отдельные поля логин/пароль скрыты)
 5. CA-сертификат прокси: загрузить `.pem` файл — его содержимое сохранится в `settings.json` и пойдёт в `tls.ca` Bun fetch
 
-Кнопка «обновить список» работает даже если прокси не отдаёт `/v1/models`: дёргает `/v1/chat/completions` с фейковой моделью и парсит «Available models: …» из 400-го ответа. Whitelist режет до моделей, совместимых с `/chat/completions` (без reasoning-only).
+Кнопка «обновить список» работает даже если прокси не отдаёт `/v1/models`: дёргает `/v1/chat/completions` с фейковой моделью и парсит «Available models: …» из 400-го ответа. Whitelist режет до моделей, совместимых с `/chat/completions` (без reasoning-only — gpt-5.x main, o-серия и т.п.).
+
+> **Только OpenAI Chat Completions API.** Anthropic Messages API не поддерживается, даже если прокси умеет в обе стороны.
 
 ## Переменные окружения
 
@@ -162,9 +164,3 @@ WB_HELPER_SSH_PASSWORD      SSH-пароль (default wirenboard)
 WB_HELPER_SSH_KEY           путь к приватному ключу
 ```
 
-## Что специально не делается
-
-- организационная иерархия / «облако» — выкинуто
-- мимикрия под WB Cloud — выкинуто
-- реальная поддержка Anthropic Messages API — заглушена (только OpenAI Chat Completions; для Claude через Custom AI Proxy и api.githubcopilot.com)
-- мобильная вёрстка — desktop-first

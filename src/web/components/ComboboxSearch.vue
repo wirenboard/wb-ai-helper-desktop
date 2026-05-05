@@ -136,8 +136,16 @@ onBeforeUnmount(() => window.removeEventListener('mousedown', onDocClick))
 }
 .cb-empty { padding: 6px 10px; color: var(--text-mute); font-size: 0.8rem; }
 .cb-item {
+  display: flex; align-items: center; gap: 8px;
   padding: 5px 10px; font-size: 0.85rem; cursor: pointer; color: var(--text);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; overflow: hidden;
+}
+.cb-item > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cb-badge {
+  flex-shrink: 0;
+  font-family: 'JetBrains Mono', monospace; font-size: 0.72rem;
+  padding: 1px 6px; border-radius: 8px;
+  background: var(--bg-soft); color: var(--text-mute);
 }
 .cb-item.active { background: var(--bg-soft); }
 .cb-item.picked { color: var(--accent); font-weight: 500; }

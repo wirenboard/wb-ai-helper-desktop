@@ -155,17 +155,6 @@ export const PROVIDER_INFO: Record<LlmProvider, ProviderInfo & { apiFormat: ApiF
     supportsCaCert: false,
     apiFormatEditable: false,
   },
-  anthropic: {
-    label: 'Anthropic',
-    defaultBaseURL: 'https://api.anthropic.com',
-    currency: 'USD',
-    pricesEditable: true,
-    signupUrl: 'https://console.anthropic.com/settings/keys',
-    apiFormat: 'anthropic',
-    baseURLEditable: false,
-    supportsCaCert: false,
-    apiFormatEditable: false,
-  },
   custom: {
     label: 'Custom',
     defaultBaseURL: '',
@@ -175,7 +164,7 @@ export const PROVIDER_INFO: Record<LlmProvider, ProviderInfo & { apiFormat: ApiF
     apiFormat: 'openai',
     baseURLEditable: true,
     supportsCaCert: false,
-    apiFormatEditable: true,
+    apiFormatEditable: false,
   },
   custom_proxy: {
     label: 'Custom AI Proxy',
@@ -186,8 +175,77 @@ export const PROVIDER_INFO: Record<LlmProvider, ProviderInfo & { apiFormat: ApiF
     apiFormat: 'openai',
     baseURLEditable: true,
     supportsCaCert: true,
-    apiFormatEditable: true,
+    apiFormatEditable: false,
   },
+}
+
+/**
+ * GitHub Copilot premium-request multipliers for the chat-completions
+ * compatible whitelist. Shown as a small badge in the model picker so
+ * the user can pick a "free" tier (0×) over a 5× one.
+ */
+export const COPILOT_MULTIPLIERS: Record<string, string> = {
+  'gpt-4o-mini':       '0×',
+  'gpt-4.1-mini':      '0×',
+  'gpt-4o':            '0×',
+  'gpt-4.1':           '0×',
+  'grok-code-fast-1':  '0×',
+  'claude-haiku-4.5':  '0.33×',
+  'claude-sonnet-4.5': '1×',
+  'claude-sonnet-4.6': '1×',
+  'claude-opus-4.5':   '5×',
+  'claude-opus-4.7':   '5×',
+}
+
+/**
+ * Известные размеры контекстного окна по имени модели. UI показывает
+ * заполнение `↑X / 128k` в шапке чата. Юзер может переопределить через
+ * ProviderConfig.contextWindow.
+ */
+export const MODEL_CONTEXT: Record<string, number> = {
+  // OpenAI
+  'gpt-4o':              128_000,
+  'gpt-4o-mini':         128_000,
+  'gpt-4o-2024-08-06':   128_000,
+  'gpt-4o-2024-05-13':   128_000,
+  'gpt-4o-2024-11-20':   128_000,
+  'gpt-4.1':            1_000_000,
+  'gpt-4.1-mini':       1_000_000,
+  'gpt-4.1-2025-04-14': 1_000_000,
+  'gpt-4':                  8_192,
+  'gpt-4-turbo':          128_000,
+  'gpt-3.5-turbo':         16_385,
+  'gpt-3.5-turbo-0613':     4_096,
+  // gpt-5.x (Copilot proxy / preview)
+  'gpt-5':              400_000,
+  'gpt-5-mini':         400_000,
+  'gpt-5.2':            400_000,
+  'gpt-5.4':            400_000,
+  'gpt-5.4-mini':       400_000,
+  'gpt-5.5':            400_000,
+  'gpt-5.3-codex':      400_000,
+  'gpt-5.2-codex':      400_000,
+  // Claude (через MITM-прокси, OpenAI-совместимый формат)
+  'claude-haiku-4.5':    200_000,
+  'claude-sonnet-4':     200_000,
+  'claude-sonnet-4.5':   200_000,
+  'claude-sonnet-4.6':   200_000,
+  'claude-opus-4.5':     200_000,
+  'claude-opus-4.7':     200_000,
+  // Прочее
+  'gemini-2.5-pro':        1_000_000,
+  'gemini-3.1-pro-preview':2_000_000,
+  'grok-code-fast-1':        256_000,
+}
+
+/** Разумный дефолт когда конкретная модель не в таблице. 128k — медиана для
+ * современных чат-моделей. Юзер может переопределить через ProviderConfig.contextWindow. */
+const DEFAULT_CONTEXT_WINDOW = 128_000
+
+export function contextWindowOf(model: string, override?: number | null): number {
+  if (typeof override === 'number' && override > 0) return override
+  if (!model) return DEFAULT_CONTEXT_WINDOW
+  return MODEL_CONTEXT[model] ?? DEFAULT_CONTEXT_WINDOW
 }
 
 export type ProviderConfigPublic = {
@@ -201,6 +259,7 @@ export type ProviderConfigPublic = {
   priceInput: number | null
   priceOutput: number | null
   priceCached: number | null
+  contextWindow: number | null
   apiKeyConfigured: boolean
   llmProxyPasswordConfigured: boolean
 }
@@ -220,6 +279,7 @@ export type Settings = {
   priceInput?: number | null
   priceOutput?: number | null
   priceCached?: number | null
+  contextWindow?: number | null
   // Shared (controller / UI):
   mqttUser: string
   sshUser: string
@@ -250,6 +310,7 @@ export type SettingsPatch = Partial<{
   priceInput: number | null
   priceOutput: number | null
   priceCached: number | null
+  contextWindow: number | null
 }>
 
 const json = async <T>(res: Response): Promise<T> => {

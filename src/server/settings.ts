@@ -19,6 +19,8 @@ export interface ProviderConfig {
   tlsInsecure: boolean
   /** PEM-содержимое CA-сертификата для доступа через MITM-прокси (e.g. Claude proxy). */
   caCert: string
+  /** Override known model context window in tokens (manual). null = use static MODEL_CONTEXT. */
+  contextWindow: number | null
   /** Формат API: 'openai' (Chat Completions) или 'anthropic' (Messages). Только Custom AI Proxy. */
   apiFormat: ApiFormat
   priceInput: number | null
@@ -31,6 +33,7 @@ const EMPTY_PROVIDER: ProviderConfig = {
   llmProxy: '', llmProxyUser: '', llmProxyPassword: '',
   tlsInsecure: false, caCert: '', apiFormat: 'openai',
   priceInput: null, priceOutput: null, priceCached: null,
+  contextWindow: null,
 }
 
 export type Settings = {
@@ -73,6 +76,7 @@ export type PublicSettings = {
   priceInput: number | null
   priceOutput: number | null
   priceCached: number | null
+  contextWindow: number | null
   apiKeyConfigured: boolean
   llmProxyPasswordConfigured: boolean
   // Shared (controller/UI):
@@ -160,6 +164,7 @@ export class SettingsStore {
       priceInput: cur.priceInput,
       priceOutput: cur.priceOutput,
       priceCached: cur.priceCached,
+      contextWindow: cur.contextWindow,
       apiKeyConfigured: !!cur.apiKey,
       llmProxyPasswordConfigured: !!cur.llmProxyPassword,
       mqttUser: this.cache.mqttUser,
@@ -235,6 +240,7 @@ const PROVIDER_FIELDS = [
   'llmProxy', 'llmProxyUser', 'llmProxyPassword',
   'tlsInsecure', 'caCert', 'apiFormat',
   'priceInput', 'priceOutput', 'priceCached',
+  'contextWindow',
 ] as const
 
 const SHARED_FIELDS = [
@@ -261,6 +267,7 @@ function redactProvider(p: ProviderConfig): ProviderConfigPublic {
     priceInput: p.priceInput,
     priceOutput: p.priceOutput,
     priceCached: p.priceCached,
+    contextWindow: p.contextWindow,
     apiKeyConfigured: !!p.apiKey,
     llmProxyPasswordConfigured: !!p.llmProxyPassword,
   }

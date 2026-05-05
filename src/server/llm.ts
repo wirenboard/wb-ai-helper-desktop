@@ -22,7 +22,7 @@ export type StreamEvent =
   | { type: 'text-delta'; text: string }
   | { type: 'tool-call'; id: string; name: string; arguments: string }
   | { type: 'tool-result'; id: string; name: string; result: string; ok: boolean }
-  | { type: 'usage'; promptTokens?: number; completionTokens?: number; cachedTokens?: number; totalCost?: number }
+  | { type: 'usage'; promptTokens?: number; completionTokens?: number; cachedTokens?: number; totalCost?: number; promptTokensLast?: number }
   | { type: 'done'; finish_reason: string | null }
   | { type: 'error'; message: string }
 
@@ -67,6 +67,7 @@ export class LlmClient {
     let totalCompletionTokens = 0
     let totalCachedTokens = 0
     let totalCost = 0  // VseGPT/OpenRouter style — provider-reported cost in their currency
+    let lastPromptTokens = 0  // prompt_tokens of the LAST internal LLM call — post-compaction size
 
     for (let turn = 0; turn < maxTurns; turn++) {
       const isLastTurn = turn === maxTurns - 1
@@ -114,6 +115,7 @@ export class LlmClient {
             totalPromptTokens += chunk.usage.prompt_tokens ?? 0
             totalCompletionTokens += chunk.usage.completion_tokens ?? 0
             totalCachedTokens += chunk.usage.prompt_tokens_details?.cached_tokens ?? 0
+            lastPromptTokens = chunk.usage.prompt_tokens ?? lastPromptTokens
             // VseGPT extension: server-side billing in the provider's currency
             const c = (chunk.usage as { total_cost?: number }).total_cost
             if (typeof c === 'number') totalCost += c
