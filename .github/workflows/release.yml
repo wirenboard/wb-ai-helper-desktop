@@ -24,11 +24,16 @@ jobs:
       - name: Type check
         run: bun run typecheck
 
-      - name: Build (linux-x64 + windows-x64)
+      - name: Build binaries (linux-x64 + windows-x64)
         run: bun scripts/build.ts --all
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: build/*
-          generate_release_notes: true
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            build/wb-ai-helper-linux-x64 \
+            build/wb-ai-helper-windows-x64.exe \
+            build/README.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
