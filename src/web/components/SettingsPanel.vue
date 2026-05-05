@@ -276,16 +276,15 @@ async function removeKey() {
             <span>Период mDNS-сканирования (мс)</span>
             <input type="number" min="3000" step="1000" v-model="discoveryInterval" />
           </label>
-          <label class="field row" style="gap:6px">
-            <input type="checkbox" v-model="openBrowser" style="width:auto" />
-            <span>открывать браузер при запуске</span>
-          </label>
         </section>
 
         <div v-if="saveError" class="error">{{ saveError }}</div>
-        <div class="muted small" v-if="settings" style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
-          <span>Файл настроек: <code>{{ settings.storagePath }}</code></span>
-          <span v-if="version" style="white-space:nowrap">v{{ version }}</span>
+        <div class="muted small" v-if="settings" style="display:flex;justify-content:space-between;align-items:center;gap:8px;min-width:0">
+          <span style="display:flex;align-items:center;gap:4px;min-width:0;overflow:hidden">
+            <span style="white-space:nowrap;flex-shrink:0">Файл настроек:</span>
+            <code style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block" :title="settings.storagePath">{{ settings.storagePath }}</code>
+          </span>
+          <span v-if="version" style="white-space:nowrap;flex-shrink:0">v{{ version }}</span>
         </div>
       </div>
       <div class="modal-footer">
