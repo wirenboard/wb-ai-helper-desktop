@@ -181,7 +181,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
 
     case 'probe_controller': {
       const sn = String(args['sn'] ?? '')
-      const c = ctx.discovery.get(sn)
+      const c = ctx.discovery.get(sn) ?? ctx.discovery.getOrCreate(sn) ?? adHocController(sn)
       if (!c) return notFound(sn)
       const r = await probe(c)
       c.reachable = r.reachable
@@ -208,7 +208,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     case 'list_controls': {
       const sn = String(args['sn'] ?? '')
       const device = String(args['device'] ?? '')
-      const c = ctx.discovery.get(sn)
+      const c = ctx.discovery.get(sn) ?? ctx.discovery.getOrCreate(sn) ?? adHocController(sn)
       if (!c) return notFound(sn)
       const controls = await ctx.mqtt.listControls(c, device)
       return JSON.stringify(controls, null, 2)
@@ -217,7 +217,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     case 'mqtt_read': {
       const sn = String(args['sn'] ?? '')
       const topic = String(args['topic'] ?? '')
-      const c = ctx.discovery.get(sn)
+      const c = ctx.discovery.get(sn) ?? ctx.discovery.getOrCreate(sn) ?? adHocController(sn)
       if (!c) return notFound(sn)
       const value = await ctx.mqtt.readTopic(c, topic)
       return JSON.stringify({ topic, value }, null, 2)
@@ -263,7 +263,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
       const sn = String(args['sn'] ?? '')
       const filePath = String(args['path'] ?? '')
       const maxBytes = typeof args['maxBytes'] === 'number' ? args['maxBytes'] : undefined
-      const c = ctx.discovery.get(sn)
+      const c = ctx.discovery.get(sn) ?? ctx.discovery.getOrCreate(sn) ?? adHocController(sn)
       if (!c) return notFound(sn)
       try {
         const r = await ctx.ssh.readFile(c, filePath, maxBytes)
@@ -277,7 +277,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
       const sn = String(args['sn'] ?? '')
       const unit = args['unit'] ? String(args['unit']) : undefined
       const lines = typeof args['lines'] === 'number' ? args['lines'] : undefined
-      const c = ctx.discovery.get(sn)
+      const c = ctx.discovery.get(sn) ?? ctx.discovery.getOrCreate(sn) ?? adHocController(sn)
       if (!c) return notFound(sn)
       try {
         const text = await ctx.ssh.readLogs(c, unit, lines)
@@ -291,11 +291,28 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
 }
 
 function resolveTargets(raw: unknown, ctx: Ctx): Controller[] {
-  let sns: string[]
-  if (Array.isArray(raw)) sns = raw.map(String)
-  else if (typeof raw === 'string' && raw) sns = [raw]
-  else sns = ctx.contextSns
-  return sns.map((sn) => ctx.discovery.get(sn)).filter((c): c is Controller => !!c)
+  let keys: string[]
+  if (Array.isArray(raw)) keys = raw.map(String)
+  else if (typeof raw === 'string' && raw) keys = [raw]
+  else keys = ctx.contextSns
+  return keys
+    .map((k) => ctx.discovery.get(k) ?? ctx.discovery.getOrCreate(k) ?? adHocController(k))
+    .filter((c): c is Controller => !!c)
+}
+
+function adHocController(host: string): Controller | null {
+  // Allow bare IP / hostname that isn't in the registry yet.
+  const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(host)
+  const isHostname = host.includes('.') || host.includes('-')
+  if (!isIp && !isHostname) return null
+  return {
+    sn: host.toUpperCase(),
+    host,
+    addresses: isIp ? [host] : [],
+    lastSeen: Date.now(),
+    source: 'manual',
+    reachable: undefined,
+  }
 }
 
 function parseArgs(json: string): Record<string, unknown> {
