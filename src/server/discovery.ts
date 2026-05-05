@@ -131,11 +131,14 @@ export class Discovery {
     await Promise.all(probes)
   }
 
-  /** On Linux: use avahi-browse to find controllers bonjour-service misses. */
+  /** On Linux: use avahi-browse to find controllers bonjour-service misses.
+   *  We run without -t so avahi collects responses for a full 5 s window,
+   *  catching controllers that announce late. The process is killed via timeout. */
   private avahiBrowse(): Promise<void> {
     if (process.platform !== 'linux') return Promise.resolve()
     return new Promise((resolve) => {
-      exec('avahi-browse -a -t -r -p 2>/dev/null', { timeout: 8000 }, (_err, stdout) => {
+      // timeout 5: kills avahi-browse after 5 s so we get a complete picture
+      exec('timeout 5 avahi-browse -a -r -p 2>/dev/null; true', { timeout: 8000 }, (_err, stdout) => {
         for (const line of stdout.split('\n')) {
           if (!line.startsWith('=')) continue
           const p = line.split(';')
