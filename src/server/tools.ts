@@ -80,7 +80,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'mqtt_read',
-        description: 'Прочитать значение MQTT-топика на контроллере.',
+        description: 'Прочитать одно retain-значение топика (mosquitto_sub -C 1 -W). Возвращает текущее значение или null если топик не retain.',
         parameters: {
           type: 'object',
           properties: {
@@ -97,7 +97,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       function: {
         name: 'mqtt_write',
         description:
-          'Опубликовать значение в MQTT-топик. Для управления контролом WB пишите в `<topic>/on` (`controls/K1/on` ← `1` чтобы включить).',
+          'Опубликовать значение в MQTT-топик на контроллере (mosquitto_pub). Для управления используй суффикс /on (например /devices/wb-gpio/controls/A1_OUT/on). HITL: перед вызовом объясни пользователю что делаешь и дождись подтверждения.',
         parameters: {
           type: 'object',
           properties: {
@@ -120,7 +120,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       function: {
         name: 'ssh_exec',
         description:
-          'Выполнить shell-команду по SSH на контроллере (или группе). Работает с дефолтным root@wirenboard или с настроенными кредами. Возвращает stdout/stderr/код. Опасные операции (rm/reboot/dpkg) — только при явном запросе пользователя.',
+          'Выполнить shell-команду на контроллере. Для моментальных команд (локальный кеш, без сети): ls, cat, dpkg -l, apt list, apt policy, wb-release, systemctl status, journalctl. Для сетевых/долгих (apt update/install/upgrade, wb-release -t, tar больших каталогов) — используй ssh_exec_async. Для опасных команд — сначала объясни пользователю, жди подтверждения.',
         parameters: {
           type: 'object',
           properties: {
@@ -160,7 +160,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'ssh_read_logs',
-        description: 'journalctl tail на контроллере. unit опционален.',
+        description: 'Последние строки systemd-журнала. Если указан unit — только этот сервис; иначе общий журнал.',
         parameters: {
           type: 'object',
           properties: {
@@ -177,7 +177,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'todo_write',
-        description: 'Записать план подзадач для текущей сессии. Перезаписывает список ЦЕЛИКОМ. Используй на задачах в 3+ шага. Ровно один пункт может быть "in_progress". После каждого шага обновляй статус.',
+        description: 'Записать план из подзадач для текущей сессии. Перезаписывает список ЦЕЛИКОМ — передавай весь набор пунктов каждый раз, включая уже завершённые. Используй на задачах с 3+ шагами, при анализе/оценке (audit, диагностика, сравнение контроллеров), многоэтапных апдейтах и бэкапах. После каждого шага сразу обновляй статус: ровно один пункт "in_progress", завершённые — "completed". Не используй для тривиальных задач в один шаг. Список видно модели в каждом ходе.',
         parameters: {
           type: 'object',
           properties: {
@@ -202,7 +202,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'checkpoint',
-        description: 'Зафиксировать итог этапа и сжать контекст. Вызывай когда: (1) выполнено 5-7+ инструментов, (2) завершён логический этап. summary — 3-7 предложений: что сделано, что нашли, что дальше.',
+        description: 'Зафиксировать промежуточный итог текущего этапа и сжать контекст. Вызывай когда: (1) выполнено 5-7+ инструментов подряд, (2) завершён логический этап (диагностика, сбор данных, установка), (3) все пункты текущей фазы todo_write помечены completed. Параметр summary — суммари в 3-7 предложениях: что исследовали/сделали, что обнаружили, что планируем дальше. Текущие pending-задачи из todo_write автоматически сохраняются в чекпоинте — не нужно их дублировать в summary. После чекпоинта старые tool results заменяются суммари, новая фаза начинается с чистого контекста.',
         parameters: {
           type: 'object',
           properties: {
@@ -217,7 +217,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'load_skill',
-        description: 'Подгрузить скилл (markdown с инструкциями) ДО действий по профильной теме. Список скиллов — в системном промпте. После завершения задачи выгрузи через unload_skill.',
+        description: 'Подгрузить содержимое специализированного скилла (markdown с инструкциями) ДО действий по профильной теме. Список доступных скиллов с описаниями — в системном промпте. После завершения задачи выгрузи скилл через unload_skill чтобы освободить контекст.',
         parameters: {
           type: 'object',
           properties: {
@@ -232,7 +232,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'unload_skill',
-        description: 'Выгрузить загруженный скилл из контекста сессии. Вызывай после завершения задачи.',
+        description: 'Выгрузить ранее загруженный скилл из активного контекста сессии. Вызывай после завершения задачи, для которой скилл был нужен — это освобождает контекст. Скилл остаётся в каталоге и может быть загружен заново через load_skill.',
         parameters: {
           type: 'object',
           properties: {
@@ -247,7 +247,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'create_skill',
-        description: 'Создать или обновить скилл в каталоге. Формат: `# skill-name` первой строкой, пустая строка, затем абзац-описание (>=20 символов), потом содержимое.',
+        description: 'Создать или обновить пользовательский скилл в каталоге. Вызывай, когда пользователь просит «создай скилл», «обнови скилл X», «сделай из этого скилл», «запомни эту тему как скилл». Перед вызовом подгрузи skill-creator и следуй формату. Description для каталога сервер извлечёт сам из первого абзаца после заголовка `# <name>`. Системные скиллы этим тулом не перезаписываются.',
         parameters: {
           type: 'object',
           properties: {
@@ -263,7 +263,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'delete_skill',
-        description: 'Удалить скилл из каталога.',
+        description: 'Удалить пользовательский скилл из БД. Системные скиллы не удаляются.',
         parameters: {
           type: 'object',
           properties: {
@@ -321,7 +321,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'web_search',
-        description: 'Поиск в интернете через Brave Search. Возвращает топ-10 результатов: {title, url, snippet}. Используй web_fetch для прямых URL. Используй web_search только когда не знаешь URL.',
+        description: 'Поиск в интернете через Brave Search. Возвращает топ-10 результатов: {title, url, snippet}. Макс. 3 вызова на один ответ модели (счётчик обнуляется на каждом новом сообщении пользователя). Предпочитай прямой web_fetch на wiki.wirenboard.com. Используй web_search только когда не знаешь URL. Если результатов нет — НЕ повторяй, используй web_fetch.',
         parameters: {
           type: 'object',
           properties: {
@@ -336,7 +336,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'web_fetch',
-        description: 'Скачать содержимое веб-страницы по URL. Возвращает text/plain (HTML конвертируется в читаемый текст). Лимит 20 000 символов.',
+        description: 'Скачать содержимое веб-страницы по URL. Используй, когда не уверен в конвенциях/API/синтаксисе и хочешь свериться с документацией Wiren Board (github.com/wirenboard/*), README сторонних библиотек, конкретными файлами шаблонов и т.п. Возвращает text/plain (HTML конвертируется в читаемый текст; markdown/json/код — как есть). Лимит 20 000 символов.',
         parameters: {
           type: 'object',
           properties: {
@@ -351,7 +351,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'mqtt_rpc',
-        description: 'Вызвать MQTT RPC на контроллере. Параметр params ВСЕГДА передавай явно — даже если RPC принимает {} — иначе вызов будет некорректным.',
+        description: 'Вызвать MQTT RPC на контроллере. Параметр `params` ВСЕГДА передавай явно — даже если RPC принимает {} — иначе вызов будет некорректным. Примеры: mqtt_rpc(sn, "wb-mqtt-serial", "device", "LoadConfig", params={port, slave_id, ...}); mqtt_rpc(sn, "wb-mqtt-serial", "config", "Load", params={}); mqtt_rpc(sn, "wbrules", "Editor", "Save", params={path: "имя.js", content: "..."}) — для Editor.Save оба поля path (с расширением .js) и content ОБЯЗАТЕЛЬНЫ; mqtt_rpc(sn, "wbrules", "Editor", "List", params={}); mqtt_rpc(sn, "wbrules", "Editor", "Load", params={path: "имя.js"}).',
         parameters: {
           type: 'object',
           properties: {
@@ -371,7 +371,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'mqtt_list_topics',
-        description: 'Перечислить MQTT-топики на контроллере. Поддерживает пагинацию: limit и offset. Если has_more=true — запроси следующую страницу с next_offset.',
+        description: 'Перечислить MQTT-топики на контроллере. По умолчанию — все, можно ограничить prefix-ом (например "/devices/wb-gpio/#"). Поддерживает пагинацию: limit (дефолт 200) и offset. Если has_more=true — запроси следующую страницу с next_offset.',
         parameters: {
           type: 'object',
           properties: {
@@ -390,7 +390,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'ssh_exec_async',
-        description: 'Запустить shell-команду на контроллере в фоне как transient systemd-unit. Возвращает {jobId, startedAt} мгновенно. Используй для операций дольше пары минут: apt update/upgrade, wb-release -t testing, FIT-обновление, полный бэкап с tar.',
+        description: 'Запустить shell-команду на контроллере в фоне как transient systemd-unit. Возвращает {jobId, startedAt} мгновенно, SSH-соединение не держит. Команда переживает обрыв связи и продолжает работу под systemd. Используй для операций дольше пары минут: apt update/upgrade, wb-release -t testing, FIT-обновление, полный бэкап с tar, длинные bus-сканы. HITL как у ssh_exec: опасные команды — сначала подтверждение пользователя. После запуска проверяй прогресс через job_status/job_tail; не спамь polling-ом — достаточно раз в 10-30 сек.',
         parameters: {
           type: 'object',
           properties: {
@@ -670,7 +670,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'fetch_from_controller',
-        description: 'Скачать файл с контроллера (через SFTP) и сохранить как вложение сессии. Пользователь увидит его в UI и сможет скачать. Лимит 20MB. Для больших файлов сначала сожми (tar czf). Имя файла по умолчанию — basename пути.',
+        description: 'Скачать файл с контроллера (через SFTP) и положить в вложения текущей сессии чата. Пользователь увидит его в UI как чип с кнопкой скачать. Используй для выгрузки готового бэкапа, архива конфигов, лога — всего, что пользователь хочет получить себе. Лимит 20MB; для больших файлов сначала сожми (tar czf) или раздели. Имя файла по умолчанию берётся из пути; при нужде переопредели параметром name.',
         parameters: {
           type: 'object',
           properties: {
@@ -687,7 +687,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'upload_to_controller',
-        description: 'Загрузить вложение сессии (файл, загруженный пользователем в чат) на контроллер через SFTP. fileId — из list_attachments или системного сообщения.',
+        description: 'Записать вложение сессии (файл, который пользователь загрузил в чат) на контроллер в произвольный путь через SFTP. HITL: перед вызовом покажи пользователю, какой файл → в какой путь пойдёт, дождись подтверждения. Не перезаписывай критичные системные пути — избегай /etc/shadow, /etc/passwd, /etc/systemd/system/*.service без явной просьбы.',
         parameters: {
           type: 'object',
           properties: {
@@ -704,7 +704,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'list_attachments',
-        description: 'Список файлов, прикреплённых пользователем к текущему чату. Актуальный перечень также в системном промпте — звать отдельно обычно не нужно.',
+        description: 'Список файлов, прикреплённых пользователем к текущей сессии чата. Актуальный перечень также показан в системном сообщении перед каждым ходом — обычно отдельно звать не нужно; вызывай, если по ходу диалога нужно свериться с id/размерами.',
         parameters: {
           type: 'object',
           properties: {},
@@ -716,7 +716,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'read_attachment',
-        description: 'Прочитать содержимое вложения сессии (до 200KB). fileId — из list_attachments. encoding: utf8 для текстовых (конфиги, логи); base64 для бинарных.',
+        description: 'Прочитать содержимое файла, прикреплённого к сессии (до ~200KB). fileId — из list_attachments или системного сообщения про файлы. encoding="utf8" для текстовых (конфиги, логи, json); "base64" для бинарных (архивы, картинки — если нужно передать дальше).',
         parameters: {
           type: 'object',
           properties: {

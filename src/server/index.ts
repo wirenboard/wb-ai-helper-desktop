@@ -91,6 +91,9 @@ app.put('/api/settings', async (c) => {
   }
   if (typeof body['discoveryInterval'] === 'number') patch['discoveryInterval'] = body['discoveryInterval']
   if (typeof body['openBrowser'] === 'boolean') patch['openBrowser'] = body['openBrowser']
+  for (const f of ['priceInput', 'priceOutput', 'priceCached']) {
+    if (typeof body[f] === 'number' || body[f] === null) patch[f] = body[f]
+  }
   await settingsStore.update(patch)
   return c.json(settingsStore.toPublic())
 })
@@ -173,7 +176,7 @@ app.post('/api/chats/:id/message', async (c) => {
   const userText = String(body.text ?? '').trim()
   if (!userText) return c.json({ error: 'text required' }, 400)
 
-  chats.appendTurn(id, { role: 'user', content: userText })
+  const chatWithUser = chats.appendTurn(id, { role: 'user', content: userText })!
 
   return stream(c, async (s) => {
     const send = (event: string, data: unknown) => s.write(formatSse(event, data))
@@ -183,11 +186,11 @@ app.post('/api/chats/:id/message', async (c) => {
     const ctx = { discovery, mqtt, ssh, contextSns: chat.contextSns, db, sessionId: id, agentState, braveApiKey: process.env['BRAVE_SEARCH_API_KEY'] }
     let assistantText = ''
     const pendingToolCalls: { id: string; name: string; arguments: string }[] = []
-    let pendingUsage: { promptTokens: number; completionTokens: number } | null = null
+    let pendingUsage: { promptTokens: number; completionTokens: number; cachedTokens: number } | null = null
 
     try {
       for await (const ev of activeLlm.runAgent(
-        chat.turns,
+        chatWithUser.turns,
         toolSchemas(),
         (name, args) => dispatch(name, args, ctx),
         {
@@ -220,7 +223,7 @@ app.post('/api/chats/:id/message', async (c) => {
         await send(ev.type, ev)
         if (ev.type === 'text-delta') assistantText += ev.text
         if (ev.type === 'usage') {
-          pendingUsage = { promptTokens: ev.promptTokens, completionTokens: ev.completionTokens }
+          pendingUsage = { promptTokens: ev.promptTokens, completionTokens: ev.completionTokens, cachedTokens: ev.cachedTokens }
         }
         if (ev.type === 'tool-call') {
           pendingToolCalls.push({ id: ev.id, name: ev.name, arguments: ev.arguments })
