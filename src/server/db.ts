@@ -57,6 +57,7 @@ function migrate(db: Database) {
   try { db.exec(`ALTER TABLE turns ADD COLUMN tokens_prompt INTEGER NOT NULL DEFAULT 0`) } catch {}
   try { db.exec(`ALTER TABLE turns ADD COLUMN tokens_completion INTEGER NOT NULL DEFAULT 0`) } catch {}
   try { db.exec(`ALTER TABLE turns ADD COLUMN tokens_cached INTEGER NOT NULL DEFAULT 0`) } catch {}
+  try { db.exec(`ALTER TABLE turns ADD COLUMN total_cost REAL NOT NULL DEFAULT 0`) } catch {}
   try { db.exec(`ALTER TABLE skills ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'`) } catch {}
 }
 

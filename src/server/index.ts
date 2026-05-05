@@ -11,7 +11,7 @@ import { ChatStore } from './chats.ts'
 import { LlmClient } from './llm.ts'
 import { dispatch, toolSchemas } from './tools.ts'
 import { embeddedAsset, embeddedIndex } from './embed.ts'
-import { SettingsStore, listModels } from './settings.ts'
+import { SettingsStore, listModels, PROVIDER_DEFAULTS, type Settings } from './settings.ts'
 import { openDb } from './db.ts'
 import { getTodos, formatTodos } from './todos.ts'
 import { listSkills, getLoadedSkills, seedSystemSkills } from './skills.ts'
@@ -31,6 +31,13 @@ initAttachments(attachmentsRoot)
 // Cleanup expired attachments every hour
 setInterval(() => cleanupExpired(), 60 * 60 * 1000)
 
+/** Pick a baseURL: explicit user value wins; otherwise fall back to the provider's default. */
+function resolveBaseUrl(s: Settings): string | undefined {
+  if (s.baseURL && s.baseURL.trim()) return s.baseURL
+  const def = PROVIDER_DEFAULTS[s.provider]?.baseURL
+  return def || undefined
+}
+
 seedSystemSkills(db)
 
 const discovery = new Discovery(db)
@@ -44,7 +51,7 @@ const chats = new ChatStore(db)
 let llm: LlmClient | null = settings.apiKey
   ? new LlmClient({
       apiKey: settings.apiKey,
-      baseURL: settings.baseURL || undefined,
+      baseURL: resolveBaseUrl(settings),
       model: settings.model || 'gpt-4.1-mini',
       llmProxy: settings.llmProxy || undefined,
       llmProxyUser: settings.llmProxyUser || undefined,
@@ -98,6 +105,9 @@ app.put('/api/settings', async (c) => {
   for (const f of stringFields) {
     if (typeof body[f] === 'string') patch[f] = body[f]
   }
+  if (typeof body['provider'] === 'string' && ['openai', 'vsegpt', 'custom'].includes(body['provider'] as string)) {
+    patch['provider'] = body['provider']
+  }
   if (typeof body['discoveryInterval'] === 'number') patch['discoveryInterval'] = body['discoveryInterval']
   if (typeof body['openBrowser'] === 'boolean') patch['openBrowser'] = body['openBrowser']
   if (typeof body['tlsInsecure'] === 'boolean') patch['tlsInsecure'] = body['tlsInsecure']
@@ -120,7 +130,7 @@ app.get('/api/models', async (c) => {
   const s = settingsStore.get()
   if (!s.apiKey) return c.json({ error: 'apiKey не задан' }, 400)
   try {
-    const models = await listModels(s.apiKey, s.baseURL || undefined)
+    const models = await listModels(s.apiKey, resolveBaseUrl(s))
     return c.json({ models })
   } catch (e: any) {
     return c.json({ error: e?.message ?? String(e) }, 502)
@@ -239,7 +249,7 @@ app.post('/api/chats/:id/message', async (c) => {
     const ctx = { discovery, mqtt, ssh, contextSns: chat.contextSns, db, sessionId: id, agentState, braveApiKey: process.env['BRAVE_SEARCH_API_KEY'] }
     let assistantText = ''
     const pendingToolCalls: { id: string; name: string; arguments: string }[] = []
-    let pendingUsage: { promptTokens: number; completionTokens: number; cachedTokens: number } | null = null
+    let pendingUsage: { promptTokens?: number; completionTokens?: number; cachedTokens?: number; totalCost?: number } | null = null
 
     try {
       for await (const ev of activeLlm.runAgent(
@@ -281,7 +291,12 @@ app.post('/api/chats/:id/message', async (c) => {
         await send(ev.type, ev)
         if (ev.type === 'text-delta') assistantText += ev.text
         if (ev.type === 'usage') {
-          pendingUsage = { promptTokens: ev.promptTokens, completionTokens: ev.completionTokens, cachedTokens: ev.cachedTokens }
+          pendingUsage = {
+            promptTokens: ev.promptTokens,
+            completionTokens: ev.completionTokens,
+            cachedTokens: ev.cachedTokens,
+            ...(ev.totalCost != null ? { totalCost: ev.totalCost } : {}),
+          }
         }
         if (ev.type === 'tool-call') {
           pendingToolCalls.push({ id: ev.id, name: ev.name, arguments: ev.arguments })

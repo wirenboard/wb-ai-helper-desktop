@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { api, type Settings } from '../api'
+import { api, PROVIDER_INFO, type LlmProvider, type Settings } from '../api'
 
 const props = defineProps<{ settings: Settings | null; open: boolean; version?: string; fontSize?: number }>()
 const emit = defineEmits<{
@@ -9,9 +9,23 @@ const emit = defineEmits<{
   fontSizeChange: [number]
 }>()
 
+const provider = ref<LlmProvider>('openai')
 const apiKey = ref('')
 const baseURL = ref('')
 const model = ref('')
+
+const providerInfo = computed(() => PROVIDER_INFO[provider.value])
+const showPriceFields = computed(() => providerInfo.value.pricesEditable)
+const baseURLPlaceholder = computed(() => providerInfo.value.defaultBaseURL || 'https://your-endpoint/v1')
+
+function onProviderChange(next: LlmProvider) {
+  provider.value = next
+  // If the user hasn't customised baseURL, prefill from the new provider's default
+  const prevDef = props.settings ? PROVIDER_INFO[props.settings.provider]?.defaultBaseURL : ''
+  if (!baseURL.value || baseURL.value === prevDef) {
+    baseURL.value = PROVIDER_INFO[next].defaultBaseURL
+  }
+}
 const mqttUser = ref('')
 const mqttPassword = ref('')
 const sshUser = ref('root')
@@ -42,6 +56,7 @@ watch(
   (v) => {
     if (!v) return
     if (props.settings) {
+      provider.value = props.settings.provider
       apiKey.value = ''
       baseURL.value = props.settings.baseURL
       model.value = props.settings.model
@@ -96,6 +111,7 @@ async function save() {
   saveError.value = null
   try {
     const patch: any = {
+      provider: provider.value,
       baseURL: baseURL.value,
       model: model.value,
       llmProxy: llmProxy.value,
@@ -149,6 +165,15 @@ async function removeKey() {
         <section>
           <h3>LLM</h3>
           <label class="field">
+            <span>Провайдер</span>
+            <div class="provider-row">
+              <label v-for="(info, key) in PROVIDER_INFO" :key="key" class="provider-opt" :class="{ active: provider === key }">
+                <input type="radio" :value="key" :checked="provider === key" @change="onProviderChange(key as LlmProvider)" />
+                <span>{{ info.label }}</span>
+              </label>
+            </div>
+          </label>
+          <label class="field">
             <span>API-ключ {{ settings?.apiKeyConfigured ? '(сохранён)' : '(не задан)' }}</span>
             <div class="row">
               <input
@@ -166,8 +191,8 @@ async function removeKey() {
           </label>
 
           <label class="field">
-            <span>Base URL <span class="muted small">(оставьте пустым для api.openai.com)</span></span>
-            <input v-model="baseURL" placeholder="https://api.openai.com/v1" />
+            <span>Base URL <span class="muted small">(оставьте пустым — будет использован {{ providerInfo.defaultBaseURL || 'свой endpoint' }})</span></span>
+            <input v-model="baseURL" :placeholder="baseURLPlaceholder" />
           </label>
 
           <label class="field">
@@ -220,19 +245,24 @@ async function removeKey() {
             />
           </label>
 
-          <div class="subsection-label">Стоимость</div>
-          <label class="field">
-            <span>Цена входных токенов ($/1M)</span>
-            <input type="number" min="0" step="0.01" v-model.number="priceInput" placeholder="напр. 0.15" />
-          </label>
-          <label class="field">
-            <span>Цена выходных токенов ($/1M)</span>
-            <input type="number" min="0" step="0.01" v-model.number="priceOutput" placeholder="напр. 0.60" />
-          </label>
-          <label class="field">
-            <span>Цена кэшированных токенов ($/1M) <span class="muted small">(по умолчанию — как входные)</span></span>
-            <input type="number" min="0" step="0.01" v-model.number="priceCached" placeholder="напр. 0.075" />
-          </label>
+          <template v-if="showPriceFields">
+            <div class="subsection-label">Стоимость</div>
+            <label class="field">
+              <span>Цена входных токенов ($/1M)</span>
+              <input type="number" min="0" step="0.01" v-model.number="priceInput" placeholder="напр. 0.15" />
+            </label>
+            <label class="field">
+              <span>Цена выходных токенов ($/1M)</span>
+              <input type="number" min="0" step="0.01" v-model.number="priceOutput" placeholder="напр. 0.60" />
+            </label>
+            <label class="field">
+              <span>Цена кэшированных токенов ($/1M) <span class="muted small">(по умолчанию — как входные)</span></span>
+              <input type="number" min="0" step="0.01" v-model.number="priceCached" placeholder="напр. 0.075" />
+            </label>
+          </template>
+          <p v-else-if="provider === 'vsegpt'" class="muted small" style="margin:6px 0 0">
+            Стоимость приходит от VseGPT в ответе API (₽). Задавать вручную не нужно.
+          </p>
         </section>
 
         <section>
@@ -346,4 +376,17 @@ section h3 { margin: 0 0 8px 0; font-size: 0.75rem; color: var(--text-mute); tex
 .checkbox-field input[type=checkbox] { width: auto; margin: 0; flex-shrink: 0; }
 code { background: var(--bg-mute); padding: 2px 4px; border-radius: 3px; font-size: 0.75rem; word-break: break-all; }
 .proxy-auth-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.provider-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.provider-opt {
+  flex: 1;
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border); border-radius: 5px;
+  cursor: pointer; user-select: none;
+  background: var(--bg);
+  transition: border-color 0.1s, background 0.1s;
+}
+.provider-opt:hover { background: var(--bg-soft); }
+.provider-opt.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
+.provider-opt input { width: auto; margin: 0; flex-shrink: 0; }
 </style>

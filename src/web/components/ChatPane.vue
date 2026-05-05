@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
-import { type ChatTurn, turnsToItems, type TrackedJob } from '../api'
+import { type ChatTurn, type Settings, turnsToItems, type TrackedJob } from '../api'
 import ChatMessageList from './ChatMessageList.vue'
 import ChatInputArea from './ChatInputArea.vue'
 
@@ -9,6 +9,7 @@ const props = defineProps<{
   streaming: boolean
   llmConfigured: boolean
   chatId: string
+  settings: Settings | null
   runningJobs?: TrackedJob[]
 }>()
 const emit = defineEmits<{
@@ -57,6 +58,7 @@ function onSuggest(text: string) {
       :items="items"
       :streaming="streaming"
       :chatId="chatId"
+      :settings="settings"
       :runningJobs="runningJobs"
       @mouseup="onSelectionChange"
       @suggest="onSuggest"

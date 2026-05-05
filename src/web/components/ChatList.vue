@@ -12,10 +12,16 @@ const emit = defineEmits<{
   toggle: []
 }>()
 
-function chatCost(c: Chat): number | null {
+function chatCost(c: Chat) {
   if (!props.settings) return null
-  if (!c.tokensPrompt && !c.tokensCompletion) return null
-  return calcCost(c.tokensPrompt, c.tokensCompletion, c.tokensCached ?? 0, props.settings)
+  if (!c.tokensPrompt && !c.tokensCompletion && !c.totalCost) return null
+  return calcCost(c.tokensPrompt, c.tokensCompletion, c.tokensCached ?? 0, {
+    provider: props.settings.provider,
+    tokensCost: c.totalCost,
+    priceInput: props.settings.priceInput,
+    priceOutput: props.settings.priceOutput,
+    priceCached: props.settings.priceCached,
+  })
 }
 
 const renaming = ref<string | null>(null)

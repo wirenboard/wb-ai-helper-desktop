@@ -123,18 +123,38 @@ const currentChatTokens = computed(() => {
   )
 })
 
+const currentChatTokensCost = computed(() => {
+  // Sum of provider-reported tokensCost across assistant turns (VseGPT only — 0 for OpenAI)
+  return (activeChat.value?.turns ?? []).reduce(
+    (acc, t) => acc + (t.role === 'assistant' ? (t.tokensCost ?? 0) : 0),
+    0,
+  )
+})
+
 const currentChatCost = computed(() => {
   if (!settings.value) return null
   const { prompt, completion, cached } = currentChatTokens.value
-  if (!prompt && !completion) return null
-  return calcCost(prompt, completion, cached, settings.value)
+  if (!prompt && !completion && !currentChatTokensCost.value) return null
+  return calcCost(prompt, completion, cached, {
+    provider: settings.value.provider,
+    tokensCost: currentChatTokensCost.value,
+    priceInput: settings.value.priceInput,
+    priceOutput: settings.value.priceOutput,
+    priceCached: settings.value.priceCached,
+  })
 })
 
 const totalCost = computed(() => {
   if (!settings.value || !totalStats.value) return null
-  const { totalPromptTokens, totalCompletionTokens, totalCachedTokens } = totalStats.value
-  if (!totalPromptTokens && !totalCompletionTokens) return null
-  return calcCost(totalPromptTokens, totalCompletionTokens, totalCachedTokens ?? 0, settings.value)
+  const { totalPromptTokens, totalCompletionTokens, totalCachedTokens, totalCost: serverCost } = totalStats.value
+  if (!totalPromptTokens && !totalCompletionTokens && !serverCost) return null
+  return calcCost(totalPromptTokens, totalCompletionTokens, totalCachedTokens ?? 0, {
+    provider: settings.value.provider,
+    tokensCost: serverCost,
+    priceInput: settings.value.priceInput,
+    priceOutput: settings.value.priceOutput,
+    priceCached: settings.value.priceCached,
+  })
 })
 
 
@@ -450,6 +470,7 @@ const visibleTurns = computed<ChatTurn[]>(() => {
         :streaming="streaming"
         :llm-configured="health?.llmConfigured ?? true"
         :chat-id="activeChat.id"
+        :settings="settings"
         :running-jobs="runningJobs"
         @send="sendMessage"
         @stop="stopStreaming"

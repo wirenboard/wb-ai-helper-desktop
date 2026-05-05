@@ -12,8 +12,9 @@ import xml from 'highlight.js/lib/languages/xml'
 import sql from 'highlight.js/lib/languages/sql'
 import yaml from 'highlight.js/lib/languages/yaml'
 import ini from 'highlight.js/lib/languages/ini'
-import type { ChatItem, ChatItemToolCall } from '../api'
-import { fmtSize } from '../utils'
+import type { ChatItem, ChatItemToolCall, Settings } from '../api'
+import { calcCost } from '../api'
+import { fmtCost, fmtSize } from '../utils'
 
 hljs.registerLanguage('bash', bash); hljs.registerLanguage('sh', bash)
 hljs.registerLanguage('json', json)
@@ -47,7 +48,24 @@ function renderMd(text: string): string {
   return html.replace(/<li>\s*<p>([\s\S]*?)<\/p>\s*<\/li>/g, (_, inner) => `<li>${inner.trim()}</li>`)
 }
 
-const props = defineProps<{ item: ChatItem; chatId: string }>()
+const props = defineProps<{ item: ChatItem; chatId: string; settings?: Settings | null }>()
+
+const messageCost = computed(() => {
+  if (props.item.type !== 'assistant_text') return null
+  if (!props.settings) return null
+  const i = props.item
+  const p = i.tokensPrompt ?? 0
+  const c = i.tokensCompletion ?? 0
+  const k = i.tokensCached ?? 0
+  if (!p && !c && !i.tokensCost) return null
+  return calcCost(p, c, k, {
+    provider: props.settings.provider,
+    tokensCost: i.tokensCost,
+    priceInput: props.settings.priceInput,
+    priceOutput: props.settings.priceOutput,
+    priceCached: props.settings.priceCached,
+  })
+})
 
 const expanded = ref(false)
 const resultExpanded = ref(false)
@@ -134,8 +152,8 @@ async function downloadViaFetch(url: string, name: string) {
         {{ copied ? '✓' : '⎘' }}
       </button>
       <div ref="bubbleEl" v-html="assistantHtml" />
-      <div v-if="item.tokensPrompt || item.tokensCompletion" class="msg-footer">
-        <span class="token-meta">↑{{ item.tokensPrompt ?? 0 }} ↓{{ item.tokensCompletion ?? 0 }}<template v-if="item.tokensCached"> ⊙{{ item.tokensCached }}</template></span>
+      <div v-if="item.tokensPrompt || item.tokensCompletion || item.tokensCost" class="msg-footer">
+        <span class="token-meta">↑{{ item.tokensPrompt ?? 0 }} ↓{{ item.tokensCompletion ?? 0 }}<template v-if="item.tokensCached"> ⊙{{ item.tokensCached }}</template><template v-if="messageCost"> · {{ fmtCost(messageCost) }}</template></span>
       </div>
     </div>
   </div>

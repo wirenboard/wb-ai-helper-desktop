@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
-import type { ChatItem, ChatItemToolCall, TrackedJob } from '../api'
+import type { ChatItem, ChatItemToolCall, Settings, TrackedJob } from '../api'
 import { fmtSize, plural } from '../utils'
 import ChatMessage from './ChatMessage.vue'
 
@@ -8,6 +8,7 @@ const props = defineProps<{
   items: ChatItem[]
   streaming: boolean
   chatId: string
+  settings: Settings | null
   runningJobs?: TrackedJob[]
 }>()
 const emit = defineEmits<{ suggest: [text: string]; cancelJob: [jobId: string] }>()
@@ -129,7 +130,7 @@ onBeforeUnmount(() => ro?.disconnect())
 
     <!-- Message groups -->
     <template v-for="g in groups" :key="g.key">
-      <ChatMessage v-if="g.kind === 'single'" :item="g.item" :chatId="chatId" />
+      <ChatMessage v-if="g.kind === 'single'" :item="g.item" :chatId="chatId" :settings="settings" />
       <div v-else-if="g.kind === 'tools'" class="tool-group">
         <button class="tool-group-head" @click="toggle(g.key)">
           <span class="caret">{{ expanded[g.key] ? '▾' : '▸' }}</span>
@@ -139,7 +140,7 @@ onBeforeUnmount(() => ro?.disconnect())
           <span class="tool-group-names">{{ [...new Set(g.items.map(i => i.name))].join(', ') }}</span>
         </button>
         <div v-if="expanded[g.key]" class="tool-group-body">
-          <ChatMessage v-for="(it, k) in g.items" :key="k" :item="it" :chatId="chatId" />
+          <ChatMessage v-for="(it, k) in g.items" :key="k" :item="it" :chatId="chatId" :settings="settings" />
         </div>
       </div>
       <!-- Inline job indicators for this group -->

@@ -3,7 +3,10 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 
+export type LlmProvider = 'openai' | 'vsegpt' | 'custom'
+
 export type Settings = {
+  provider: LlmProvider
   apiKey: string
   baseURL: string
   model: string
@@ -18,9 +21,21 @@ export type Settings = {
   sshKeyPath: string
   discoveryInterval: number
   openBrowser: boolean
+  /**
+   * Cost per 1 unit, semantics depend on `provider`:
+   *  - openai: USD per 1M tokens (input/output/cached)
+   *  - vsegpt: RUB per 1000 chars (input/output; cached not used — VseGPT has no cache pricing)
+   *  - custom: ignored
+   */
   priceInput: number | null
   priceOutput: number | null
   priceCached: number | null
+}
+
+export const PROVIDER_DEFAULTS: Record<LlmProvider, { baseURL: string; label: string }> = {
+  openai: { baseURL: 'https://api.openai.com/v1', label: 'OpenAI' },
+  vsegpt: { baseURL: 'https://api.vsegpt.ru/v1', label: 'VseGPT.Ru' },
+  custom: { baseURL: '', label: 'Custom' },
 }
 
 export type PublicSettings = Omit<Settings, 'apiKey' | 'mqttPassword' | 'sshPassword' | 'llmProxyPassword'> & {
@@ -32,6 +47,7 @@ export type PublicSettings = Omit<Settings, 'apiKey' | 'mqttPassword' | 'sshPass
 }
 
 const DEFAULTS: Settings = {
+  provider: 'openai',
   apiKey: '',
   baseURL: '',
   model: '',
@@ -88,6 +104,7 @@ export class SettingsStore {
   /** Sanitize for the UI — never echo secrets. */
   toPublic(): PublicSettings {
     return {
+      provider: this.cache.provider,
       baseURL: this.cache.baseURL,
       model: this.cache.model,
       llmProxy: this.cache.llmProxy,

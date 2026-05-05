@@ -11,6 +11,7 @@ export type Chat = {
   tokensPrompt: number
   tokensCompletion: number
   tokensCached: number
+  totalCost: number  // Provider-reported (RUB for VseGPT, 0 otherwise — frontend computes USD from prices)
 }
 
 const SYSTEM_PROMPT = `Ты — десктопный помощник интегратора Wiren Board. Глубоко знаешь промышленную автоматизацию, встраиваемые Linux-системы, программирование (bash, Python, JavaScript/Node.js), протоколы Modbus/MQTT/RS-485, экосистему Wiren Board — оборудование, прошивки, сервисы, конфиги. Когда сталкиваешься с проблемой — ищешь решение активно: проверяешь факты на контроллере, смотришь документацию, пробуешь альтернативные подходы. Не сдаёшься на первой ошибке — анализируешь причину и идёшь дальше. Помогаешь с любыми инженерными и программными задачами: диагностика и управление Wiren Board, написание скриптов wb-rules (JavaScript), Python-проектов, bash-скриптов, автоматизация, анализ данных — всё в игре.
@@ -73,6 +74,7 @@ type ChatRow = {
   tokens_prompt: number
   tokens_completion: number
   tokens_cached: number
+  total_cost: number
 }
 
 type TurnRow = {
@@ -83,6 +85,7 @@ type TurnRow = {
   tokens_prompt: number
   tokens_completion: number
   tokens_cached: number
+  total_cost: number
 }
 
 export class ChatStore {
@@ -94,7 +97,8 @@ export class ChatStore {
         `SELECT c.id, c.title, c.created_at, c.updated_at, c.context_sns,
                 COALESCE(SUM(t.tokens_prompt), 0) AS tokens_prompt,
                 COALESCE(SUM(t.tokens_completion), 0) AS tokens_completion,
-                COALESCE(SUM(t.tokens_cached), 0) AS tokens_cached
+                COALESCE(SUM(t.tokens_cached), 0) AS tokens_cached,
+                COALESCE(SUM(t.total_cost), 0) AS total_cost
            FROM chats c
            LEFT JOIN turns t ON t.chat_id = c.id
            GROUP BY c.id
@@ -110,7 +114,8 @@ export class ChatStore {
         `SELECT c.id, c.title, c.created_at, c.updated_at, c.context_sns,
                 COALESCE((SELECT SUM(tokens_prompt) FROM turns WHERE chat_id = c.id), 0) AS tokens_prompt,
                 COALESCE((SELECT SUM(tokens_completion) FROM turns WHERE chat_id = c.id), 0) AS tokens_completion,
-                COALESCE((SELECT SUM(tokens_cached) FROM turns WHERE chat_id = c.id), 0) AS tokens_cached
+                COALESCE((SELECT SUM(tokens_cached) FROM turns WHERE chat_id = c.id), 0) AS tokens_cached,
+                COALESCE((SELECT SUM(total_cost) FROM turns WHERE chat_id = c.id), 0) AS total_cost
            FROM chats c WHERE c.id = ?`,
       )
       .get(id)
@@ -165,7 +170,7 @@ export class ChatStore {
   appendTurn(
     id: string,
     turn: ChatTurn,
-    usage?: { promptTokens: number; completionTokens: number; cachedTokens?: number },
+    usage?: { promptTokens?: number; completionTokens?: number; cachedTokens?: number; totalCost?: number },
   ): Chat | undefined {
     const now = Date.now()
     const ord = this.nextOrd(id)
@@ -175,24 +180,25 @@ export class ChatStore {
     const tokensPrompt = usage?.promptTokens ?? 0
     const tokensCompletion = usage?.completionTokens ?? 0
     const tokensCached = usage?.cachedTokens ?? 0
+    const totalCost = usage?.totalCost ?? 0
     this.db
       .query(
-        `INSERT INTO turns (chat_id, ord, role, content, tool_call_id, tool_calls, tokens_prompt, tokens_completion, tokens_cached, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO turns (chat_id, ord, role, content, tool_call_id, tool_calls, tokens_prompt, tokens_completion, tokens_cached, total_cost, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, ord, turn.role, turn.content, toolCallId, toolCalls, tokensPrompt, tokensCompletion, tokensCached, now)
+      .run(id, ord, turn.role, turn.content, toolCallId, toolCalls, tokensPrompt, tokensCompletion, tokensCached, totalCost, now)
     this.db.query(`UPDATE chats SET updated_at = ? WHERE id = ?`).run(now, id)
     if (turn.role === 'user') this.maybeAutoTitle(id, turn.content)
     return this.get(id)
   }
 
-  globalStats(): { totalPromptTokens: number; totalCompletionTokens: number; totalCachedTokens: number } {
+  globalStats(): { totalPromptTokens: number; totalCompletionTokens: number; totalCachedTokens: number; totalCost: number } {
     const r = this.db
-      .query<{ p: number; c: number; k: number }, []>(
-        `SELECT COALESCE(SUM(tokens_prompt), 0) AS p, COALESCE(SUM(tokens_completion), 0) AS c, COALESCE(SUM(tokens_cached), 0) AS k FROM turns`,
+      .query<{ p: number; c: number; k: number; cost: number }, []>(
+        `SELECT COALESCE(SUM(tokens_prompt), 0) AS p, COALESCE(SUM(tokens_completion), 0) AS c, COALESCE(SUM(tokens_cached), 0) AS k, COALESCE(SUM(total_cost), 0) AS cost FROM turns`,
       )
       .get()
-    return { totalPromptTokens: r?.p ?? 0, totalCompletionTokens: r?.c ?? 0, totalCachedTokens: r?.k ?? 0 }
+    return { totalPromptTokens: r?.p ?? 0, totalCompletionTokens: r?.c ?? 0, totalCachedTokens: r?.k ?? 0, totalCost: r?.cost ?? 0 }
   }
 
   systemPromptFor(sns: string[]): string {
@@ -205,7 +211,7 @@ export class ChatStore {
   private loadTurns(chatId: string): ChatTurn[] {
     const rows = this.db
       .query<TurnRow, [string]>(
-        `SELECT role, content, tool_call_id, tool_calls, tokens_prompt, tokens_completion, tokens_cached
+        `SELECT role, content, tool_call_id, tool_calls, tokens_prompt, tokens_completion, tokens_cached, total_cost
            FROM turns WHERE chat_id = ? ORDER BY ord ASC`,
       )
       .all(chatId)
@@ -247,6 +253,7 @@ function rowToChatHeader(row: ChatRow): Chat {
     tokensPrompt: row.tokens_prompt,
     tokensCompletion: row.tokens_completion,
     tokensCached: row.tokens_cached,
+    totalCost: row.total_cost,
   }
 }
 
@@ -259,8 +266,13 @@ function rowToTurn(row: TurnRow): ChatTurn {
     if (row.tool_calls) {
       try { toolCalls = JSON.parse(row.tool_calls) } catch {}
     }
-    const tokens = row.tokens_prompt || row.tokens_completion || row.tokens_cached
-      ? { tokensPrompt: row.tokens_prompt, tokensCompletion: row.tokens_completion, tokensCached: row.tokens_cached }
+    const tokens = row.tokens_prompt || row.tokens_completion || row.tokens_cached || row.total_cost
+      ? {
+          tokensPrompt: row.tokens_prompt,
+          tokensCompletion: row.tokens_completion,
+          tokensCached: row.tokens_cached,
+          tokensCost: row.total_cost,
+        }
       : undefined
     return { role: 'assistant', content: row.content, ...(toolCalls?.length ? { toolCalls } : {}), ...tokens }
   }
