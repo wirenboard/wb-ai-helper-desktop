@@ -14,6 +14,7 @@ import { trackJob, getRunningJobForSn, updateJobState } from './jobs.ts'
 import { runAudit, runSnapshot, runDiffSnapshot } from './audit.ts'
 import { basename } from 'node:path'
 import { saveAttachment, getAttachment, readAttachment, listSession as listAttachments } from './attachments.ts'
+import { renderHistoryChart } from './history-chart.ts'
 
 export function toolSchemas(): ChatCompletionTool[] {
   return [
@@ -539,6 +540,37 @@ export function toolSchemas(): ChatCompletionTool[] {
             period: { type: 'string', description: 'Период: число + единица (m/h/d/w/y). Примеры: "2h", "30m", "3d".' },
             from: { type: 'number', description: 'Начало диапазона (unix timestamp, секунды).' },
             to: { type: 'number', description: 'Конец диапазона (unix timestamp, секунды).' },
+          },
+          required: ['sn', 'channels'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_history_chart',
+        description:
+          'Построить график истории MQTT-каналов и сохранить как вложение (SVG). ' +
+          'Использует wb-mqtt-db через RPC db_logger/history/get_values, рендерит через vega-lite. ' +
+          'Поддерживает несколько серий на одном графике, twin Y-axis при разных единицах. ' +
+          'Используй когда пользователь просит «покажи график», «пришли график», «нарисуй». ' +
+          'Используй period вместо from/to.',
+        parameters: {
+          type: 'object',
+          properties: {
+            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            channels: {
+              type: 'array',
+              description: 'Каналы для графика. Каждый элемент — пара [device_id, control_name].',
+              items: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 2 },
+              minItems: 1,
+            },
+            period: { type: 'string', description: 'Период: число + единица (m/h/d/w/y). Примеры: "2h", "30m", "3d", "1y".' },
+            from: { type: 'number', description: 'Начало диапазона (unix timestamp, секунды). Используй только если period не подходит.' },
+            to: { type: 'number', description: 'Конец диапазона (unix timestamp, секунды). По умолчанию — сейчас.' },
+            title: { type: 'string', description: 'Заголовок графика (например: "CPU Temperature за сутки").' },
+            ylabel: { type: 'string', description: 'Подпись оси Y (обычно — единица измерения, например "°C").' },
           },
           required: ['sn', 'channels'],
           additionalProperties: false,
@@ -1469,6 +1501,39 @@ import json as j; print(j.dumps(m))
       return JSON.stringify(result, null, 2)
     }
 
+    case 'get_history_chart': {
+      const c = resolve1(args['sn'], ctx)
+      const channels = args['channels'] as [string, string][]
+      if (!Array.isArray(channels) || channels.length === 0) return JSON.stringify({ error: 'channels обязателен' })
+      const { from, to } = resolveTimeRange(args)
+      if (!from) return JSON.stringify({ error: 'укажи period (например: 2h, 6h, 24h, 7d) или from (unix timestamp)' })
+      const title = typeof args['title'] === 'string' ? args['title'] : ''
+      const ylabel = typeof args['ylabel'] === 'string' ? args['ylabel'] : ''
+      const histData = await fetchHistory(ctx, c, channels, from, to)
+      const totalPoints = histData.series.reduce((n, s) => n + s.points.length, 0)
+      try {
+        const svg = await renderHistoryChart(histData.series, from, to, title, ylabel)
+        const fname = `chart-${c.sn}-${Date.now()}.svg`
+        const r = saveAttachment(ctx.sessionId, fname, Buffer.from(svg, 'utf-8'))
+        if (!r.ok) return JSON.stringify({ error: r.error })
+        return JSON.stringify({
+          fileId: r.meta.id,
+          fileName: r.meta.name,
+          mime: r.meta.mime,
+          size: r.meta.size,
+          channels: histData.series.map(s => ({
+            label: s.label, units: s.units, points: s.points.length,
+            min: s.min, max: s.max, avg: s.avg,
+          })),
+          total_points: totalPoints,
+          note: 'График сохранён как вложение SVG. Пользователь видит его в чате как картинку.',
+        }, null, 2)
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e)
+        return JSON.stringify({ error: `Ошибка рендера графика: ${msg}` })
+      }
+    }
+
     case 'get_history_table': {
       const c = resolve1(args['sn'], ctx)
       const channels = args['channels'] as [string, string][]
@@ -1774,7 +1839,7 @@ function resolveTimeRange(input: Record<string, unknown>): { from: number; to: n
 
 interface HistoryPoint { v: number; t: number }
 interface RawHistoryPoint { c: number; t: number; v: string }
-interface HistorySeries {
+export interface HistorySeries {
   label: string
   points: HistoryPoint[]
   min: number
