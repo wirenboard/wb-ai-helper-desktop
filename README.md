@@ -1,4 +1,4 @@
-# WB Helper — десктопный AI-помощник для Wiren Board
+# WB AI Helper — десктопный AI-помощник для Wiren Board
 
 Один бинарник под Linux / Windows. Скачал → запустил → в браузере чат и список контроллеров, найденных в локальной сети по mDNS (`wirenboard-<SN>.local`). API-ключ LLM, MQTT- и SSH-креды задаются в UI и сохраняются рядом с бинарником.
 
@@ -10,7 +10,9 @@
   - **MQTT**: список устройств и контролов, чтение/запись топиков на одном или группе сразу;
   - **HTTP**: пинг web-UI;
   - **SSH**: `ssh_exec`, `ssh_read_file`, `ssh_read_logs` (journalctl). Дефолт `root`/`wirenboard`, фоллбек: ключ → пароль;
+- статистика токенов: по каждому сообщению, текущему чату и общий счётчик;
 - список моделей подтягивается с сервера автоматически после ввода ключа;
+- боковые панели чатов и контроллеров сворачиваются, освобождая место для чата;
 - фронт встроен в бинарник, наружу только LLM и контроллеры (22 / 80 / 1883);
 - кросс-платформа: Linux x64 и Windows x64, без установки.
 
@@ -75,18 +77,19 @@ src/
 │   ├── ssh.ts               пул SSH-клиентов (ssh2) + ssh_exec/read_file/read_logs
 │   ├── http-probe.ts        HTTP-пинг web UI контроллера
 │   ├── chats.ts             хранилище чатов в SQLite (chats / turns)
-│   ├── llm.ts               OpenAI streaming + цикл tool-calling
+│   ├── llm.ts               OpenAI streaming + цикл tool-calling + сбор usage
 │   ├── tools.ts             описания и обработчики инструментов
 │   ├── embed.ts             отдача встроенных ассетов
 │   └── embed-manifest.ts    AUTO-GENERATED, статические импорты файлов фронта
 └── web/                     Vue 3, vite-сборка, чат-first
     ├── App.vue
     ├── api.ts               клиент API + SSE-парсер
+    ├── utils.ts             общие утилиты (fmtTok и др.)
     └── components/
-        ├── ChatList.vue
-        ├── ChatPane.vue
-        ├── ControllerList.vue
-        └── SettingsPanel.vue
+        ├── ChatList.vue     сворачиваемая левая панель
+        ├── ChatPane.vue     чат + поле ввода
+        ├── ControllerList.vue  сворачиваемая правая панель
+        └── SettingsPanel.vue   модальные настройки
 ```
 
 Под `bun build --compile` фронт пакуется в exe через `import('./web/dist/...', { with: { type: 'file' } })` — поэтому никаких файлов рядом нести не нужно, только сам бинарник. SQLite-файл и settings.json создаются при первом запуске.

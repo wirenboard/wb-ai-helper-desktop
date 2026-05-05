@@ -25,7 +25,7 @@ bun scripts/smoke.ts
 
 ## Architecture
 
-WB Helper is a single-binary desktop AI assistant for Wiren Board IoT controllers. It bundles a Hono HTTP backend and a Vue 3 frontend into one standalone binary (Bun `--compile`).
+WB AI Helper is a single-binary desktop AI assistant for Wiren Board IoT controllers. It bundles a Hono HTTP backend and a Vue 3 frontend into one standalone binary (Bun `--compile`).
 
 **Stack:** Bun + Hono (backend), Vue 3 + Vite (frontend), SQLite (persistence), OpenAI SDK (LLM), MQTT + SSH + HTTP (device protocols), bonjour-service (mDNS discovery).
 
@@ -43,7 +43,7 @@ WB Helper is a single-binary desktop AI assistant for Wiren Board IoT controller
 | File | Role |
 |------|------|
 | `src/server/index.ts` | Entry point — initialises all subsystems, registers Hono routes |
-| `src/server/llm.ts` | OpenAI streaming client + agentic tool-call loop, yields `StreamEvent` |
+| `src/server/llm.ts` | OpenAI streaming client + agentic tool-call loop, yields `StreamEvent`; collects token usage |
 | `src/server/tools.ts` | Tool schema definitions + dispatch; 9 tools for list/probe/mqtt/ssh |
 | `src/server/mqtt-pool.ts` | Per-controller MQTT connection pool; read/write/list |
 | `src/server/ssh.ts` | SSH pool with key → password fallback (default: root/wirenboard) |

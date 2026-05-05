@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { api, type Chat, type ChatTurn, type Controller, type Health, type Settings, type TokenStats } from './api'
+import { fmtTok } from './utils'
 import ChatList from './components/ChatList.vue'
 import ChatPane from './components/ChatPane.vue'
 import ControllerList from './components/ControllerList.vue'
@@ -43,11 +44,6 @@ const currentChatTokens = computed(() => {
   )
 })
 
-function fmtTok(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
-  return String(n)
-}
 
 async function loadInitial() {
   try {

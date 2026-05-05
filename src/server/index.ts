@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process'
 import { Hono } from 'hono'
 import { stream } from 'hono/streaming'
 import { cors } from 'hono/cors'
@@ -160,7 +161,6 @@ app.post('/api/chats/:id/message', async (c) => {
   chats.appendTurn(id, { role: 'user', content: userText })
 
   return stream(c, async (s) => {
-    s.onAbort(() => {})
     const send = (event: string, data: unknown) => s.write(formatSse(event, data))
     await send('user', { text: userText })
 
@@ -278,7 +278,6 @@ function broadcast(event: string, data: unknown) {
 }
 
 function openBrowser(url: string) {
-  const { spawn } = require('node:child_process') as typeof import('node:child_process')
   const cmd: [string, string[]] =
     process.platform === 'win32'
       ? ['cmd', ['/c', 'start', '""', url]]

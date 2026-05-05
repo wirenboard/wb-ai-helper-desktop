@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Chat, TokenStats } from '../api'
+import { fmtTok } from '../utils'
 
 defineProps<{ chats: Chat[]; activeId: string | null; totalStats: TokenStats | null; open: boolean }>()
 const emit = defineEmits<{
@@ -9,11 +10,6 @@ const emit = defineEmits<{
   toggle: []
 }>()
 
-function fmtTok(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
-  return String(n)
-}
 </script>
 
 <template>

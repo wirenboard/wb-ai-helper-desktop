@@ -217,10 +217,8 @@ function rowToTurn(row: TurnRow): ChatTurn {
     }
     const tokens = row.tokens_prompt || row.tokens_completion
       ? { tokensPrompt: row.tokens_prompt, tokensCompletion: row.tokens_completion }
-      : {}
-    return toolCalls?.length
-      ? { role: 'assistant', content: row.content, toolCalls, ...tokens }
-      : { role: 'assistant', content: row.content, ...tokens }
+      : undefined
+    return { role: 'assistant', content: row.content, ...(toolCalls?.length ? { toolCalls } : {}), ...tokens }
   }
   if (row.role === 'system') return { role: 'system', content: row.content }
   return { role: 'user', content: row.content }
