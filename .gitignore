@@ -1,0 +1,13 @@
+node_modules/
+.env
+.env.local
+build/
+dist/
+src/web/dist/
+*.log
+.DS_Store
+
+# Runtime files created next to binary
+wb-ai-helper-settings.json
+wb-ai-helper.db
+*.db

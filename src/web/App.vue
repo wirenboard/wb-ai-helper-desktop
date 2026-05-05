@@ -1,0 +1,261 @@
+<script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { api, type Chat, type ChatTurn, type Controller, type Health, type Settings } from './api'
+import ChatList from './components/ChatList.vue'
+import ChatPane from './components/ChatPane.vue'
+import ControllerList from './components/ControllerList.vue'
+import SettingsPanel from './components/SettingsPanel.vue'
+
+const health = ref<Health | null>(null)
+const settings = ref<Settings | null>(null)
+const settingsOpen = ref(false)
+const controllers = ref<Controller[]>([])
+const chats = ref<Chat[]>([])
+const activeChatId = ref<string | null>(null)
+const activeChat = ref<Chat | null>(null)
+const liveTurns = reactive<{ [chatId: string]: ChatTurn[] }>({})
+const streaming = ref(false)
+const errorBanner = ref<string | null>(null)
+let unsubscribe: (() => void) | null = null
+let abortStream: AbortController | null = null
+
+const selectedSns = computed(() => activeChat.value?.contextSns ?? [])
+
+async function loadInitial() {
+  try {
+    const [h, s] = await Promise.all([api.health(), api.settings()])
+    health.value = h
+    settings.value = s
+    if (!h.llmConfigured) settingsOpen.value = true
+  } catch (e: any) {
+    errorBanner.value = `Бэкенд недоступен: ${e.message}`
+    return
+  }
+  await refreshControllers()
+  await refreshChats()
+  if (!chats.value.length) {
+    await newChat()
+  } else {
+    await selectChat(chats.value[0]!.id)
+  }
+  unsubscribe = api.subscribeEvents((event, data) => {
+    if (event === 'controllers') controllers.value = data
+  })
+}
+
+async function onSettingsSaved(next: Settings) {
+  settings.value = next
+  health.value = await api.health()
+  if (next.apiKeyConfigured && next.model) settingsOpen.value = false
+}
+
+async function refreshControllers() {
+  const r = await api.controllers()
+  controllers.value = r.controllers
+}
+
+async function rescan() {
+  const r = await api.refresh()
+  controllers.value = r.controllers
+}
+
+async function refreshChats() {
+  const r = await api.chats()
+  chats.value = r.chats
+}
+
+async function newChat() {
+  const c = await api.createChat([...selectedSns.value])
+  chats.value = [c, ...chats.value.filter((x) => x.id !== c.id)]
+  await selectChat(c.id)
+}
+
+async function selectChat(id: string) {
+  activeChatId.value = id
+  const c = await api.getChat(id)
+  activeChat.value = c
+  if (!liveTurns[id]) liveTurns[id] = []
+}
+
+async function deleteChat(id: string) {
+  await api.deleteChat(id)
+  delete liveTurns[id]
+  chats.value = chats.value.filter((c) => c.id !== id)
+  if (activeChatId.value === id) {
+    activeChatId.value = null
+    activeChat.value = null
+    if (chats.value.length) await selectChat(chats.value[0]!.id)
+    else await newChat()
+  }
+}
+
+function patchLocalChat(c: Chat) {
+  activeChat.value = c
+  chats.value = chats.value.map((x) => (x.id === c.id ? c : x))
+}
+
+async function setChatContext(sns: string[]) {
+  if (!activeChatId.value) return
+  patchLocalChat(await api.patchChat(activeChatId.value, { contextSns: sns }))
+}
+
+async function renameChat(title: string) {
+  if (!activeChatId.value) return
+  patchLocalChat(await api.patchChat(activeChatId.value, { title }))
+}
+
+async function sendMessage(text: string) {
+  if (!activeChat.value || streaming.value) return
+  const id = activeChat.value.id
+  streaming.value = true
+  errorBanner.value = null
+  liveTurns[id] = [
+    ...(liveTurns[id] ?? []),
+    { role: 'user', content: text },
+    { role: 'assistant', content: '' },
+  ]
+  abortStream = new AbortController()
+  try {
+    await api.sendMessage(
+      id,
+      text,
+      (event, data) => handleStreamEvent(id, event, data),
+      abortStream.signal,
+    )
+  } catch (e: any) {
+    if (e?.name !== 'AbortError') errorBanner.value = e.message
+  } finally {
+    streaming.value = false
+    abortStream = null
+    if (activeChatId.value === id) {
+      const c = await api.getChat(id).catch(() => null)
+      if (c) patchLocalChat(c)
+    }
+  }
+}
+
+function handleStreamEvent(chatId: string, event: string, data: any) {
+  const buf = liveTurns[chatId]
+  if (!buf) return
+  if (event === 'error') {
+    errorBanner.value = data?.message ?? String(data)
+    return
+  }
+  if (event === 'text-delta') {
+    const last = buf[buf.length - 1]
+    if (last?.role === 'assistant') last.content += data.text
+    return
+  }
+  if (event === 'tool-call') {
+    buf.push({
+      role: 'tool',
+      toolCallId: data.id,
+      content: `▶ ${data.name}\n${pretty(data.arguments)}`,
+    })
+    buf.push({ role: 'assistant', content: '' })
+    return
+  }
+  if (event === 'tool-result') {
+    const idx = buf.findIndex(
+      (t) => t.role === 'tool' && (t as any).toolCallId === data.id,
+    )
+    if (idx >= 0) {
+      buf[idx] = {
+        role: 'tool',
+        toolCallId: data.id,
+        content: `${buf[idx]!.content}\n— result —\n${data.result}`,
+      }
+    } else {
+      buf.push({ role: 'tool', toolCallId: data.id, content: data.result })
+    }
+  }
+}
+
+function stopStreaming() {
+  abortStream?.abort()
+}
+
+function pretty(s: string): string {
+  try {
+    return JSON.stringify(JSON.parse(s), null, 2)
+  } catch {
+    return s
+  }
+}
+
+onMounted(loadInitial)
+onBeforeUnmount(() => {
+  unsubscribe?.()
+  abortStream?.abort()
+})
+
+const visibleTurns = computed<ChatTurn[]>(() => {
+  if (!activeChat.value) return []
+  const persisted = activeChat.value.turns.filter((t) => t.role !== 'system')
+  const live = liveTurns[activeChat.value.id] ?? []
+  // Persisted is updated after the stream ends; while streaming, show live.
+  return streaming.value ? live : persisted.length ? persisted : live
+})
+</script>
+
+<template>
+  <div class="app-shell">
+    <ChatList
+      :chats="chats"
+      :active-id="activeChatId"
+      @new="newChat"
+      @select="selectChat"
+      @delete="deleteChat"
+    />
+
+    <div class="chat-pane">
+      <div class="chat-header" v-if="activeChat">
+        <div class="chat-title" :title="activeChat.title">{{ activeChat.title }}</div>
+        <div class="chat-context small">
+          <span v-if="!activeChat.contextSns.length" class="muted">Контекст: все/выбрать справа →</span>
+          <span v-else class="context-chips">
+            <span class="chip" v-for="sn in activeChat.contextSns" :key="sn">{{ sn }}</span>
+          </span>
+        </div>
+        <button class="ghost" title="Настройки" @click="settingsOpen = true">⚙</button>
+      </div>
+      <div v-if="errorBanner" class="error">{{ errorBanner }}</div>
+      <ChatPane
+        v-if="activeChat"
+        :turns="visibleTurns"
+        :streaming="streaming"
+        :llm-configured="health?.llmConfigured ?? true"
+        @send="sendMessage"
+        @stop="stopStreaming"
+        @rename="renameChat"
+      />
+      <div v-else class="welcome">
+        <h2>WB Helper</h2>
+        <p>Помощник интегратора Wiren Board. Создайте чат слева — справа выберите контроллеры из локальной сети.</p>
+        <button class="primary" @click="settingsOpen = true">Настройки</button>
+      </div>
+    </div>
+
+    <SettingsPanel
+      :settings="settings"
+      :open="settingsOpen"
+      @close="settingsOpen = false"
+      @saved="onSettingsSaved"
+    />
+
+    <ControllerList
+      :controllers="controllers"
+      :selected="selectedSns"
+      @rescan="rescan"
+      @add-manual="(host) => api.addController(host).then(refreshControllers)"
+      @remove="(sn) => api.removeController(sn).then(refreshControllers)"
+      @toggle="(sn) => {
+        const cur = new Set(selectedSns)
+        if (cur.has(sn)) cur.delete(sn); else cur.add(sn)
+        setChatContext([...cur])
+      }"
+      @select-all="setChatContext(controllers.map((c) => c.sn))"
+      @clear="setChatContext([])"
+    />
+  </div>
+</template>
