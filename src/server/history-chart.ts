@@ -1,5 +1,5 @@
 // Render a multi-series time-series chart via Vega-Lite SSR.
-// Returns SVG bytes; frontend treats `image/svg+xml` as an inline image.
+// Returns SVG string; the frontend renders `image/svg+xml` inline as an image.
 
 import * as vega from 'vega'
 import { compile } from 'vega-lite'
@@ -7,40 +7,60 @@ import type { TopLevelSpec } from 'vega-lite'
 import type { HistorySeries } from './tools.ts'
 
 interface FlatPoint {
-  t: string          // ISO timestamp (vega-lite handles temporal axis natively)
-  v: number
-  series: string     // series label (becomes legend / colour key)
-  unit: string       // grouping label for twin Y-axis (one axis per unit)
+  t: string          // ISO timestamp
+  v: number          // raw value
+  vn: number         // normalised value, 0..1 (used for 3+ unit-group fallback)
+  series: string     // series label (legend key)
+  unit: string       // grouping key for axis assignment
 }
 
-/**
- * Decide which series share a Y-axis. Series with identical `units` always
- * share. Series with no units fall on the primary axis.
- *
- * If exactly two distinct unit groups appear and their value ranges don't
- * overlap, vega-lite renders independent Y-axes via `resolve.scale.y='independent'`.
- */
-function hasIndependentY(series: HistorySeries[]): boolean {
-  const groups = new Map<string, [number, number]>()
-  for (const s of series) {
-    if (!s.points.length) continue
-    const key = s.units ?? ''
-    const cur = groups.get(key)
-    if (!cur) groups.set(key, [s.min, s.max])
-    else groups.set(key, [Math.min(cur[0], s.min), Math.max(cur[1], s.max)])
-  }
-  if (groups.size !== 2) return false
-  const [a, b] = [...groups.values()]
-  if (!a || !b) return false
-  // Non-overlapping ranges → independent axes make sense
-  return a[1] < b[0] || b[1] < a[0]
-}
+const PALETTE = ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d']
 
 function pickTimeFormat(durationSec: number): string {
   if (durationSec <= 3600)         return '%H:%M:%S'
   if (durationSec <= 86400)        return '%H:%M'
   if (durationSec <= 7 * 86400)    return '%d.%m %H:%M'
   return '%d.%m'
+}
+
+function emptySvg(message: string): string {
+  return (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 240" font-family="system-ui,sans-serif">' +
+    '<rect width="880" height="240" fill="#ffffff"/>' +
+    `<text x="440" y="120" text-anchor="middle" fill="#64748b" font-size="14">${message}</text>` +
+    '</svg>'
+  )
+}
+
+/** Group series by `units`. Series without units share the empty-string group. */
+function groupByUnits(series: HistorySeries[]): Map<string, HistorySeries[]> {
+  const groups = new Map<string, HistorySeries[]>()
+  for (const s of series) {
+    const key = s.units ?? ''
+    const arr = groups.get(key)
+    if (arr) arr.push(s)
+    else groups.set(key, [s])
+  }
+  return groups
+}
+
+function seriesLabel(s: HistorySeries): string {
+  return s.units ? `${s.label} (${s.units})` : s.label
+}
+
+/** Build a flat dataset. Each row carries raw + normalised value plus grouping keys. */
+function flatten(nonEmpty: HistorySeries[]): FlatPoint[] {
+  const out: FlatPoint[] = []
+  for (const s of nonEmpty) {
+    const range = s.max - s.min
+    const norm = (v: number) => (range > 0 ? (v - s.min) / range : 0.5)
+    const label = seriesLabel(s)
+    const unit = s.units ?? ''
+    for (const p of s.points) {
+      out.push({ t: new Date(p.t * 1000).toISOString(), v: p.v, vn: norm(p.v), series: label, unit })
+    }
+  }
+  return out
 }
 
 export async function renderHistoryChart(
@@ -51,89 +71,125 @@ export async function renderHistoryChart(
   ylabel: string,
 ): Promise<string> {
   const nonEmpty = series.filter(s => s.points.length > 0)
+  if (!nonEmpty.length) return emptySvg('Нет данных за выбранный период')
 
-  // Flatten into a single dataset; vega-lite groups by `series` for colour
-  const values: FlatPoint[] = []
-  for (const s of nonEmpty) {
-    const seriesLabel = s.units ? `${s.label} (${s.units})` : s.label
-    const unit = s.units ?? ''
-    for (const p of s.points) {
-      values.push({ t: new Date(p.t * 1000).toISOString(), v: p.v, series: seriesLabel, unit })
-    }
-  }
-
+  const values = flatten(nonEmpty)
+  const groups = groupByUnits(nonEmpty)
+  const groupCount = groups.size
   const durationSec = to - from
   const timeFormat = pickTimeFormat(durationSec)
 
-  const useTwinAxis = hasIndependentY(nonEmpty)
+  const xScaleDomain = [new Date(from * 1000).toISOString(), new Date(to * 1000).toISOString()]
+  const xEnc = {
+    field: 't',
+    type: 'temporal',
+    axis: { title: null, format: timeFormat, labelAngle: -30, labelOverlap: 'parity' },
+    scale: { domain: xScaleDomain },
+  } as const
 
-  const spec: TopLevelSpec = {
+  const colorRange = nonEmpty.map((_, i) => PALETTE[i % PALETTE.length] ?? '#000')
+  const colorEnc = {
+    field: 'series',
+    type: 'nominal',
+    scale: { domain: nonEmpty.map(seriesLabel), range: colorRange },
+    legend: nonEmpty.length > 1 ? { title: null, orient: 'bottom', columns: 0 } : null,
+  } as const
+
+  const baseConfig = {
+    view: { stroke: 'transparent' },
+    axis: { labelColor: '#64748b', titleColor: '#64748b', gridColor: '#e2e8f0' },
+    legend: { labelColor: '#334155', titleColor: '#334155' },
+  } as const
+
+  const baseSpec: Omit<TopLevelSpec, 'data'> = {
     $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
     width: 880,
     height: 360,
     background: '#ffffff',
     title: title ? { text: title, fontSize: 14, color: '#1e293b' } : undefined,
-    config: {
-      view: { stroke: 'transparent' },
-      axis: { labelColor: '#64748b', titleColor: '#64748b', gridColor: '#e2e8f0' },
-      legend: { labelColor: '#334155', titleColor: '#334155' },
-    },
-    data: { values },
-    mark: { type: 'line', strokeWidth: 1.6, interpolate: 'monotone' },
-    encoding: {
-      x: {
-        field: 't',
-        type: 'temporal',
-        axis: { title: null, format: timeFormat, labelAngle: -30, labelOverlap: 'parity' },
-        scale: { domain: [new Date(from * 1000).toISOString(), new Date(to * 1000).toISOString()] },
-      },
-      y: {
-        field: 'v',
-        type: 'quantitative',
-        axis: { title: ylabel || null, grid: true },
-        scale: { zero: false, nice: true },
-      },
-      color: {
-        field: 'series',
-        type: 'nominal',
-        scale: { range: ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d'] },
-        legend: nonEmpty.length > 1 ? { title: null, orient: 'bottom', columns: 0 } : null,
-      },
-    },
+    config: baseConfig,
   }
 
-  if (useTwinAxis) {
-    // Drive paired axes off the `unit` grouping
-    ;(spec as any).encoding.y.facet = undefined
-    ;(spec as any).resolve = { scale: { y: 'independent' } }
-    ;(spec as any).layer = nonEmpty.map((s, idx) => ({
+  let spec: TopLevelSpec
+
+  if (groupCount === 1) {
+    // Single Y axis — all series share units
+    const onlyUnit = [...groups.keys()][0] ?? ''
+    spec = {
+      ...baseSpec,
+      data: { values },
       mark: { type: 'line', strokeWidth: 1.6, interpolate: 'monotone' },
-      transform: [{ filter: `datum.unit === '${(s.units ?? '').replace(/'/g, "\\'")}'` }],
       encoding: {
-        x: spec.encoding!.x,
+        x: xEnc,
         y: {
           field: 'v',
           type: 'quantitative',
-          axis: {
-            title: s.units || ylabel || null,
-            orient: idx === 0 ? 'left' : 'right',
-            grid: idx === 0,
-          },
+          axis: { title: ylabel || onlyUnit || null, grid: true },
           scale: { zero: false, nice: true },
         },
-        color: spec.encoding!.color,
+        color: colorEnc,
       },
+    } as TopLevelSpec
+  } else if (groupCount === 2) {
+    // Twin Y axes — one layer per unit group
+    const groupArr = [...groups.entries()]
+    const layers = groupArr.map(([unit, grpSeries], gIdx) => {
+      const labels = grpSeries.map(seriesLabel)
+      const filterExpr = labels.map(l => `'${l.replace(/'/g, "\\'")}'`).join(',')
+      return {
+        transform: [{ filter: `indexof([${filterExpr}], datum.series) >= 0` }],
+        mark: { type: 'line', strokeWidth: 1.6, interpolate: 'monotone' },
+        encoding: {
+          x: xEnc,
+          y: {
+            field: 'v',
+            type: 'quantitative',
+            axis: {
+              title: unit || (gIdx === 0 ? ylabel : ''),
+              orient: gIdx === 0 ? 'left' : 'right',
+              grid: gIdx === 0,
+            },
+            scale: { zero: false, nice: true },
+          },
+          color: colorEnc,
+        },
+      }
+    })
+    spec = {
+      ...baseSpec,
+      data: { values },
+      layer: layers as any,
+      resolve: { scale: { y: 'independent' } },
+    } as TopLevelSpec
+  } else {
+    // 3+ unit groups → normalise everything to 0..1, show actual ranges in legend
+    const seriesWithRange = nonEmpty.map(s => ({
+      label: seriesLabel(s),
+      range: `${s.min.toFixed(2)} … ${s.max.toFixed(2)}${s.units ? ` ${s.units}` : ''}`,
     }))
-    delete (spec as any).mark
-    delete (spec as any).encoding
-  }
-
-  if (!nonEmpty.length) {
-    // Empty placeholder — just an info text
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 240" font-family="system-ui,sans-serif">` +
-      `<rect width="880" height="240" fill="#ffffff"/>` +
-      `<text x="440" y="120" text-anchor="middle" fill="#64748b" font-size="14">Нет данных за выбранный период</text>` +
-      `</svg>`
+    const legendLabels = seriesWithRange.map(x => `${x.label}: ${x.range}`)
+    const labelMap = Object.fromEntries(seriesWithRange.map((x, i) => [x.label, legendLabels[i]]))
+    const normedValues = values.map(p => ({ ...p, seriesLegend: labelMap[p.series] ?? p.series }))
+    spec = {
+      ...baseSpec,
+      data: { values: normedValues },
+      mark: { type: 'line', strokeWidth: 1.6, interpolate: 'monotone' },
+      encoding: {
+        x: xEnc,
+        y: {
+          field: 'vn',
+          type: 'quantitative',
+          axis: { title: 'нормализовано (0…1)', grid: true, format: '.1f' },
+          scale: { domain: [0, 1] },
+        },
+        color: {
+          field: 'seriesLegend',
+          type: 'nominal',
+          scale: { domain: legendLabels, range: colorRange },
+          legend: { title: null, orient: 'bottom', columns: 1 },
+        },
+      },
+    } as TopLevelSpec
   }
 
   const compiled = compile(spec).spec
