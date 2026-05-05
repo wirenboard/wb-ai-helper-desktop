@@ -56,6 +56,7 @@ function migrate(db: Database) {
   // Token columns added after initial schema — try/catch handles both fresh and existing DBs
   try { db.exec(`ALTER TABLE turns ADD COLUMN tokens_prompt INTEGER NOT NULL DEFAULT 0`) } catch {}
   try { db.exec(`ALTER TABLE turns ADD COLUMN tokens_completion INTEGER NOT NULL DEFAULT 0`) } catch {}
+  try { db.exec(`ALTER TABLE turns ADD COLUMN tokens_cached INTEGER NOT NULL DEFAULT 0`) } catch {}
   try { db.exec(`ALTER TABLE skills ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'`) } catch {}
 }
 

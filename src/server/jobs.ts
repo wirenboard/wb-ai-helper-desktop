@@ -23,3 +23,15 @@ export function updateJobState(jobId: string, state: TrackedJob['state']): void 
   const j = jobs.get(jobId)
   if (j) j.state = state
 }
+
+export function getJobsForSession(sessionId: string): TrackedJob[] {
+  return [...jobs.values()].filter((j) => j.sessionId === sessionId)
+}
+
+export function getAllJobs(): TrackedJob[] {
+  return [...jobs.values()]
+}
+
+export function removeJob(jobId: string): void {
+  jobs.delete(jobId)
+}

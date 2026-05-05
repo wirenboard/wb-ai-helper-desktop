@@ -1,3 +1,9 @@
+export function fmtCost(dollars: number): string {
+  if (dollars < 0.001) return '< $0.001'
+  if (dollars < 0.01) return `$${dollars.toFixed(3)}`
+  return `$${dollars.toFixed(2)}`
+}
+
 export function fmtTok(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`

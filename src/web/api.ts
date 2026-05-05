@@ -107,6 +107,14 @@ export type TokenStats = {
   totalCachedTokens?: number
 }
 
+export type TrackedJob = {
+  jobId: string
+  sn: string
+  label: string
+  sessionId: string
+  state: 'running' | 'exited' | 'unknown'
+}
+
 export type Health = {
   ok: boolean
   version: string
@@ -190,6 +198,11 @@ export const api = {
     ),
 
   stats: () => fetch('/api/stats').then((r) => json<TokenStats>(r)),
+
+  chatJobs: (chatId: string) =>
+    fetch(`/api/chats/${encodeURIComponent(chatId)}/jobs`).then((r) => json<{ jobs: TrackedJob[] }>(r)),
+  cancelJob: (chatId: string, jobId: string) =>
+    fetch(`/api/chats/${encodeURIComponent(chatId)}/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }).then((r) => json<{ ok: boolean; jobId: string }>(r)),
 
   chats: () => fetch('/api/chats').then((r) => json<{ chats: Chat[] }>(r)),
   createChat: (contextSns: string[] = [], title?: string) =>

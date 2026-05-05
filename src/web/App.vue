@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { api, calcCost, type Chat, type ChatTurn, type Controller, type Health, type Settings, type TokenStats } from './api'
+import { api, calcCost, type Chat, type ChatTurn, type Controller, type Health, type Settings, type TokenStats, type TrackedJob } from './api'
 import { fmtCost, fmtTok } from './utils'
 import ChatList from './components/ChatList.vue'
 import ChatPane from './components/ChatPane.vue'
@@ -101,6 +101,8 @@ function showToast(msg: string, ms = 3000) {
   toastTimer = setTimeout(() => { toast.value = null }, ms)
 }
 const totalStats = ref<TokenStats | null>(null)
+const runningJobs = ref<TrackedJob[]>([])
+let jobPollTimer: ReturnType<typeof setInterval> | null = null
 let unsubscribe: (() => void) | null = null
 let abortStream: AbortController | null = null
 
@@ -197,10 +199,14 @@ async function newChat() {
 }
 
 async function selectChat(id: string) {
+  stopJobPolling()
   activeChatId.value = id
   const c = await api.getChat(id)
   activeChat.value = c
   if (!liveTurns[id]) liveTurns[id] = []
+  void refreshJobs().then(() => {
+    if (runningJobs.value.length > 0) startJobPolling()
+  })
 }
 
 async function deleteChat(id: string) {
@@ -262,6 +268,10 @@ async function sendMessage(text: string) {
       }
     }
     void api.stats().then((s) => { totalStats.value = s }).catch(() => {})
+    // Start polling for background jobs after LLM response
+    void refreshJobs().then(() => {
+      if (runningJobs.value.length > 0) startJobPolling()
+    })
   }
 }
 
@@ -307,6 +317,56 @@ function stopStreaming() {
   abortStream?.abort()
 }
 
+const completedJobs = ref<TrackedJob[]>([])
+
+async function refreshJobs() {
+  if (!activeChatId.value) return
+  try {
+    const r = await api.chatJobs(activeChatId.value)
+    const prevRunning = new Set(runningJobs.value.map((j) => j.jobId))
+    const nowRunning = r.jobs.filter((j) => j.state === 'running')
+    const nowExited = r.jobs.filter((j) => j.state !== 'running' && prevRunning.has(j.jobId))
+    runningJobs.value = nowRunning
+
+    for (const job of nowExited) {
+      completedJobs.value = [...completedJobs.value, job]
+      setTimeout(() => {
+        completedJobs.value = completedJobs.value.filter((j) => j.jobId !== job.jobId)
+      }, 8000)
+      // Auto-send to model only if not currently streaming
+      if (!streaming.value && activeChatId.value) {
+        await sendMessage(`[Система] Фоновая задача завершена: jobId=${job.jobId}, "${job.label}", контроллер ${job.sn}. Проверь результат через job_tail и сообщи пользователю итог.`)
+      }
+    }
+
+    if (nowRunning.length === 0 && nowExited.length === 0 && !streaming.value) {
+      stopJobPolling()
+    }
+  } catch {
+    runningJobs.value = []
+  }
+}
+
+function startJobPolling() {
+  if (jobPollTimer) return
+  jobPollTimer = setInterval(() => void refreshJobs(), 3000)
+}
+
+function stopJobPolling() {
+  if (jobPollTimer) { clearInterval(jobPollTimer); jobPollTimer = null }
+  runningJobs.value = []
+}
+
+async function cancelJob(jobId: string) {
+  if (!activeChatId.value) return
+  try {
+    await api.cancelJob(activeChatId.value, jobId)
+    await refreshJobs()
+  } catch (e: any) {
+    showToast(`Ошибка отмены задачи: ${e?.message ?? String(e)}`)
+  }
+}
+
 function pretty(s: string): string {
   try {
     return JSON.stringify(JSON.parse(s), null, 2)
@@ -319,6 +379,7 @@ onMounted(loadInitial)
 onBeforeUnmount(() => {
   unsubscribe?.()
   abortStream?.abort()
+  stopJobPolling()
 })
 
 const visibleTurns = computed<ChatTurn[]>(() => {
@@ -368,6 +429,14 @@ const visibleTurns = computed<ChatTurn[]>(() => {
         <button class="ghost" title="Настройки" @click="settingsOpen = true">⚙</button>
       </div>
       <div v-if="errorBanner" class="error">{{ errorBanner }}</div>
+      <div v-for="job in runningJobs" :key="job.jobId" class="job-banner job-banner--running">
+        <span class="job-spinner">⟳</span>
+        <span class="job-label">{{ job.label }} <span class="job-sn">{{ job.sn }}</span></span>
+        <button class="job-cancel ghost small" @click="cancelJob(job.jobId)" title="Отменить задачу">✕ Отменить</button>
+      </div>
+      <div v-for="job in completedJobs" :key="job.jobId" class="job-banner job-banner--done">
+        <span>✓ Задача завершена: {{ job.label }}</span>
+      </div>
       <ChatPane
         v-if="activeChat"
         :turns="visibleTurns"
@@ -434,4 +503,26 @@ const visibleTurns = computed<ChatTurn[]>(() => {
 }
 .toast-enter-active, .toast-leave-active { transition: opacity 0.2s, transform 0.2s; }
 .toast-enter-from, .toast-leave-to { opacity: 0; transform: translateX(-50%) translateY(8px); }
+
+.job-banner {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px; font-size: 0.8rem;
+  border-bottom: 1px solid var(--border);
+}
+.job-banner--running {
+  background: color-mix(in srgb, var(--primary) 12%, var(--bg));
+  color: var(--primary);
+}
+.job-banner--done {
+  background: color-mix(in srgb, #22c55e 12%, var(--bg));
+  color: #16a34a;
+}
+.job-spinner {
+  display: inline-block;
+  animation: spin 1.2s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.job-label { flex: 1; }
+.job-sn { opacity: 0.7; font-size: 0.75em; }
+.job-cancel { margin-left: auto; color: inherit; border-color: currentColor; }
 </style>

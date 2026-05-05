@@ -55,12 +55,24 @@ const expanded = reactive<Record<string, boolean>>({})
 function toggle(key: string) { expanded[key] = !expanded[key] }
 
 const scrollEl = ref<HTMLElement | null>(null)
+const BOTTOM_THRESHOLD = 80 // px — считаем "у дна" если < 80px до конца
+
+function isAtBottom(): boolean {
+  if (!scrollEl.value) return true
+  const { scrollTop, scrollHeight, clientHeight } = scrollEl.value
+  return scrollHeight - scrollTop - clientHeight < BOTTOM_THRESHOLD
+}
 
 function scrollToBottom() {
   if (scrollEl.value) scrollEl.value.scrollTop = scrollEl.value.scrollHeight
 }
 
-// Scroll when items change (new messages, page load)
+// Stick-to-bottom: скроллим только если пользователь уже внизу (для resize)
+function scrollIfAtBottom() {
+  if (isAtBottom()) scrollToBottom()
+}
+
+// При новых сообщениях и окончании стриминга — всегда скроллим вниз
 watch(() => props.items.length, () => nextTick(scrollToBottom))
 watch(() => props.streaming, (v) => { if (!v) nextTick(scrollToBottom) })
 
@@ -69,10 +81,12 @@ onMounted(async () => {
   await nextTick()
   scrollToBottom()
   if (!scrollEl.value) return
-  ro = new ResizeObserver(scrollToBottom)
+  // ResizeObserver: только если уже внизу (раскрытие тулколов не должно прыгать)
+  ro = new ResizeObserver(scrollIfAtBottom)
   Array.from(scrollEl.value.children).forEach(c => ro!.observe(c))
   const mo = new MutationObserver((mutations) => {
     mutations.forEach(m => m.addedNodes.forEach(n => { if (n instanceof Element && ro) ro.observe(n) }))
+    // Новый дочерний элемент — всегда скроллим
     scrollToBottom()
   })
   mo.observe(scrollEl.value, { childList: true })

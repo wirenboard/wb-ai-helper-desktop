@@ -16,6 +16,7 @@ import { openDb } from './db.ts'
 import { getTodos, formatTodos } from './todos.ts'
 import { listSkills, getLoadedSkills, seedSystemSkills } from './skills.ts'
 import { initAttachments, listSession as listAttachmentFiles, getAttachment, readAttachment, saveAttachment, deleteAttachment, cleanupExpired } from './attachments.ts'
+import { getJobsForSession, updateJobState, removeJob } from './jobs.ts'
 
 const PORT = Number(process.env['WB_HELPER_PORT'] ?? 17321)
 
@@ -169,6 +170,46 @@ app.delete('/api/chats/:id', (c) => {
   return c.json({ ok: true })
 })
 
+app.get('/api/chats/:id/jobs', async (c) => {
+  const id = c.req.param('id')
+  const sessionJobs = getJobsForSession(id)
+  // Refresh state for running jobs via SSH
+  await Promise.all(
+    sessionJobs
+      .filter((j) => j.state === 'running')
+      .map(async (j) => {
+        const ctrl = discovery.get(j.sn)
+        if (!ctrl) return
+        try {
+          const result = await ssh.jobStatus(ctrl, j.jobId)
+          const state = result['state'] as 'running' | 'exited' | 'unknown'
+          if (state === 'exited' || state === 'running') {
+            updateJobState(j.jobId, state)
+            j.state = state
+          }
+        } catch {}
+      }),
+  )
+  return c.json({ jobs: sessionJobs })
+})
+
+app.post('/api/chats/:id/jobs/:jobId/cancel', async (c) => {
+  const sessionId = c.req.param('id')
+  const jobId = c.req.param('jobId')
+  const sessionJobs = getJobsForSession(sessionId)
+  const job = sessionJobs.find((j) => j.jobId === jobId)
+  if (!job) return c.json({ error: 'job not found' }, 404)
+  const ctrl = discovery.get(job.sn)
+  if (!ctrl) return c.json({ error: `controller ${job.sn} not found` }, 404)
+  try {
+    await ssh.jobCancel(ctrl, jobId)
+    removeJob(jobId)
+    return c.json({ ok: true, jobId })
+  } catch (e: any) {
+    return c.json({ error: e?.message ?? String(e) }, 500)
+  }
+})
+
 app.post('/api/chats/:id/message', async (c) => {
   const activeLlm = llm
   if (!activeLlm) {
@@ -209,6 +250,8 @@ app.post('/api/chats/:id/message', async (c) => {
             const todos = getTodos(id)
             const loadedSkills = getLoadedSkills(id)
             const attachments = listAttachmentFiles(id)
+            const sessionJobs = getJobsForSession(id)
+            const runningJobs = sessionJobs.filter((j) => j.state === 'running')
             return [
               chat.contextSns.length
                 ? `Текущий контекст — выбранные контроллеры: ${chat.contextSns.join(', ')}. Когда пользователь говорит «текущий», «этот», «он» про контроллер без явного SN — это эти SN. Если пользователь явно называет другой SN — ориентируйся на него.`
@@ -220,6 +263,9 @@ app.post('/api/chats/:id/message', async (c) => {
               attachments.length
                 ? `Вложения текущего чата (файлы загруженные пользователем):\n${attachments.map(a => `- ${a.id}: ${a.name} (${a.size} байт, ${a.mime})`).join('\n')}\nДля чтения используй read_attachment(fileId). Для загрузки на контроллер — upload_to_controller(sn, fileId, path).`
                 : 'Вложений нет. Если нужно загрузить файл на контроллер — попроси пользователя прикрепить его кнопкой 📎 в UI.',
+              ...(runningJobs.length
+                ? [`⚙ Активные фоновые задачи в этом чате:\n${runningJobs.map((j) => `  jobId=${j.jobId}  sn=${j.sn}  "${j.label}"`).join('\n')}\nИспользуй эти jobId для job_status/job_tail/job_cancel. Не вызывай job_status с jobId="unknown" — только с реальным 8-значным hex.`]
+                : []),
               ...loadedSkills.map((s) => `Инструкции загруженного скилла "${s.name}" (активны в этой сессии):\n${s.content}`),
             ]
           },
