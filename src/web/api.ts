@@ -14,7 +14,7 @@ export type AssistantToolCall = { id: string; name: string; arguments: string }
 
 export type ChatTurn =
   | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string; toolCalls?: AssistantToolCall[] }
+  | { role: 'assistant'; content: string; toolCalls?: AssistantToolCall[]; tokensPrompt?: number; tokensCompletion?: number }
   | { role: 'tool'; toolCallId: string; content: string }
   | { role: 'system'; content: string }
 
@@ -25,6 +25,13 @@ export type Chat = {
   updatedAt: number
   contextSns: string[]
   turns: ChatTurn[]
+  tokensPrompt: number
+  tokensCompletion: number
+}
+
+export type TokenStats = {
+  totalPromptTokens: number
+  totalCompletionTokens: number
 }
 
 export type Health = {
@@ -97,6 +104,8 @@ export const api = {
     fetch(`/api/controllers/${encodeURIComponent(sn)}`, { method: 'DELETE' }).then((r) =>
       json<{ ok: true }>(r),
     ),
+
+  stats: () => fetch('/api/stats').then((r) => json<TokenStats>(r)),
 
   chats: () => fetch('/api/chats').then((r) => json<{ chats: Chat[] }>(r)),
   createChat: (contextSns: string[] = [], title?: string) =>

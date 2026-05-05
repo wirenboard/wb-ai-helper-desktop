@@ -56,6 +56,9 @@ watch(
       <div v-else-if="t.role === 'assistant'" class="msg assistant">
         <div class="role">помощник</div><span v-if="t.content">{{ t.content }}</span>
         <span v-else class="muted">…</span>
+        <div v-if="t.tokensPrompt || t.tokensCompletion" class="token-meta">
+          ↑{{ t.tokensPrompt ?? 0 }} ↓{{ t.tokensCompletion ?? 0 }}
+        </div>
       </div>
       <div v-else-if="t.role === 'tool'" class="msg tool">
         <details>
@@ -79,3 +82,12 @@ watch(
     </button>
   </div>
 </template>
+
+<style scoped>
+.token-meta {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-mute);
+  opacity: 0.7;
+}
+</style>

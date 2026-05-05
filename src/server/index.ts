@@ -115,6 +115,8 @@ app.delete('/api/controllers/:sn', (c) => {
   return c.json({ ok: true })
 })
 
+app.get('/api/stats', (c) => c.json(chats.globalStats()))
+
 app.get('/api/chats', (c) => c.json({ chats: chats.list() }))
 
 app.post('/api/chats', async (c) => {
@@ -165,6 +167,7 @@ app.post('/api/chats/:id/message', async (c) => {
     const ctx = { discovery, mqtt, ssh, contextSns: chat.contextSns }
     let assistantText = ''
     const pendingToolCalls: { id: string; name: string; arguments: string }[] = []
+    let pendingUsage: { promptTokens: number; completionTokens: number } | null = null
 
     try {
       for await (const ev of activeLlm.runAgent(
@@ -175,6 +178,9 @@ app.post('/api/chats/:id/message', async (c) => {
       )) {
         await send(ev.type, ev)
         if (ev.type === 'text-delta') assistantText += ev.text
+        if (ev.type === 'usage') {
+          pendingUsage = { promptTokens: ev.promptTokens, completionTokens: ev.completionTokens }
+        }
         if (ev.type === 'tool-call') {
           pendingToolCalls.push({ id: ev.id, name: ev.name, arguments: ev.arguments })
         }
@@ -196,11 +202,15 @@ app.post('/api/chats/:id/message', async (c) => {
     }
 
     if (assistantText || pendingToolCalls.length) {
-      chats.appendTurn(id, {
-        role: 'assistant',
-        content: assistantText,
-        toolCalls: pendingToolCalls.length ? [...pendingToolCalls] : undefined,
-      })
+      chats.appendTurn(
+        id,
+        {
+          role: 'assistant',
+          content: assistantText,
+          toolCalls: pendingToolCalls.length ? [...pendingToolCalls] : undefined,
+        },
+        pendingUsage ?? undefined,
+      )
     }
     await send('end', { chatId: id })
   }, async (err, s) => {

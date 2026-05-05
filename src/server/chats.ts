@@ -8,6 +8,8 @@ export type Chat = {
   updatedAt: number
   contextSns: string[]
   turns: ChatTurn[]
+  tokensPrompt: number
+  tokensCompletion: number
 }
 
 const SYSTEM_PROMPT = `Ты — десктопный помощник интегратора Wiren Board, работающий на ноутбуке в локальной сети с контроллерами.
@@ -30,6 +32,8 @@ type ChatRow = {
   created_at: number
   updated_at: number
   context_sns: string
+  tokens_prompt: number
+  tokens_completion: number
 }
 
 type TurnRow = {
@@ -37,6 +41,8 @@ type TurnRow = {
   content: string
   tool_call_id: string | null
   tool_calls: string | null
+  tokens_prompt: number
+  tokens_completion: number
 }
 
 export class ChatStore {
@@ -45,9 +51,13 @@ export class ChatStore {
   list(): Chat[] {
     const rows = this.db
       .query<ChatRow, []>(
-        `SELECT id, title, created_at, updated_at, context_sns
-           FROM chats
-           ORDER BY updated_at DESC`,
+        `SELECT c.id, c.title, c.created_at, c.updated_at, c.context_sns,
+                COALESCE(SUM(t.tokens_prompt), 0) AS tokens_prompt,
+                COALESCE(SUM(t.tokens_completion), 0) AS tokens_completion
+           FROM chats c
+           LEFT JOIN turns t ON t.chat_id = c.id
+           GROUP BY c.id
+           ORDER BY c.updated_at DESC`,
       )
       .all()
     return rows.map(rowToChatHeader)
@@ -56,7 +66,10 @@ export class ChatStore {
   get(id: string): Chat | undefined {
     const row = this.db
       .query<ChatRow, [string]>(
-        `SELECT id, title, created_at, updated_at, context_sns FROM chats WHERE id = ?`,
+        `SELECT c.id, c.title, c.created_at, c.updated_at, c.context_sns,
+                COALESCE((SELECT SUM(tokens_prompt) FROM turns WHERE chat_id = c.id), 0) AS tokens_prompt,
+                COALESCE((SELECT SUM(tokens_completion) FROM turns WHERE chat_id = c.id), 0) AS tokens_completion
+           FROM chats c WHERE c.id = ?`,
       )
       .get(id)
     if (!row) return
@@ -107,21 +120,36 @@ export class ChatStore {
     this.db.query(`DELETE FROM chats WHERE id = ?`).run(id)
   }
 
-  appendTurn(id: string, turn: ChatTurn): Chat | undefined {
+  appendTurn(
+    id: string,
+    turn: ChatTurn,
+    usage?: { promptTokens: number; completionTokens: number },
+  ): Chat | undefined {
     const now = Date.now()
     const ord = this.nextOrd(id)
     const toolCalls =
       turn.role === 'assistant' && turn.toolCalls?.length ? JSON.stringify(turn.toolCalls) : null
     const toolCallId = turn.role === 'tool' ? turn.toolCallId : null
+    const tokensPrompt = usage?.promptTokens ?? 0
+    const tokensCompletion = usage?.completionTokens ?? 0
     this.db
       .query(
-        `INSERT INTO turns (chat_id, ord, role, content, tool_call_id, tool_calls, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO turns (chat_id, ord, role, content, tool_call_id, tool_calls, tokens_prompt, tokens_completion, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, ord, turn.role, turn.content, toolCallId, toolCalls, now)
+      .run(id, ord, turn.role, turn.content, toolCallId, toolCalls, tokensPrompt, tokensCompletion, now)
     this.db.query(`UPDATE chats SET updated_at = ? WHERE id = ?`).run(now, id)
     if (turn.role === 'user') this.maybeAutoTitle(id, turn.content)
     return this.get(id)
+  }
+
+  globalStats(): { totalPromptTokens: number; totalCompletionTokens: number } {
+    const r = this.db
+      .query<{ p: number; c: number }, []>(
+        `SELECT COALESCE(SUM(tokens_prompt), 0) AS p, COALESCE(SUM(tokens_completion), 0) AS c FROM turns`,
+      )
+      .get()
+    return { totalPromptTokens: r?.p ?? 0, totalCompletionTokens: r?.c ?? 0 }
   }
 
   systemPromptFor(sns: string[]): string {
@@ -134,7 +162,7 @@ export class ChatStore {
   private loadTurns(chatId: string): ChatTurn[] {
     const rows = this.db
       .query<TurnRow, [string]>(
-        `SELECT role, content, tool_call_id, tool_calls
+        `SELECT role, content, tool_call_id, tool_calls, tokens_prompt, tokens_completion
            FROM turns WHERE chat_id = ? ORDER BY ord ASC`,
       )
       .all(chatId)
@@ -173,6 +201,8 @@ function rowToChatHeader(row: ChatRow): Chat {
     updatedAt: row.updated_at,
     contextSns: ctx,
     turns: [],
+    tokensPrompt: row.tokens_prompt,
+    tokensCompletion: row.tokens_completion,
   }
 }
 
@@ -185,9 +215,12 @@ function rowToTurn(row: TurnRow): ChatTurn {
     if (row.tool_calls) {
       try { toolCalls = JSON.parse(row.tool_calls) } catch {}
     }
+    const tokens = row.tokens_prompt || row.tokens_completion
+      ? { tokensPrompt: row.tokens_prompt, tokensCompletion: row.tokens_completion }
+      : {}
     return toolCalls?.length
-      ? { role: 'assistant', content: row.content, toolCalls }
-      : { role: 'assistant', content: row.content }
+      ? { role: 'assistant', content: row.content, toolCalls, ...tokens }
+      : { role: 'assistant', content: row.content, ...tokens }
   }
   if (row.role === 'system') return { role: 'system', content: row.content }
   return { role: 'user', content: row.content }

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { api, type Chat, type ChatTurn, type Controller, type Health, type Settings } from './api'
+import { api, type Chat, type ChatTurn, type Controller, type Health, type Settings, type TokenStats } from './api'
 import ChatList from './components/ChatList.vue'
 import ChatPane from './components/ChatPane.vue'
 import ControllerList from './components/ControllerList.vue'
@@ -16,10 +16,31 @@ const activeChat = ref<Chat | null>(null)
 const liveTurns = reactive<{ [chatId: string]: ChatTurn[] }>({})
 const streaming = ref(false)
 const errorBanner = ref<string | null>(null)
+const totalStats = ref<TokenStats | null>(null)
 let unsubscribe: (() => void) | null = null
 let abortStream: AbortController | null = null
 
 const selectedSns = computed(() => activeChat.value?.contextSns ?? [])
+
+const currentChatTokens = computed(() => {
+  const turns = activeChat.value?.turns ?? []
+  return turns.reduce(
+    (acc, t) => {
+      if (t.role === 'assistant') {
+        acc.prompt += t.tokensPrompt ?? 0
+        acc.completion += t.tokensCompletion ?? 0
+      }
+      return acc
+    },
+    { prompt: 0, completion: 0 },
+  )
+})
+
+function fmtTok(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
 
 async function loadInitial() {
   try {
@@ -33,6 +54,7 @@ async function loadInitial() {
   }
   await refreshControllers()
   await refreshChats()
+  void api.stats().then((s) => { totalStats.value = s }).catch(() => {})
   if (!chats.value.length) {
     await newChat()
   } else {
@@ -131,6 +153,7 @@ async function sendMessage(text: string) {
       const c = await api.getChat(id).catch(() => null)
       if (c) patchLocalChat(c)
     }
+    void api.stats().then((s) => { totalStats.value = s }).catch(() => {})
   }
 }
 
@@ -203,6 +226,7 @@ const visibleTurns = computed<ChatTurn[]>(() => {
     <ChatList
       :chats="chats"
       :active-id="activeChatId"
+      :total-stats="totalStats"
       @new="newChat"
       @select="selectChat"
       @delete="deleteChat"
@@ -217,6 +241,11 @@ const visibleTurns = computed<ChatTurn[]>(() => {
             <span class="chip" v-for="sn in activeChat.contextSns" :key="sn">{{ sn }}</span>
           </span>
         </div>
+        <div
+          v-if="currentChatTokens.prompt + currentChatTokens.completion"
+          class="chat-tokens small muted"
+          title="Токены в этом чате: ↑ prompt / ↓ completion"
+        >↑{{ fmtTok(currentChatTokens.prompt) }} ↓{{ fmtTok(currentChatTokens.completion) }}</div>
         <button class="ghost" title="Настройки" @click="settingsOpen = true">⚙</button>
       </div>
       <div v-if="errorBanner" class="error">{{ errorBanner }}</div>

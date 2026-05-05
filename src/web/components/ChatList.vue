@@ -1,12 +1,18 @@
 <script setup lang="ts">
-import type { Chat } from '../api'
+import type { Chat, TokenStats } from '../api'
 
-defineProps<{ chats: Chat[]; activeId: string | null }>()
+defineProps<{ chats: Chat[]; activeId: string | null; totalStats: TokenStats | null }>()
 const emit = defineEmits<{
   new: []
   select: [id: string]
   delete: [id: string]
 }>()
+
+function fmtTok(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
 </script>
 
 <template>
@@ -36,7 +42,18 @@ const emit = defineEmits<{
       </div>
     </div>
     <div class="sidebar-footer">
-      Каждый чат — отдельная задача со своим контекстом контроллеров
+      <div>Каждый чат — отдельная задача со своим контекстом контроллеров</div>
+      <div v-if="totalStats && (totalStats.totalPromptTokens || totalStats.totalCompletionTokens)" class="token-total">
+        всего: ↑{{ fmtTok(totalStats.totalPromptTokens) }} ↓{{ fmtTok(totalStats.totalCompletionTokens) }}
+      </div>
     </div>
   </aside>
 </template>
+
+<style scoped>
+.token-total {
+  margin-top: 4px;
+  font-size: 11px;
+  opacity: 0.6;
+}
+</style>

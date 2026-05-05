@@ -8,7 +8,7 @@ import type { Stream } from 'openai/streaming.mjs'
 
 export type ChatTurn =
   | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string; toolCalls?: AssistantToolCall[] }
+  | { role: 'assistant'; content: string; toolCalls?: AssistantToolCall[]; tokensPrompt?: number; tokensCompletion?: number }
   | { role: 'tool'; toolCallId: string; content: string }
   | { role: 'system'; content: string }
 
@@ -22,6 +22,7 @@ export type StreamEvent =
   | { type: 'text-delta'; text: string }
   | { type: 'tool-call'; id: string; name: string; arguments: string }
   | { type: 'tool-result'; id: string; name: string; result: string; ok: boolean }
+  | { type: 'usage'; promptTokens: number; completionTokens: number }
   | { type: 'done'; finish_reason: string | null }
   | { type: 'error'; message: string }
 
@@ -43,6 +44,8 @@ export class LlmClient {
   ): AsyncGenerator<StreamEvent> {
     const maxTurns = opts?.maxTurns ?? 8
     const messages = history.map(toApi)
+    let totalPromptTokens = 0
+    let totalCompletionTokens = 0
 
     for (let turn = 0; turn < maxTurns; turn++) {
       let stream: Stream<ChatCompletionChunk>
@@ -52,6 +55,7 @@ export class LlmClient {
           messages,
           tools: tools.length ? tools : undefined,
           stream: true,
+          stream_options: { include_usage: true },
         })
       } catch (e: any) {
         yield { type: 'error', message: `LLM error: ${e?.message ?? String(e)}` }
@@ -67,6 +71,10 @@ export class LlmClient {
           if (opts?.signal?.aborted) {
             yield { type: 'error', message: 'aborted' }
             return
+          }
+          if (chunk.usage) {
+            totalPromptTokens += chunk.usage.prompt_tokens
+            totalCompletionTokens += chunk.usage.completion_tokens
           }
           const choice = chunk.choices[0]
           if (!choice) continue
@@ -93,6 +101,9 @@ export class LlmClient {
 
       const toolCalls = [...toolBuf.values()].filter((t) => t.id && t.name)
       if (!toolCalls.length) {
+        if (totalPromptTokens || totalCompletionTokens) {
+          yield { type: 'usage', promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens }
+        }
         yield { type: 'done', finish_reason: finish }
         return
       }
@@ -122,6 +133,9 @@ export class LlmClient {
       }
     }
 
+    if (totalPromptTokens || totalCompletionTokens) {
+      yield { type: 'usage', promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens }
+    }
     yield { type: 'done', finish_reason: 'max_turns' }
   }
 }
