@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { nextTick, ref } from 'vue'
 import type { Chat, TokenStats } from '../api'
 import { fmtTok } from '../utils'
 
@@ -7,9 +8,31 @@ const emit = defineEmits<{
   new: []
   select: [id: string]
   delete: [id: string]
+  rename: [id: string, title: string]
   toggle: []
 }>()
 
+const renaming = ref<string | null>(null)
+const renameVal = ref('')
+const renameInput = ref<HTMLInputElement | null>(null)
+
+function startRename(c: Chat, e: MouseEvent) {
+  e.stopPropagation()
+  renaming.value = c.id
+  renameVal.value = c.title
+  nextTick(() => { renameInput.value?.select() })
+}
+
+function confirmRename(id: string) {
+  const t = renameVal.value.trim()
+  if (t) emit('rename', id, t)
+  renaming.value = null
+}
+
+function onRenameKey(e: KeyboardEvent, id: string) {
+  if (e.key === 'Enter') confirmRename(id)
+  if (e.key === 'Escape') renaming.value = null
+}
 </script>
 
 <template>
@@ -31,9 +54,24 @@ const emit = defineEmits<{
           :key="c.id"
           class="chat-list-item"
           :class="{ active: c.id === activeId }"
-          @click="emit('select', c.id)"
+          @click="renaming !== c.id && emit('select', c.id)"
         >
-          <span class="label">{{ c.title }}</span>
+          <div class="label-col">
+            <input
+              v-if="renaming === c.id"
+              ref="renameInput"
+              v-model="renameVal"
+              class="rename-input"
+              @blur="confirmRename(c.id)"
+              @keydown="onRenameKey($event, c.id)"
+              @click.stop
+            />
+            <span v-else class="label" @dblclick="startRename(c, $event)" :title="'Двойной клик — переименовать'">{{ c.title }}</span>
+            <span
+              v-if="c.tokensPrompt || c.tokensCompletion"
+              class="chat-toks"
+            >↑{{ fmtTok(c.tokensPrompt) }} ↓{{ fmtTok(c.tokensCompletion) }}</span>
+          </div>
           <span class="badge" v-if="c.contextSns.length" :title="c.contextSns.join(', ')">
             {{ c.contextSns.length }}
           </span>
@@ -51,6 +89,12 @@ const emit = defineEmits<{
 </template>
 
 <style scoped>
+.label-col { display: flex; flex-direction: column; flex: 1; min-width: 0; overflow: hidden; }
+.chat-toks { font-size: 10px; color: var(--text-mute); opacity: 0.7; }
+.rename-input {
+  font: inherit; padding: 0 2px; height: 20px; width: 100%;
+  border-radius: 3px; font-size: 13px;
+}
 .token-total {
   margin-top: 4px;
   font-size: 11px;

@@ -269,6 +269,7 @@ const visibleTurns = computed<ChatTurn[]>(() => {
       @new="newChat"
       @select="selectChat"
       @delete="deleteChat"
+      @rename="(id, title) => api.patchChat(id, { title }).then(patchLocalChat)"
       @toggle="leftOpen = !leftOpen"
     />
 
