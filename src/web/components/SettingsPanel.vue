@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { api, type Settings } from '../api'
 
-const props = defineProps<{ settings: Settings | null; open: boolean }>()
+const props = defineProps<{ settings: Settings | null; open: boolean; version?: string }>()
 const emit = defineEmits<{
   close: []
   saved: [Settings]
@@ -226,8 +226,9 @@ async function removeKey() {
         </section>
 
         <div v-if="saveError" class="error">{{ saveError }}</div>
-        <div class="muted small" v-if="settings">
-          Файл настроек: <code>{{ settings.storagePath }}</code>
+        <div class="muted small" v-if="settings" style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+          <span>Файл настроек: <code>{{ settings.storagePath }}</code></span>
+          <span v-if="version" style="white-space:nowrap">v{{ version }}</span>
         </div>
       </div>
       <div class="modal-footer">

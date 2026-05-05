@@ -273,6 +273,7 @@ const visibleTurns = computed<ChatTurn[]>(() => {
     <SettingsPanel
       :settings="settings"
       :open="settingsOpen"
+      :version="health?.version"
       @close="settingsOpen = false"
       @saved="onSettingsSaved"
     />

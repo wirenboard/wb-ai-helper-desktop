@@ -36,6 +36,7 @@ export type TokenStats = {
 
 export type Health = {
   ok: boolean
+  version: string
   llmConfigured: boolean
   model: string | null
   port: number

@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { version } from '../../package.json'
 import { Hono } from 'hono'
 import { stream } from 'hono/streaming'
 import { cors } from 'hono/cors'
@@ -58,6 +59,7 @@ app.use('/api/*', cors())
 app.get('/api/health', (c) =>
   c.json({
     ok: true,
+    version,
     llmConfigured: !!llm,
     model: llm?.model ?? null,
     port: PORT,
