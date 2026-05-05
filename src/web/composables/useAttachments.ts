@@ -57,5 +57,20 @@ export function useAttachments(chatIdGetter: () => string) {
     return `/api/attachments/${encodeURIComponent(id)}?chatId=${encodeURIComponent(chatId)}`
   }
 
-  return { items, refresh, upload, remove, downloadUrl }
+  async function removeAll() {
+    for (const a of [...items.value]) await remove(a.id)
+  }
+
+  async function downloadAll() {
+    for (const a of items.value) {
+      const link = document.createElement('a')
+      link.href = downloadUrl(a.id); link.download = a.name
+      document.body.appendChild(link); link.click(); link.remove()
+      await new Promise(r => setTimeout(r, 150))
+    }
+  }
+
+  function clear() { items.value = [] }
+
+  return { items, refresh, upload, remove, removeAll, downloadAll, downloadUrl, clear }
 }

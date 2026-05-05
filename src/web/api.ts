@@ -18,6 +18,71 @@ export type ChatTurn =
   | { role: 'tool'; toolCallId: string; content: string }
   | { role: 'system'; content: string }
 
+// ── Chat items (UI layer, derived from ChatTurn[]) ────────────────────────
+export type ChatItemUser = { type: 'user'; text: string }
+export type ChatItemAssistantText = { type: 'assistant_text'; text: string; tokensPrompt?: number; tokensCompletion?: number }
+export type ChatItemToolCall = { type: 'tool_call'; id: string; name: string; input: Record<string, unknown>; result?: { content: string; isError: boolean } }
+export type ChatItemAssistantFile = { type: 'assistant_file'; attachmentId: string; name: string; mime: string; size: number; url: string; sourceSn?: string; sourcePath?: string }
+export type ChatItemError = { type: 'error'; message: string }
+export type ChatItem = ChatItemUser | ChatItemAssistantText | ChatItemToolCall | ChatItemAssistantFile | ChatItemError
+
+export function turnsToItems(turns: ChatTurn[], chatId: string): ChatItem[] {
+  const items: ChatItem[] = []
+  const byCallId = new Map<string, { item: ChatItemToolCall; itemIdx: number }>()
+
+  for (let i = 0; i < turns.length; i++) {
+    const t = turns[i]!
+    if (t.role === 'user') {
+      items.push({ type: 'user', text: t.content })
+    } else if (t.role === 'assistant') {
+      for (const tc of t.toolCalls ?? []) {
+        let input: Record<string, unknown> = {}
+        try { input = JSON.parse(tc.arguments) } catch {}
+        const item: ChatItemToolCall = { type: 'tool_call', id: tc.id, name: tc.name, input }
+        byCallId.set(tc.id, { item, itemIdx: items.length })
+        items.push(item)
+      }
+      if (t.content) {
+        items.push({ type: 'assistant_text', text: t.content, tokensPrompt: t.tokensPrompt, tokensCompletion: t.tokensCompletion })
+      }
+    } else if (t.role === 'tool') {
+      const callId = (t as { toolCallId?: string }).toolCallId
+      if (t.content.startsWith('▶ ')) {
+        const lines = t.content.split('\n')
+        const name = lines[0]!.slice(2).trim()
+        const sepIdx = lines.indexOf('— result —')
+        const argsStr = sepIdx > 1 ? lines.slice(1, sepIdx).join('\n') : sepIdx === -1 ? lines.slice(1).join('\n') : ''
+        const resultStr = sepIdx >= 0 ? lines.slice(sepIdx + 1).join('\n') : undefined
+        let input: Record<string, unknown> = {}
+        try { input = JSON.parse(argsStr) } catch {}
+        const id = callId ?? `stream-${i}`
+        const item: ChatItemToolCall = { type: 'tool_call', id, name, input, result: resultStr !== undefined ? { content: resultStr, isError: false } : undefined }
+        byCallId.set(id, { item, itemIdx: items.length })
+        items.push(item)
+      } else if (callId) {
+        const entry = byCallId.get(callId)
+        if (entry) entry.item.result = { content: t.content, isError: false }
+      }
+    }
+  }
+
+  // Insert assistant_file items after tool_calls that returned a file attachment
+  const inserts: Array<{ at: number; item: ChatItemAssistantFile }> = []
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i]!
+    if (it.type !== 'tool_call' || !it.result) continue
+    try {
+      const p = JSON.parse(it.result.content)
+      if (typeof p.fileId === 'string' && p.fileName) {
+        inserts.push({ at: i + 1, item: { type: 'assistant_file', attachmentId: p.fileId, name: p.fileName, mime: p.mime ?? 'application/octet-stream', size: p.size ?? 0, url: `/api/attachments/${encodeURIComponent(p.fileId)}?chatId=${encodeURIComponent(chatId)}` } })
+      }
+    } catch {}
+  }
+  for (let i = inserts.length - 1; i >= 0; i--) items.splice(inserts[i]!.at, 0, inserts[i]!.item)
+
+  return items
+}
+
 export type Chat = {
   id: string
   title: string
