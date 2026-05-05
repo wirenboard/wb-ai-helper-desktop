@@ -1,6 +1,13 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
+import { marked } from 'marked'
 import type { ChatTurn } from '../api'
+
+marked.use({ breaks: true, gfm: true })
+
+function renderMd(text: string): string {
+  return marked.parse(text) as string
+}
 
 const props = defineProps<{
   turns: ChatTurn[]
@@ -54,7 +61,8 @@ watch(
         <div class="role">вы</div>{{ t.content }}
       </div>
       <div v-else-if="t.role === 'assistant'" class="msg assistant">
-        <div class="role">помощник</div><span v-if="t.content">{{ t.content }}</span>
+        <div class="role">помощник</div>
+        <div v-if="t.content" class="md" v-html="renderMd(t.content)" />
         <span v-else class="muted">…</span>
         <div v-if="t.tokensPrompt || t.tokensCompletion" class="token-meta">
           ↑{{ t.tokensPrompt ?? 0 }} ↓{{ t.tokensCompletion ?? 0 }}
@@ -89,5 +97,25 @@ watch(
   font-size: 11px;
   color: var(--text-mute);
   opacity: 0.7;
+}
+.md { line-height: 1.55; }
+.md :deep(p) { margin: 0 0 6px; }
+.md :deep(p:last-child) { margin-bottom: 0; }
+.md :deep(code) {
+  background: var(--bg-mute); border-radius: 4px;
+  padding: 1px 5px; font-family: ui-monospace, monospace; font-size: 12.5px;
+}
+.md :deep(pre) {
+  background: var(--bg-mute); border-radius: 6px;
+  padding: 10px 12px; overflow-x: auto; margin: 6px 0;
+}
+.md :deep(pre code) { background: none; padding: 0; font-size: 12.5px; }
+.md :deep(ul), .md :deep(ol) { margin: 4px 0; padding-left: 20px; }
+.md :deep(li) { margin-bottom: 2px; }
+.md :deep(strong) { font-weight: 600; }
+.md :deep(a) { color: var(--accent); }
+.md :deep(blockquote) {
+  border-left: 3px solid var(--border); margin: 6px 0;
+  padding: 2px 10px; color: var(--text-mute);
 }
 </style>

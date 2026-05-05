@@ -2,7 +2,7 @@
 import { ref } from 'vue'
 import type { Controller } from '../api'
 
-defineProps<{ controllers: Controller[]; selected: string[]; open: boolean }>()
+defineProps<{ controllers: Controller[]; selected: string[]; open: boolean; scanning?: boolean }>()
 const emit = defineEmits<{
   'toggle-panel': []
   rescan: []
@@ -37,7 +37,7 @@ function add() {
       </button>
       <template v-if="open">
         <span>Контроллеры</span>
-        <button @click="emit('rescan')" title="Пересканировать сеть">↻</button>
+        <button @click="emit('rescan')" :disabled="scanning" :title="scanning ? 'Сканирование…' : 'Пересканировать сеть'" :style="scanning ? 'animation: spin 1s linear infinite' : ''">↻</button>
       </template>
     </div>
     <template v-if="open">

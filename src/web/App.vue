@@ -9,10 +9,39 @@ import SettingsPanel from './components/SettingsPanel.vue'
 
 const leftOpen = ref(true)
 const rightOpen = ref(true)
+const leftWidth = ref(260)
+const rightWidth = ref(320)
 
 const gridCols = computed(() =>
-  `${leftOpen.value ? '260px' : '28px'} 1fr ${rightOpen.value ? '320px' : '28px'}`,
+  `${leftOpen.value ? leftWidth.value + 'px' : '28px'} 4px 1fr 4px ${rightOpen.value ? rightWidth.value + 'px' : '28px'}`,
 )
+
+let resizing: 'left' | 'right' | null = null
+let resizeStartX = 0
+let resizeStartW = 0
+
+function startResize(side: 'left' | 'right', e: MouseEvent) {
+  resizing = side
+  resizeStartX = e.clientX
+  resizeStartW = side === 'left' ? leftWidth.value : rightWidth.value
+  window.addEventListener('mousemove', onMouseMove)
+  window.addEventListener('mouseup', stopResize, { once: true })
+  e.preventDefault()
+}
+
+function onMouseMove(e: MouseEvent) {
+  if (!resizing) return
+  const dx = e.clientX - resizeStartX
+  if (resizing === 'left') leftWidth.value = Math.max(160, Math.min(520, resizeStartW + dx))
+  else rightWidth.value = Math.max(200, Math.min(520, resizeStartW - dx))
+}
+
+function stopResize() {
+  resizing = null
+  window.removeEventListener('mousemove', onMouseMove)
+}
+
+onBeforeUnmount(() => window.removeEventListener('mousemove', onMouseMove))
 
 const health = ref<Health | null>(null)
 const settings = ref<Settings | null>(null)
@@ -23,6 +52,7 @@ const activeChatId = ref<string | null>(null)
 const activeChat = ref<Chat | null>(null)
 const liveTurns = reactive<{ [chatId: string]: ChatTurn[] }>({})
 const streaming = ref(false)
+const scanning = ref(false)
 const errorBanner = ref<string | null>(null)
 const totalStats = ref<TokenStats | null>(null)
 let unsubscribe: (() => void) | null = null
@@ -80,8 +110,13 @@ async function refreshControllers() {
 }
 
 async function rescan() {
-  const r = await api.refresh()
-  controllers.value = r.controllers
+  scanning.value = true
+  try {
+    const r = await api.refresh()
+    controllers.value = r.controllers
+  } finally {
+    scanning.value = false
+  }
 }
 
 async function refreshChats() {
@@ -237,6 +272,9 @@ const visibleTurns = computed<ChatTurn[]>(() => {
       @toggle="leftOpen = !leftOpen"
     />
 
+    <div v-if="leftOpen" class="resize-handle" @mousedown="startResize('left', $event)" />
+    <div v-else style="width:4px" />
+
     <div class="chat-pane">
       <div class="chat-header" v-if="activeChat">
         <div class="chat-title" :title="activeChat.title">{{ activeChat.title }}</div>
@@ -270,6 +308,9 @@ const visibleTurns = computed<ChatTurn[]>(() => {
       </div>
     </div>
 
+    <div v-if="rightOpen" class="resize-handle" @mousedown="startResize('right', $event)" />
+    <div v-else style="width:4px" />
+
     <SettingsPanel
       :settings="settings"
       :open="settingsOpen"
@@ -282,6 +323,7 @@ const visibleTurns = computed<ChatTurn[]>(() => {
       :controllers="controllers"
       :selected="selectedSns"
       :open="rightOpen"
+      :scanning="scanning"
       @toggle-panel="rightOpen = !rightOpen"
       @rescan="rescan"
       @add-manual="(host) => api.addController(host).then(refreshControllers)"

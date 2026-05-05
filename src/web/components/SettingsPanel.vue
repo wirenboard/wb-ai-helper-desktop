@@ -166,6 +166,7 @@ async function removeKey() {
             </select>
             <div v-if="modelsError" class="error small">{{ modelsError }}</div>
             <input
+              v-if="!models.length"
               v-model="model"
               placeholder="или впишите имя модели вручную"
               style="margin-top:6px"

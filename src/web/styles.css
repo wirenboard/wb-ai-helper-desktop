@@ -57,9 +57,16 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 
 .app-shell {
   display: grid;
-  grid-template-columns: 260px 1fr 320px;
+  grid-template-columns: 260px 4px 1fr 4px 320px;
   height: 100%;
 }
+.resize-handle {
+  background: var(--border);
+  cursor: col-resize;
+  transition: background 0.15s;
+  z-index: 10;
+}
+.resize-handle:hover { background: var(--accent); }
 .sidebar { background: var(--bg-soft); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
 .sidebar.right { border-right: none; border-left: 1px solid var(--border); }
 .sidebar.collapsed .sidebar-header { padding: 8px 4px; justify-content: center; }
@@ -121,6 +128,8 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .spread { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .muted { color: var(--text-mute); }
 .small { font-size: 12px; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
 
 .welcome {
   margin: auto; padding: 32px; max-width: 560px; color: var(--text-mute); text-align: center;
