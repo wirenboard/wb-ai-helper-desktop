@@ -27,10 +27,23 @@ export class Discovery {
 
   constructor(private db: DbHandle) {}
 
+  private intervalMs = 15000
+
   start(intervalMs: number) {
+    this.intervalMs = Math.max(1000, intervalMs)
     this.loadManualFromDb()
     this.startBrowsers()
-    this.timer = setInterval(() => this.refresh(), intervalMs)
+    this.timer = setInterval(() => this.refresh(), this.intervalMs)
+    void this.refresh()
+  }
+
+  /** Reset the periodic scan interval (called when settings.discoveryInterval changes). */
+  setInterval(intervalMs: number): void {
+    const next = Math.max(1000, intervalMs)
+    if (next === this.intervalMs && this.timer) return
+    this.intervalMs = next
+    if (this.timer) clearInterval(this.timer)
+    this.timer = setInterval(() => this.refresh(), this.intervalMs)
     void this.refresh()
   }
 

@@ -44,17 +44,31 @@ function groupByUnits(series: HistorySeries[]): Map<string, HistorySeries[]> {
   return groups
 }
 
-function seriesLabel(s: HistorySeries): string {
-  return s.units ? `${s.label} (${s.units})` : s.label
+/** Strip a common `device/` prefix from labels so the legend shows only what differs. */
+function buildLabelMap(series: HistorySeries[]): Map<HistorySeries, string> {
+  const devices = new Set<string>()
+  for (const s of series) {
+    const slash = s.label.indexOf('/')
+    devices.add(slash > 0 ? s.label.slice(0, slash) : '')
+  }
+  const stripDevice = devices.size === 1 && !devices.has('')
+  const map = new Map<HistorySeries, string>()
+  for (const s of series) {
+    const slash = s.label.indexOf('/')
+    const channel = slash > 0 && stripDevice ? s.label.slice(slash + 1) : s.label
+    const label = s.units ? `${channel}, ${s.units}` : channel
+    map.set(s, label)
+  }
+  return map
 }
 
 /** Build a flat dataset. Each row carries raw + normalised value plus grouping keys. */
-function flatten(nonEmpty: HistorySeries[]): FlatPoint[] {
+function flatten(nonEmpty: HistorySeries[], labels: Map<HistorySeries, string>): FlatPoint[] {
   const out: FlatPoint[] = []
   for (const s of nonEmpty) {
     const range = s.max - s.min
     const norm = (v: number) => (range > 0 ? (v - s.min) / range : 0.5)
-    const label = seriesLabel(s)
+    const label = labels.get(s) ?? s.label
     const unit = s.units ?? ''
     for (const p of s.points) {
       out.push({ t: new Date(p.t * 1000).toISOString(), v: p.v, vn: norm(p.v), series: label, unit })
@@ -73,11 +87,13 @@ export async function renderHistoryChart(
   const nonEmpty = series.filter(s => s.points.length > 0)
   if (!nonEmpty.length) return emptySvg('Нет данных за выбранный период')
 
-  const values = flatten(nonEmpty)
+  const labelMap = buildLabelMap(nonEmpty)
+  const values = flatten(nonEmpty, labelMap)
   const groups = groupByUnits(nonEmpty)
   const groupCount = groups.size
   const durationSec = to - from
   const timeFormat = pickTimeFormat(durationSec)
+  const seriesCount = nonEmpty.length
 
   const xScaleDomain = [new Date(from * 1000).toISOString(), new Date(to * 1000).toISOString()]
   const xEnc = {
@@ -88,22 +104,36 @@ export async function renderHistoryChart(
   } as const
 
   const colorRange = nonEmpty.map((_, i) => PALETTE[i % PALETTE.length] ?? '#000')
+  const allLabels = nonEmpty.map(s => labelMap.get(s)!)
+
+  // Legend layout: bottom row(s) for ≤ 3 series, side panel for many series.
+  // Both with generous labelLimit so nothing gets the "…" treatment.
+  const legendCfg =
+    seriesCount <= 1
+      ? null
+      : seriesCount <= 3
+        ? { title: null as null, orient: 'bottom' as const, direction: 'horizontal' as const, columns: 0, labelLimit: 360, symbolSize: 80, padding: 8 }
+        : { title: null as null, orient: 'right' as const, direction: 'vertical' as const, columns: 1, labelLimit: 280, symbolSize: 80, rowPadding: 4 }
+
   const colorEnc = {
     field: 'series',
     type: 'nominal',
-    scale: { domain: nonEmpty.map(seriesLabel), range: colorRange },
-    legend: nonEmpty.length > 1 ? { title: null, orient: 'bottom', columns: 0 } : null,
+    scale: { domain: allLabels, range: colorRange },
+    legend: legendCfg,
   } as const
 
   const baseConfig = {
     view: { stroke: 'transparent' },
     axis: { labelColor: '#64748b', titleColor: '#64748b', gridColor: '#e2e8f0' },
-    legend: { labelColor: '#334155', titleColor: '#334155' },
+    legend: { labelColor: '#334155', titleColor: '#334155', labelFontSize: 11 },
   } as const
+
+  // Side legends eat horizontal space; widen the canvas to keep the plot area readable
+  const width = legendCfg?.orient === 'right' ? 980 : 880
 
   const baseSpec: Omit<TopLevelSpec, 'data'> = {
     $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
-    width: 880,
+    width,
     height: 360,
     background: '#ffffff',
     title: title ? { text: title, fontSize: 14, color: '#1e293b' } : undefined,
@@ -134,8 +164,8 @@ export async function renderHistoryChart(
     // Twin Y axes — one layer per unit group
     const groupArr = [...groups.entries()]
     const layers = groupArr.map(([unit, grpSeries], gIdx) => {
-      const labels = grpSeries.map(seriesLabel)
-      const filterExpr = labels.map(l => `'${l.replace(/'/g, "\\'")}'`).join(',')
+      const grpLabels = grpSeries.map(s => labelMap.get(s)!)
+      const filterExpr = grpLabels.map(l => `'${l.replace(/'/g, "\\'")}'`).join(',')
       return {
         transform: [{ filter: `indexof([${filterExpr}], datum.series) >= 0` }],
         mark: { type: 'line', strokeWidth: 1.6, interpolate: 'monotone' },
@@ -163,13 +193,14 @@ export async function renderHistoryChart(
     } as TopLevelSpec
   } else {
     // 3+ unit groups → normalise everything to 0..1, show actual ranges in legend
-    const seriesWithRange = nonEmpty.map(s => ({
-      label: seriesLabel(s),
-      range: `${s.min.toFixed(2)} … ${s.max.toFixed(2)}${s.units ? ` ${s.units}` : ''}`,
-    }))
-    const legendLabels = seriesWithRange.map(x => `${x.label}: ${x.range}`)
-    const labelMap = Object.fromEntries(seriesWithRange.map((x, i) => [x.label, legendLabels[i]]))
-    const normedValues = values.map(p => ({ ...p, seriesLegend: labelMap[p.series] ?? p.series }))
+    const legendLabels = nonEmpty.map(s => {
+      const base = labelMap.get(s)!
+      const range = `${s.min.toFixed(2)}…${s.max.toFixed(2)}${s.units ? ` ${s.units}` : ''}`
+      return `${base} · ${range}`
+    })
+    const seriesToLegend = new Map<string, string>()
+    nonEmpty.forEach((s, i) => seriesToLegend.set(labelMap.get(s)!, legendLabels[i] ?? ''))
+    const normedValues = values.map(p => ({ ...p, seriesLegend: seriesToLegend.get(p.series) ?? p.series }))
     spec = {
       ...baseSpec,
       data: { values: normedValues },
@@ -186,7 +217,7 @@ export async function renderHistoryChart(
           field: 'seriesLegend',
           type: 'nominal',
           scale: { domain: legendLabels, range: colorRange },
-          legend: { title: null, orient: 'bottom', columns: 1 },
+          legend: legendCfg,
         },
       },
     } as TopLevelSpec

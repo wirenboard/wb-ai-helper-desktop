@@ -105,6 +105,9 @@ app.put('/api/settings', async (c) => {
     if (typeof body[f] === 'number' || body[f] === null) patch[f] = body[f]
   }
   await settingsStore.update(patch)
+  if (typeof patch['discoveryInterval'] === 'number') {
+    discovery.setInterval(patch['discoveryInterval'])
+  }
   return c.json(settingsStore.toPublic())
 })
 
