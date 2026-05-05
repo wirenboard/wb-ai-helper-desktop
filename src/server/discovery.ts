@@ -1,5 +1,6 @@
 import { Bonjour } from 'bonjour-service'
 import { promises as dns } from 'node:dns'
+import { exec } from 'node:child_process'
 import type { DbHandle } from './db.ts'
 
 export type Controller = {
@@ -31,6 +32,19 @@ export class Discovery {
     this.startBrowsers()
     this.timer = setInterval(() => this.refresh(), intervalMs)
     void this.refresh()
+  }
+
+  /** Resolve a bare IP or hostname into a Controller on-the-fly (not persisted). */
+  getOrCreate(snOrHost: string): Controller | undefined {
+    const upper = snOrHost.toUpperCase()
+    // 1. Try existing registry by SN
+    const existing = this.controllers.get(upper)
+    if (existing) return existing
+    // 2. Try matching by host field
+    for (const c of this.controllers.values()) {
+      if (c.host === snOrHost || c.addresses.includes(snOrHost)) return c
+    }
+    return undefined
   }
 
   private loadManualFromDb() {
@@ -97,7 +111,11 @@ export class Discovery {
   }
 
   refresh = async () => {
-    // Resolve known mDNS hosts to fresh addresses + mark reachable.
+    await Promise.all([this.resolveKnown(), this.avahiBrowse()])
+    this.notify()
+  }
+
+  private async resolveKnown() {
     const probes = [...this.controllers.values()]
       .filter((c) => c.host.endsWith('.local'))
       .map(async (c) => {
@@ -111,7 +129,30 @@ export class Discovery {
         }
       })
     await Promise.all(probes)
-    this.notify()
+  }
+
+  /** On Linux: use avahi-browse to find controllers bonjour-service misses.
+   *  We run without -t so avahi collects responses for a full 5 s window,
+   *  catching controllers that announce late. The process is killed via timeout. */
+  private avahiBrowse(): Promise<void> {
+    if (process.platform !== 'linux') return Promise.resolve()
+    return new Promise((resolve) => {
+      // timeout 5: kills avahi-browse after 5 s so we get a complete picture
+      exec('timeout 5 avahi-browse -a -r -p 2>/dev/null; true', { timeout: 8000 }, (_err, stdout) => {
+        for (const line of stdout.split('\n')) {
+          if (!line.startsWith('=')) continue
+          const p = line.split(';')
+          // =;iface;proto;name;type;domain;hostname;address;port;txt
+          const host = p[6]?.trim()
+          const addr = p[7]?.trim()
+          if (!host) continue
+          const sn = parseSn(host)
+          if (!sn) continue
+          this.onService({ host, addresses: addr ? [addr] : [] })
+        }
+        resolve()
+      })
+    })
   }
 
   private startBrowsers() {

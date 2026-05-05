@@ -44,17 +44,27 @@ function migrate(db: Database) {
       host TEXT NOT NULL,
       added_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS skills (
+      name        TEXT PRIMARY KEY,
+      description TEXT NOT NULL,
+      content     TEXT NOT NULL,
+      updated_at  INTEGER NOT NULL
+    );
   `)
 
   // Token columns added after initial schema — try/catch handles both fresh and existing DBs
   try { db.exec(`ALTER TABLE turns ADD COLUMN tokens_prompt INTEGER NOT NULL DEFAULT 0`) } catch {}
   try { db.exec(`ALTER TABLE turns ADD COLUMN tokens_completion INTEGER NOT NULL DEFAULT 0`) } catch {}
+  try { db.exec(`ALTER TABLE turns ADD COLUMN tokens_cached INTEGER NOT NULL DEFAULT 0`) } catch {}
+  try { db.exec(`ALTER TABLE skills ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'`) } catch {}
 }
 
 function defaultDbPath(): string {
   const exe = process.execPath
   const isCompiled = exe && !path.basename(exe).startsWith('bun')
-  if (isCompiled) return path.join(path.dirname(exe), 'wb-ai-helper.db')
+  // In AppImage the binary lives in a read-only squashfs → fall through to XDG
+  if (isCompiled && !process.env['APPIMAGE']) return path.join(path.dirname(exe), 'wb-ai-helper.db')
   const cfg =
     process.platform === 'win32'
       ? path.join(process.env['APPDATA'] ?? path.join(os.homedir(), 'AppData', 'Roaming'), 'wb-ai-helper')

@@ -2,10 +2,11 @@
 import { computed, ref, watch } from 'vue'
 import { api, type Settings } from '../api'
 
-const props = defineProps<{ settings: Settings | null; open: boolean }>()
+const props = defineProps<{ settings: Settings | null; open: boolean; version?: string; fontSize?: number }>()
 const emit = defineEmits<{
   close: []
   saved: [Settings]
+  fontSizeChange: [number]
 }>()
 
 const apiKey = ref('')
@@ -17,7 +18,14 @@ const sshUser = ref('root')
 const sshPassword = ref('')
 const sshKeyPath = ref('')
 const discoveryInterval = ref(15000)
+const llmProxy = ref('')
+const llmProxyUser = ref('')
+const llmProxyPassword = ref('')
+const tlsInsecure = ref(false)
 const openBrowser = ref(true)
+const priceInput = ref<number | null>(null)
+const priceOutput = ref<number | null>(null)
+const priceCached = ref<number | null>(null)
 
 const models = ref<string[]>([])
 const modelsError = ref<string | null>(null)
@@ -43,7 +51,14 @@ watch(
       sshPassword.value = ''
       sshKeyPath.value = props.settings.sshKeyPath
       discoveryInterval.value = props.settings.discoveryInterval
+      llmProxy.value = props.settings.llmProxy ?? ''
+      llmProxyUser.value = props.settings.llmProxyUser ?? ''
+      llmProxyPassword.value = ''
+      tlsInsecure.value = props.settings.tlsInsecure ?? false
       openBrowser.value = props.settings.openBrowser
+      priceInput.value = props.settings.priceInput ?? null
+      priceOutput.value = props.settings.priceOutput ?? null
+      priceCached.value = props.settings.priceCached ?? null
       if (props.settings.apiKeyConfigured) void fetchModels()
     }
   },
@@ -83,13 +98,20 @@ async function save() {
     const patch: any = {
       baseURL: baseURL.value,
       model: model.value,
+      llmProxy: llmProxy.value,
+      llmProxyUser: llmProxyUser.value,
+      tlsInsecure: tlsInsecure.value,
       mqttUser: mqttUser.value,
       sshUser: sshUser.value,
       sshKeyPath: sshKeyPath.value,
       discoveryInterval: Number(discoveryInterval.value) || 15000,
       openBrowser: openBrowser.value,
+      priceInput: priceInput.value != null ? Number(priceInput.value) : null,
+      priceOutput: priceOutput.value != null ? Number(priceOutput.value) : null,
+      priceCached: priceCached.value != null ? Number(priceCached.value) : null,
     }
     if (apiKey.value) patch.apiKey = apiKey.value
+    if (llmProxyPassword.value) patch.llmProxyPassword = llmProxyPassword.value
     if (mqttPassword.value) patch.mqttPassword = mqttPassword.value
     if (sshPassword.value) patch.sshPassword = sshPassword.value
     const next = await api.saveSettings(patch)
@@ -149,6 +171,31 @@ async function removeKey() {
           </label>
 
           <label class="field">
+            <span>Прокси для LLM <span class="muted small">(необязательно)</span></span>
+            <input v-model="llmProxy" placeholder="http://proxy-host:8080" />
+          </label>
+          <div v-if="llmProxy" class="proxy-auth-row">
+            <label class="field" style="flex:1;margin-bottom:0">
+              <span>Логин прокси <span class="muted small">(опционально)</span></span>
+              <input v-model="llmProxyUser" placeholder="user" autocomplete="off" />
+            </label>
+            <label class="field" style="flex:1;margin-bottom:0">
+              <span>Пароль прокси {{ settings?.llmProxyPasswordConfigured ? '(сохранён)' : '' }}</span>
+              <input
+                type="password"
+                v-model="llmProxyPassword"
+                :placeholder="settings?.llmProxyPasswordConfigured ? '••• оставьте пустым чтобы не менять' : ''"
+                autocomplete="off"
+              />
+            </label>
+          </div>
+
+          <label class="field checkbox-field">
+            <input type="checkbox" v-model="tlsInsecure" />
+            <span>Отключить проверку TLS-сертификата <span class="muted small">(для self-signed)</span></span>
+          </label>
+
+          <label class="field">
             <div class="spread">
               <span>Модель</span>
               <button
@@ -166,10 +213,25 @@ async function removeKey() {
             </select>
             <div v-if="modelsError" class="error small">{{ modelsError }}</div>
             <input
+              v-if="!models.length"
               v-model="model"
               placeholder="или впишите имя модели вручную"
               style="margin-top:6px"
             />
+          </label>
+
+          <div class="subsection-label">Стоимость</div>
+          <label class="field">
+            <span>Цена входных токенов ($/1M)</span>
+            <input type="number" min="0" step="0.01" v-model.number="priceInput" placeholder="напр. 0.15" />
+          </label>
+          <label class="field">
+            <span>Цена выходных токенов ($/1M)</span>
+            <input type="number" min="0" step="0.01" v-model.number="priceOutput" placeholder="напр. 0.60" />
+          </label>
+          <label class="field">
+            <span>Цена кэшированных токенов ($/1M) <span class="muted small">(по умолчанию — как входные)</span></span>
+            <input type="number" min="0" step="0.01" v-model.number="priceCached" placeholder="напр. 0.075" />
           </label>
         </section>
 
@@ -214,20 +276,36 @@ async function removeKey() {
         </section>
 
         <section>
+          <h3>Интерфейс</h3>
+          <label class="field">
+            <div class="spread">
+              <span>Размер шрифта</span>
+              <span class="muted small">{{ fontSize ?? 15 }} px</span>
+            </div>
+            <input
+              type="range" min="12" max="22" step="1"
+              :value="fontSize ?? 15"
+              @input="emit('fontSizeChange', Number(($event.target as HTMLInputElement).value))"
+              style="width:100%; padding:0; background:transparent; border:none;"
+            />
+          </label>
+        </section>
+
+        <section>
           <h3>Прочее</h3>
           <label class="field">
             <span>Период mDNS-сканирования (мс)</span>
             <input type="number" min="3000" step="1000" v-model="discoveryInterval" />
           </label>
-          <label class="field row" style="gap:6px">
-            <input type="checkbox" v-model="openBrowser" style="width:auto" />
-            <span>открывать браузер при запуске</span>
-          </label>
         </section>
 
         <div v-if="saveError" class="error">{{ saveError }}</div>
-        <div class="muted small" v-if="settings">
-          Файл настроек: <code>{{ settings.storagePath }}</code>
+        <div class="muted small" v-if="settings" style="display:flex;justify-content:space-between;align-items:center;gap:8px;min-width:0">
+          <span style="display:flex;align-items:center;gap:4px;min-width:0;overflow:hidden">
+            <span style="white-space:nowrap;flex-shrink:0">Файл настроек:</span>
+            <code style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block" :title="settings.storagePath">{{ settings.storagePath }}</code>
+          </span>
+          <span v-if="version" style="white-space:nowrap;flex-shrink:0">v{{ version }}</span>
         </div>
       </div>
       <div class="modal-footer">
@@ -260,8 +338,12 @@ async function removeKey() {
   padding: 12px 16px; border-top: 1px solid var(--border);
   display: flex; justify-content: flex-end; gap: 8px;
 }
-section h3 { margin: 0 0 8px 0; font-size: 13px; color: var(--text-mute); text-transform: uppercase; letter-spacing: 0.04em; }
-.field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; font-size: 13px; }
-.field > span { color: var(--text-mute); font-size: 12px; }
-code { background: var(--bg-mute); padding: 2px 4px; border-radius: 3px; font-size: 11px; word-break: break-all; }
+section h3 { margin: 0 0 8px 0; font-size: 0.75rem; color: var(--text-mute); text-transform: uppercase; letter-spacing: 0.04em; }
+.subsection-label { font-size: 0.7rem; color: var(--text-mute); text-transform: uppercase; letter-spacing: 0.04em; margin: 10px 0 6px; opacity: 0.75; }
+.field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; font-size: 0.875rem; }
+.field > span { color: var(--text-mute); font-size: 0.8rem; }
+.checkbox-field { flex-direction: row; align-items: center; gap: 8px; }
+.checkbox-field input[type=checkbox] { width: auto; margin: 0; flex-shrink: 0; }
+code { background: var(--bg-mute); padding: 2px 4px; border-radius: 3px; font-size: 0.75rem; word-break: break-all; }
+.proxy-auth-row { display: flex; gap: 8px; margin-bottom: 10px; }
 </style>

@@ -15,7 +15,7 @@ export async function probe(c: Controller): Promise<ProbeResult> {
   try {
     // Wirenboard exposes its web UI at root; we just check reachability + headers.
     const res = await fetch(webUiUrl, { signal: ctrl, redirect: 'follow' })
-    if (!res.ok && res.status !== 401) return { reachable: false, webUiUrl }
+    // Any HTTP response means the controller is reachable (502 = nginx up but upstream issue)
     const server = res.headers.get('server') ?? ''
     return { reachable: true, webUiUrl, hostname: c.host, fw: server || undefined }
   } catch {

@@ -8,6 +8,10 @@ import { copyFileSync, existsSync, mkdtempSync, rmSync, chmodSync } from 'node:f
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
+// Bypass any HTTP proxy for localhost connections (Bun respects HTTP_PROXY globally)
+process.env['NO_PROXY'] = '127.0.0.1,localhost'
+process.env['no_proxy'] = '127.0.0.1,localhost'
+
 const ROOT = path.resolve(import.meta.dir, '..')
 const fallback = path.join(ROOT, 'build', defaultBinary())
 const bin = Bun.argv[2] ?? fallback

@@ -1,93 +1,107 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
-import type { ChatTurn } from '../api'
+import { computed, onBeforeUnmount, ref } from 'vue'
+import { type ChatTurn, turnsToItems, type TrackedJob } from '../api'
+import ChatMessageList from './ChatMessageList.vue'
+import ChatInputArea from './ChatInputArea.vue'
 
 const props = defineProps<{
   turns: ChatTurn[]
   streaming: boolean
   llmConfigured: boolean
+  chatId: string
+  runningJobs?: TrackedJob[]
 }>()
 const emit = defineEmits<{
   send: [text: string]
   stop: []
   rename: [title: string]
+  cancelJob: [jobId: string]
 }>()
 
-const input = ref('')
-const body = ref<HTMLDivElement | null>(null)
+const items = computed(() => turnsToItems(props.turns, props.chatId))
 
-function send() {
-  const t = input.value.trim()
-  if (!t || props.streaming) return
-  input.value = ''
-  emit('send', t)
+// Text selection → quote
+const selPopup = ref<{ x: number; y: number; text: string } | null>(null)
+const inputAreaRef = ref<InstanceType<typeof ChatInputArea> | null>(null)
+
+function onSelectionChange() {
+  const sel = window.getSelection()
+  if (!sel || sel.isCollapsed || !sel.toString().trim()) { selPopup.value = null; return }
+  const range = sel.getRangeAt(0)
+  const rect = range.getBoundingClientRect()
+  selPopup.value = { x: rect.left + rect.width / 2, y: rect.top - 4, text: sel.toString().trim() }
 }
 
-function summaryFor(content: string): string {
-  const head = content.split('\n', 1)[0] ?? ''
-  return head.length > 80 ? head.slice(0, 80) + '…' : head
+function quoteSelection() {
+  if (!selPopup.value) return
+  inputAreaRef.value?.setQuote(selPopup.value.text)
+  selPopup.value = null
+  window.getSelection()?.removeAllRanges()
 }
 
-function onEnter(e: KeyboardEvent) {
-  if (e.shiftKey) return
-  e.preventDefault()
-  send()
+function onDocMousedown(e: MouseEvent) {
+  const popup = document.querySelector('.sel-popup')
+  if (popup && !popup.contains(e.target as Node)) selPopup.value = null
 }
+window.addEventListener('mousedown', onDocMousedown)
+onBeforeUnmount(() => window.removeEventListener('mousedown', onDocMousedown))
 
-watch(
-  () => [props.turns.length, props.turns[props.turns.length - 1]?.content],
-  async () => {
-    await nextTick()
-    if (body.value) body.value.scrollTop = body.value.scrollHeight
-  },
-)
+function onSuggest(text: string) {
+  emit('send', text)
+}
 </script>
 
 <template>
-  <div class="chat-body" ref="body">
-    <div v-if="!turns.length" class="empty">
-      Опишите задачу. Например: «список устройств на всех контроллерах»,
-      «проверь доступность кухонного контроллера», «какое значение датчика T1 на WB-XXX?».
-    </div>
-    <template v-for="(t, i) in turns" :key="i">
-      <div v-if="t.role === 'user'" class="msg user">
-        <div class="role">вы</div>{{ t.content }}
-      </div>
-      <div v-else-if="t.role === 'assistant'" class="msg assistant">
-        <div class="role">помощник</div><span v-if="t.content">{{ t.content }}</span>
-        <span v-else class="muted">…</span>
-        <div v-if="t.tokensPrompt || t.tokensCompletion" class="token-meta">
-          ↑{{ t.tokensPrompt ?? 0 }} ↓{{ t.tokensCompletion ?? 0 }}
-        </div>
-      </div>
-      <div v-else-if="t.role === 'tool'" class="msg tool">
-        <details>
-          <summary>{{ summaryFor(t.content) }}</summary>
-          <pre>{{ t.content }}</pre>
-        </details>
-      </div>
-    </template>
-  </div>
-
-  <div class="chat-input-row">
-    <textarea
-      v-model="input"
-      :placeholder="llmConfigured ? 'Сообщение… (Enter — отправить, Shift+Enter — перенос)' : 'OPENAI_API_KEY не настроен'"
-      :disabled="!llmConfigured"
-      @keydown.enter="onEnter"
+  <div class="chat-pane-inner">
+    <ChatMessageList
+      :items="items"
+      :streaming="streaming"
+      :chatId="chatId"
+      :runningJobs="runningJobs"
+      @mouseup="onSelectionChange"
+      @suggest="onSuggest"
+      @cancelJob="emit('cancelJob', $event)"
     />
-    <button v-if="streaming" class="danger" @click="emit('stop')">Стоп</button>
-    <button v-else class="primary" :disabled="!llmConfigured || !input.trim()" @click="send">
-      Отправить
-    </button>
+
+    <Teleport to="body">
+      <div v-if="selPopup" class="sel-popup" :style="{ left: selPopup.x + 'px', top: selPopup.y + 'px' }">
+        <button @mousedown.prevent="quoteSelection">Спросить →</button>
+      </div>
+    </Teleport>
+
+    <ChatInputArea
+      ref="inputAreaRef"
+      :disabled="streaming"
+      :llmConfigured="llmConfigured"
+      :chatId="chatId"
+      @send="emit('send', $event)"
+      @abort="emit('stop')"
+    />
   </div>
 </template>
 
 <style scoped>
-.token-meta {
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--text-mute);
-  opacity: 0.7;
+.chat-pane-inner {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
+.sel-popup {
+  position: fixed;
+  transform: translate(-50%, -100%);
+  z-index: 1000;
+}
+.sel-popup button {
+  background: #1e293b;
+  color: #fff;
+  border: none;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+.sel-popup button:hover { background: #334155; }
 </style>

@@ -14,9 +14,85 @@ export type AssistantToolCall = { id: string; name: string; arguments: string }
 
 export type ChatTurn =
   | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string; toolCalls?: AssistantToolCall[]; tokensPrompt?: number; tokensCompletion?: number }
+  | { role: 'assistant'; content: string; toolCalls?: AssistantToolCall[]; tokensPrompt?: number; tokensCompletion?: number; tokensCached?: number }
   | { role: 'tool'; toolCallId: string; content: string }
   | { role: 'system'; content: string }
+
+// ── Chat items (UI layer, derived from ChatTurn[]) ────────────────────────
+export type ChatItemUser = { type: 'user'; text: string }
+export type ChatItemAssistantText = { type: 'assistant_text'; text: string; tokensPrompt?: number; tokensCompletion?: number; tokensCached?: number }
+export type ChatItemToolCall = { type: 'tool_call'; id: string; name: string; input: Record<string, unknown>; result?: { content: string; isError: boolean } }
+export type ChatItemAssistantFile = { type: 'assistant_file'; attachmentId: string; name: string; mime: string; size: number; url: string; sourceSn?: string; sourcePath?: string }
+export type ChatItemError = { type: 'error'; message: string }
+export type ChatItemSystemEvent = { type: 'system_event'; text: string }
+export type ChatItem = ChatItemUser | ChatItemAssistantText | ChatItemToolCall | ChatItemAssistantFile | ChatItemError | ChatItemSystemEvent
+
+export function turnsToItems(turns: ChatTurn[], chatId: string): ChatItem[] {
+  const items: ChatItem[] = []
+  const byCallId = new Map<string, { item: ChatItemToolCall; itemIdx: number }>()
+
+  for (let i = 0; i < turns.length; i++) {
+    const t = turns[i]!
+    if (t.role === 'user') {
+      if (t.content.startsWith('[Система]')) {
+        items.push({ type: 'system_event', text: t.content.slice('[Система]'.length).trim().split('\n')[0]! })
+        continue
+      }
+      items.push({ type: 'user', text: t.content })
+    } else if (t.role === 'assistant') {
+      for (const tc of t.toolCalls ?? []) {
+        let input: Record<string, unknown> = {}
+        try { input = JSON.parse(tc.arguments) } catch {}
+        const item: ChatItemToolCall = { type: 'tool_call', id: tc.id, name: tc.name, input }
+        byCallId.set(tc.id, { item, itemIdx: items.length })
+        items.push(item)
+      }
+      if (t.content) {
+        items.push({ type: 'assistant_text', text: t.content, tokensPrompt: t.tokensPrompt, tokensCompletion: t.tokensCompletion, tokensCached: t.tokensCached })
+      }
+    } else if (t.role === 'tool') {
+      const callId = (t as { toolCallId?: string }).toolCallId
+      if (t.content.startsWith('▶ ')) {
+        const lines = t.content.split('\n')
+        const name = lines[0]!.slice(2).trim()
+        const errSepIdx = lines.indexOf('— result err —')
+        const okSepIdx = lines.indexOf('— result —')
+        const sepIdx = errSepIdx >= 0 ? errSepIdx : okSepIdx
+        const isErr = errSepIdx >= 0
+        const argsStr = sepIdx > 1 ? lines.slice(1, sepIdx).join('\n') : sepIdx === -1 ? lines.slice(1).join('\n') : ''
+        const resultStr = sepIdx >= 0 ? lines.slice(sepIdx + 1).join('\n') : undefined
+        let input: Record<string, unknown> = {}
+        try { input = JSON.parse(argsStr) } catch {}
+        const id = callId ?? `stream-${i}`
+        const item: ChatItemToolCall = { type: 'tool_call', id, name, input, result: resultStr !== undefined ? { content: resultStr, isError: isErr } : undefined }
+        byCallId.set(id, { item, itemIdx: items.length })
+        items.push(item)
+      } else if (callId) {
+        const entry = byCallId.get(callId)
+        if (entry) {
+          const isErr = t.content.startsWith('\x01')
+          entry.item.result = { content: isErr ? t.content.slice(1) : t.content, isError: isErr }
+        }
+      }
+    }
+  }
+
+  // Insert assistant_file items after tool_calls that returned a file attachment
+  const inserts: Array<{ at: number; item: ChatItemAssistantFile }> = []
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i]!
+    if (it.type !== 'tool_call' || !it.result) continue
+    try {
+      const p = JSON.parse(it.result.content)
+      if (typeof p.fileId === 'string' && p.fileName) {
+        inserts.push({ at: i + 1, item: { type: 'assistant_file', attachmentId: p.fileId, name: p.fileName, mime: p.mime ?? 'application/octet-stream', size: p.size ?? 0, url: `/api/attachments/${encodeURIComponent(p.fileId)}?chatId=${encodeURIComponent(chatId)}` } })
+      }
+    } catch {}
+  }
+  for (let i = inserts.length - 1; i >= 0; i--) items.splice(inserts[i]!.at, 0, inserts[i]!.item)
+
+  return items
+}
 
 export type Chat = {
   id: string
@@ -27,15 +103,26 @@ export type Chat = {
   turns: ChatTurn[]
   tokensPrompt: number
   tokensCompletion: number
+  tokensCached: number
 }
 
 export type TokenStats = {
   totalPromptTokens: number
   totalCompletionTokens: number
+  totalCachedTokens?: number
+}
+
+export type TrackedJob = {
+  jobId: string
+  sn: string
+  label: string
+  sessionId: string
+  state: 'running' | 'exited' | 'unknown'
 }
 
 export type Health = {
   ok: boolean
+  version: string
   llmConfigured: boolean
   model: string | null
   port: number
@@ -45,6 +132,9 @@ export type Health = {
 export type Settings = {
   baseURL: string
   model: string
+  llmProxy: string
+  llmProxyUser: string
+  tlsInsecure: boolean
   mqttUser: string
   sshUser: string
   sshKeyPath: string
@@ -53,13 +143,21 @@ export type Settings = {
   apiKeyConfigured: boolean
   mqttPasswordConfigured: boolean
   sshPasswordConfigured: boolean
+  llmProxyPasswordConfigured: boolean
   storagePath: string
+  priceInput?: number | null
+  priceOutput?: number | null
+  priceCached?: number | null
 }
 
 export type SettingsPatch = Partial<{
   apiKey: string
   baseURL: string
   model: string
+  llmProxy: string
+  llmProxyUser: string
+  llmProxyPassword: string
+  tlsInsecure: boolean
   mqttUser: string
   mqttPassword: string
   sshUser: string
@@ -67,6 +165,9 @@ export type SettingsPatch = Partial<{
   sshKeyPath: string
   discoveryInterval: number
   openBrowser: boolean
+  priceInput: number | null
+  priceOutput: number | null
+  priceCached: number | null
 }>
 
 const json = async <T>(res: Response): Promise<T> => {
@@ -106,6 +207,11 @@ export const api = {
     ),
 
   stats: () => fetch('/api/stats').then((r) => json<TokenStats>(r)),
+
+  chatJobs: (chatId: string) =>
+    fetch(`/api/chats/${encodeURIComponent(chatId)}/jobs`).then((r) => json<{ jobs: TrackedJob[] }>(r)),
+  cancelJob: (chatId: string, jobId: string) =>
+    fetch(`/api/chats/${encodeURIComponent(chatId)}/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }).then((r) => json<{ ok: boolean; jobId: string }>(r)),
 
   chats: () => fetch('/api/chats').then((r) => json<{ chats: Chat[] }>(r)),
   createChat: (contextSns: string[] = [], title?: string) =>
@@ -178,7 +284,7 @@ export const api = {
     for (const ev of ['hello', 'controllers', 'ping']) {
       const fn = (e: MessageEvent) => {
         try {
-          onEvent(ev, JSON.parse(e.data))
+          onEvent(ev, JSON.parse(e.data as string))
         } catch {
           onEvent(ev, e.data)
         }
@@ -191,4 +297,17 @@ export const api = {
       es.close()
     }
   },
+}
+
+export function calcCost(
+  promptTokens: number,
+  completionTokens: number,
+  cachedTokens: number,
+  prices: { priceInput?: number | null; priceOutput?: number | null; priceCached?: number | null },
+): number | null {
+  if (prices.priceInput == null && prices.priceOutput == null) return null
+  const input = (promptTokens - cachedTokens) * (prices.priceInput ?? 0) / 1_000_000
+  const cached = cachedTokens * (prices.priceCached ?? prices.priceInput ?? 0) / 1_000_000
+  const output = completionTokens * (prices.priceOutput ?? 0) / 1_000_000
+  return input + cached + output
 }

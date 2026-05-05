@@ -8,7 +8,7 @@ import type { Stream } from 'openai/streaming.mjs'
 
 export type ChatTurn =
   | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string; toolCalls?: AssistantToolCall[]; tokensPrompt?: number; tokensCompletion?: number }
+  | { role: 'assistant'; content: string; toolCalls?: AssistantToolCall[]; tokensPrompt?: number; tokensCompletion?: number; tokensCached?: number }
   | { role: 'tool'; toolCallId: string; content: string }
   | { role: 'system'; content: string }
 
@@ -22,7 +22,7 @@ export type StreamEvent =
   | { type: 'text-delta'; text: string }
   | { type: 'tool-call'; id: string; name: string; arguments: string }
   | { type: 'tool-result'; id: string; name: string; result: string; ok: boolean }
-  | { type: 'usage'; promptTokens: number; completionTokens: number }
+  | { type: 'usage'; promptTokens: number; completionTokens: number; cachedTokens: number }
   | { type: 'done'; finish_reason: string | null }
   | { type: 'error'; message: string }
 
@@ -30,8 +30,18 @@ export class LlmClient {
   private client: OpenAI
   readonly model: string
 
-  constructor(opts: { apiKey: string; baseURL?: string; model?: string }) {
-    this.client = new OpenAI({ apiKey: opts.apiKey, baseURL: opts.baseURL })
+  constructor(opts: { apiKey: string; baseURL?: string; model?: string; llmProxy?: string; llmProxyUser?: string; llmProxyPassword?: string; tlsInsecure?: boolean }) {
+    const needCustomFetch = opts.llmProxy || opts.tlsInsecure
+    const proxyUrl = opts.llmProxy ? buildProxyUrl(opts.llmProxy, opts.llmProxyUser, opts.llmProxyPassword) : undefined
+    const fetchFn = needCustomFetch
+      ? (url: string | URL, init?: RequestInit) => {
+          const extra: Record<string, unknown> = {}
+          if (proxyUrl) extra['proxy'] = proxyUrl
+          if (opts.tlsInsecure) extra['tls'] = { rejectUnauthorized: false }
+          return fetch(url, { ...init, ...extra } as RequestInit)
+        }
+      : undefined
+    this.client = new OpenAI({ apiKey: opts.apiKey, baseURL: opts.baseURL, fetch: fetchFn })
     this.model = opts.model ?? 'gpt-4.1-mini'
   }
 
@@ -40,20 +50,42 @@ export class LlmClient {
     history: ChatTurn[],
     tools: ChatCompletionTool[],
     runTool: (name: string, args: string) => Promise<string>,
-    opts?: { maxTurns?: number; signal?: AbortSignal },
+    opts?: {
+      maxTurns?: number
+      signal?: AbortSignal
+      agentState?: { checkpointSummary?: string }
+      getExtraSystemMsgs?: () => string[]
+    },
   ): AsyncGenerator<StreamEvent> {
     const maxTurns = opts?.maxTurns ?? 8
     const messages = history.map(toApi)
     let totalPromptTokens = 0
     let totalCompletionTokens = 0
+    let totalCachedTokens = 0
 
     for (let turn = 0; turn < maxTurns; turn++) {
+      const isLastTurn = turn === maxTurns - 1
+      const extraMsgs = opts?.getExtraSystemMsgs?.() ?? []
+      const injected: ChatCompletionMessageParam[] = extraMsgs.map((content) => ({
+        role: 'system' as const,
+        content,
+      }))
+      if (isLastTurn) {
+        injected.push({
+          role: 'system',
+          content: '⚠ ПОСЛЕДНЯЯ ИТЕРАЦИЯ АГЕНТНОГО ЦИКЛА. НЕ вызывай инструменты. Дай финальный ответ на основе уже собранной информации.',
+        })
+      }
+      const messagesForApi: ChatCompletionMessageParam[] = messages.length > 0
+        ? [messages[0]!, ...injected, ...messages.slice(1)]
+        : [...injected]
+
       let stream: Stream<ChatCompletionChunk>
       try {
         stream = await this.client.chat.completions.create({
           model: this.model,
-          messages,
-          tools: tools.length ? tools : undefined,
+          messages: messagesForApi,
+          tools: isLastTurn ? undefined : (tools.length ? tools : undefined),
           stream: true,
           stream_options: { include_usage: true },
         })
@@ -75,6 +107,7 @@ export class LlmClient {
           if (chunk.usage) {
             totalPromptTokens += chunk.usage.prompt_tokens
             totalCompletionTokens += chunk.usage.completion_tokens
+            totalCachedTokens += chunk.usage.prompt_tokens_details?.cached_tokens ?? 0
           }
           const choice = chunk.choices[0]
           if (!choice) continue
@@ -102,7 +135,7 @@ export class LlmClient {
       const toolCalls = [...toolBuf.values()].filter((t) => t.id && t.name)
       if (!toolCalls.length) {
         if (totalPromptTokens || totalCompletionTokens) {
-          yield { type: 'usage', promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens }
+          yield { type: 'usage', promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens, cachedTokens: totalCachedTokens }
         }
         yield { type: 'done', finish_reason: finish }
         return
@@ -131,12 +164,37 @@ export class LlmClient {
         yield { type: 'tool-result', id: t.id, name: t.name, result, ok }
         messages.push({ role: 'tool', tool_call_id: t.id, content: result })
       }
+
+      // Handle checkpoint: compress working messages
+      if (opts?.agentState?.checkpointSummary) {
+        const summary = opts.agentState.checkpointSummary
+        delete opts.agentState.checkpointSummary
+        const thisRoundCount = toolCalls.length + 1  // assistant msg + tool results
+        const thisRound = messages.slice(-thisRoundCount)
+        const sysMsg = messages[0]
+        messages.length = 0
+        if (sysMsg) messages.push(sysMsg)
+        messages.push({ role: 'system', content: `Чекпоинт — итог предыдущего этапа:\n${summary}` })
+        messages.push(...thisRound)
+      }
     }
 
     if (totalPromptTokens || totalCompletionTokens) {
-      yield { type: 'usage', promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens }
+      yield { type: 'usage', promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens, cachedTokens: totalCachedTokens }
     }
     yield { type: 'done', finish_reason: 'max_turns' }
+  }
+}
+
+function buildProxyUrl(proxy: string, user?: string, password?: string): string {
+  if (!user) return proxy
+  try {
+    const u = new URL(proxy)
+    u.username = encodeURIComponent(user)
+    if (password) u.password = encodeURIComponent(password)
+    return u.toString()
+  } catch {
+    return proxy
   }
 }
 
