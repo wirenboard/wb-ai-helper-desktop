@@ -11,6 +11,7 @@ const emit = defineEmits<{
   toggle: [sn: string]
   'select-all': []
   clear: []
+  'open-terminal': [sn: string]
 }>()
 
 const manualHost = ref('')
@@ -76,19 +77,34 @@ function add() {
             <span class="status" :class="statusOf(c).cls">{{ statusOf(c).text }}</span>
             <span class="small muted">{{ c.source === 'manual' ? 'вручную' : 'mDNS' }}</span>
           </div>
-          <div class="row" style="margin-top:4px;gap:4px">
+          <div class="actions" @click.stop>
             <a
-              class="small"
+              class="icon-action"
               :href="`http://${c.host}/`"
               target="_blank"
               rel="noopener"
-              @click.stop
-            >Web UI ↗</a>
+              title="Web UI"
+              aria-label="Web UI"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
+            </a>
+            <button
+              class="icon-action"
+              title="SSH-терминал"
+              aria-label="SSH-терминал"
+              @click="emit('open-terminal', c.sn)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            </button>
             <button
               v-if="c.source === 'manual'"
-              class="ghost small danger"
-              @click.stop="emit('remove', c.sn)"
-            >удалить</button>
+              class="icon-action danger"
+              title="Удалить из списка"
+              aria-label="Удалить"
+              @click="emit('remove', c.sn)"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
+            </button>
           </div>
         </div>
       </div>
@@ -106,3 +122,16 @@ function add() {
     </template>
   </aside>
 </template>
+
+<style scoped>
+.actions { display: flex; gap: 4px; margin-top: 6px; justify-content: flex-end; }
+.icon-action {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0;
+  background: transparent; border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text-mute); cursor: pointer; text-decoration: none;
+}
+.icon-action:hover { background: var(--bg-soft); color: var(--accent); border-color: var(--accent); }
+.icon-action.danger:hover { color: var(--danger); border-color: var(--danger); }
+.icon-action svg { display: block; }
+</style>

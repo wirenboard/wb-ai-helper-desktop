@@ -553,9 +553,10 @@ export function toolSchemas(): ChatCompletionTool[] {
         description:
           'Построить график истории MQTT-каналов и сохранить как вложение (SVG). ' +
           'Использует wb-mqtt-db через RPC db_logger/history/get_values, рендерит через vega-lite. ' +
-          'Поддерживает несколько серий на одном графике, twin Y-axis при разных единицах. ' +
-          'Используй когда пользователь просит «покажи график», «пришли график», «нарисуй». ' +
-          'Используй period вместо from/to.',
+          'По умолчанию строит линейный график (chart_type=line). Меняй chart_type когда пользователь просит конкретный вид: ' +
+          '«гистограмма» → histogram (распределение значений), «глазковая/тепловая карта/плотность» → heatmap, ' +
+          '«ящики/разброс по дням» → boxplot, «столбики/события» → bar, «область/заливка» → area, «точки/выбросы» → point. ' +
+          'Поддерживает несколько серий на одном графике, twin Y-axis при разных единицах.',
         parameters: {
           type: 'object',
           properties: {
@@ -571,6 +572,15 @@ export function toolSchemas(): ChatCompletionTool[] {
             to: { type: 'number', description: 'Конец диапазона (unix timestamp, секунды). По умолчанию — сейчас.' },
             title: { type: 'string', description: 'Заголовок графика (например: "CPU Temperature за сутки").' },
             ylabel: { type: 'string', description: 'Подпись оси Y (обычно — единица измерения, например "°C").' },
+            chart_type: {
+              type: 'string',
+              enum: ['line', 'bar', 'area', 'point', 'histogram', 'heatmap', 'boxplot'],
+              description:
+                'Тип графика. line — обычный время-ряд (default). bar — столбики (для дискретных событий). area — заливка под линией. ' +
+                'point — скаттер (выбросы). histogram — распределение значений (по бинам). ' +
+                'heatmap — плотность во времени (рисует «глазковую» — видно типовой уровень и выбросы). ' +
+                'boxplot — ящики с усами по периодам (час/день).',
+            },
           },
           required: ['sn', 'channels'],
           additionalProperties: false,
@@ -741,6 +751,63 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {},
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'list_rules',
+        description: 'Список всех wb-rules скриптов с состоянием enabled/disabled и привязанными правилами. Обёртка над wbrules/Editor/List — не нужно знать RPC-синтаксис.',
+        parameters: { type: 'object', properties: { sn: { type: 'string', description: 'Серийный номер контроллера.' } }, required: ['sn'], additionalProperties: false },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'load_rule',
+        description: 'Прочитать содержимое файла правила wb-rules. Имя — без пути и без расширения (например "wb-la-temp-relay"); .js добавится автоматически.',
+        parameters: {
+          type: 'object',
+          properties: {
+            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            name: { type: 'string', description: 'Имя файла правила без расширения (например "wb-la-temp-relay").' },
+          },
+          required: ['sn', 'name'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'save_rule',
+        description: 'Создать или обновить файл правила wb-rules. Имя — без пути и без расширения. RPC валидирует JS и перезагружает движок атомарно. Используй вместо ручного mqtt_rpc("wbrules","Editor","Save").',
+        parameters: {
+          type: 'object',
+          properties: {
+            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            name: { type: 'string', description: 'Имя файла без расширения (например "my-rule").' },
+            content: { type: 'string', description: 'Полный JS-код файла. ES5 (без let/const/arrow).' },
+          },
+          required: ['sn', 'name', 'content'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'delete_rule',
+        description: 'Удалить файл правила wb-rules. Сначала пробует wbrules/Editor/Remove; если демон отвечает "File not found" (рассинхрон кэша) — делает rm + reload-or-restart wb-rules через SSH. Требует явного подтверждения пользователя.',
+        parameters: {
+          type: 'object',
+          properties: {
+            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            name: { type: 'string', description: 'Имя файла без расширения.' },
+          },
+          required: ['sn', 'name'],
           additionalProperties: false,
         },
       },
@@ -1517,10 +1584,12 @@ import json as j; print(j.dumps(m))
       if (!from) return JSON.stringify({ error: 'укажи period (например: 2h, 6h, 24h, 7d) или from (unix timestamp)' })
       const title = typeof args['title'] === 'string' ? args['title'] : ''
       const ylabel = typeof args['ylabel'] === 'string' ? args['ylabel'] : ''
+      const allowedTypes = new Set(['line', 'bar', 'area', 'point', 'histogram', 'heatmap', 'boxplot'])
+      const chartType = (typeof args['chart_type'] === 'string' && allowedTypes.has(args['chart_type'])) ? args['chart_type'] : 'line'
       const histData = await fetchHistory(ctx, c, channels, from, to)
       const totalPoints = histData.series.reduce((n, s) => n + s.points.length, 0)
       try {
-        const svg = await renderHistoryChart(histData.series, from, to, title, ylabel)
+        const svg = await renderHistoryChart(histData.series, from, to, title, ylabel, chartType as any)
         const fname = `chart-${c.sn}-${Date.now()}.svg`
         const r = saveAttachment(ctx.sessionId, fname, Buffer.from(svg, 'utf-8'), 'assistant')
         if (!r.ok) return JSON.stringify({ error: r.error })
@@ -1658,6 +1727,55 @@ import json as j; print(j.dumps(m))
         return JSON.stringify({ sn: c.sn, path, bytesWritten: buf.length, source: meta.name, status: 'uploaded' })
       } catch (e: any) {
         return JSON.stringify({ error: e?.message ?? String(e) })
+      }
+    }
+
+    case 'list_rules': {
+      const c = resolve1(args['sn'], ctx)
+      const r = await ctx.ssh.mqttRpc(c, 'wbrules', 'Editor', 'List', {}, 10)
+      return JSON.stringify(r, null, 2)
+    }
+
+    case 'load_rule': {
+      const c = resolve1(args['sn'], ctx)
+      const name = ruleNameToPath(args['name'])
+      if (!name) return JSON.stringify({ error: 'name обязателен' })
+      const r = await ctx.ssh.mqttRpc(c, 'wbrules', 'Editor', 'Load', { path: name }, 10)
+      return JSON.stringify(r, null, 2)
+    }
+
+    case 'save_rule': {
+      const c = resolve1(args['sn'], ctx)
+      const name = ruleNameToPath(args['name'])
+      const content = String(args['content'] ?? '')
+      if (!name) return JSON.stringify({ error: 'name обязателен' })
+      if (!content) return JSON.stringify({ error: 'content обязателен' })
+      try {
+        const r = await ctx.ssh.mqttRpc(c, 'wbrules', 'Editor', 'Save', { path: name, content }, 15)
+        return JSON.stringify({ ok: true, ...((r && typeof r === 'object') ? r : {}) }, null, 2)
+      } catch (e: unknown) {
+        return JSON.stringify({ error: e instanceof Error ? e.message : String(e) })
+      }
+    }
+
+    case 'delete_rule': {
+      const c = resolve1(args['sn'], ctx)
+      const name = ruleNameToPath(args['name'])
+      if (!name) return JSON.stringify({ error: 'name обязателен' })
+      try {
+        await ctx.ssh.mqttRpc(c, 'wbrules', 'Editor', 'Remove', { path: name }, 10)
+        return JSON.stringify({ ok: true, via: 'wbrules.Editor.Remove', name }, null, 2)
+      } catch (e: unknown) {
+        // Common quirk: Editor.List shows the file but Editor.Remove says "File not found".
+        // Fall back to plain rm + reload.
+        const msg = e instanceof Error ? e.message : String(e)
+        if (/file not found|EditorError/i.test(msg)) {
+          const escaped = name.replace(/'/g, "'\\''")
+          const r = await ctx.ssh.exec(c, `rm -f '/etc/wb-rules/${escaped}' && systemctl reload-or-restart wb-rules`, 15_000)
+          if (r.code === 0) return JSON.stringify({ ok: true, via: 'ssh_rm', name, note: 'Editor.Remove ответил File not found, удалил через rm + reload-or-restart wb-rules.' }, null, 2)
+          return JSON.stringify({ error: `rm fallback failed: ${r.stderr.trim() || `exit ${r.code}`}` })
+        }
+        return JSON.stringify({ error: msg })
       }
     }
 
@@ -1922,6 +2040,18 @@ async function fetchHistory(
   }))
 
   return { series, from, to, durationSec }
+}
+
+/** Normalise a wb-rule name to the `<name>.js` path that wbrules/Editor expects. */
+function ruleNameToPath(raw: unknown): string {
+  let s = String(raw ?? '').trim()
+  if (!s) return ''
+  // Strip any leading directory the model might have added
+  s = s.replace(/^\/?(etc\/wb-rules\/)?/, '')
+  // Reject path traversal
+  if (s.includes('/') || s.includes('..')) return ''
+  if (!s.endsWith('.js')) s += '.js'
+  return s
 }
 
 function csvEscape(v: string): string {

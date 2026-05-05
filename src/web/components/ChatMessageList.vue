@@ -14,7 +14,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ suggest: [text: string]; cancelJob: [jobId: string]; undoCancelJob: [jobId: string] }>()
 
-const JOB_TOOLS = new Set(['wb_bus_scan', 'ssh_exec_async', 'wb_serial_debug'])
+const JOB_TOOLS = new Set(['wb_bus_scan', 'ssh_exec_async', 'serial_debug_collect'])
 
 function groupRunningJobs(g: Group): TrackedJob[] {
   if (!props.runningJobs?.length) return []

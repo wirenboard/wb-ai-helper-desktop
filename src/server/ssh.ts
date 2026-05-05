@@ -51,6 +51,50 @@ export class SshPool {
     this.conns.clear()
   }
 
+  /**
+   * Open an interactive PTY shell. Returns a duplex-ish handle:
+   *  - write(data): forward keystrokes to the controller
+   *  - resize(cols, rows): tell the remote pty about the new dimensions
+   *  - close(): tear down the channel
+   *  - on(handler): subscribe to data coming back from the shell
+   *
+   * Caller owns the lifecycle — call close() when done. The underlying
+   * SshPool connection is kept alive (other tools may share it).
+   */
+  async openShell(
+    controller: Controller,
+    onData: (chunk: Buffer) => void,
+    onClose: () => void,
+    cols = 80,
+    rows = 24,
+  ): Promise<{ write: (s: string) => void; resize: (c: number, r: number) => void; close: () => void }> {
+    const conn = await this.connect(controller)
+    return await new Promise((resolve, reject) => {
+      conn.client.shell({ cols, rows, term: 'xterm-256color' }, (err, ch) => {
+        if (err) return reject(err)
+        let closed = false
+        ch.on('data', (chunk: Buffer) => onData(chunk))
+        ch.stderr?.on('data', (chunk: Buffer) => onData(chunk))
+        ch.on('close', () => {
+          if (closed) return
+          closed = true
+          conn.lastUsed = Date.now()
+          onClose()
+        })
+        ch.on('error', (e: Error) => onData(Buffer.from(`\r\n[ssh error] ${e.message}\r\n`)))
+        resolve({
+          write: (s: string) => { try { ch.write(s) } catch { /* channel gone */ } },
+          resize: (c: number, r: number) => { try { ch.setWindow(r, c, 0, 0) } catch { /* ignore */ } },
+          close: () => {
+            if (closed) return
+            closed = true
+            try { ch.end() } catch { /* ignore */ }
+          },
+        })
+      })
+    })
+  }
+
   async exec(controller: Controller, command: string, timeoutMs = DEFAULT_EXEC_TIMEOUT): Promise<ExecResult> {
     const limit = Math.min(timeoutMs, MAX_EXEC_TIMEOUT)
     const conn = await this.connect(controller)

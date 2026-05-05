@@ -30,14 +30,18 @@ export class LlmClient {
   private client: OpenAI
   readonly model: string
 
-  constructor(opts: { apiKey: string; baseURL?: string; model?: string; llmProxy?: string; llmProxyUser?: string; llmProxyPassword?: string; tlsInsecure?: boolean }) {
-    const needCustomFetch = opts.llmProxy || opts.tlsInsecure
+  constructor(opts: { apiKey: string; baseURL?: string; model?: string; llmProxy?: string; llmProxyUser?: string; llmProxyPassword?: string; tlsInsecure?: boolean; caCert?: string; apiFormat?: 'openai' }) {
     const proxyUrl = opts.llmProxy ? buildProxyUrl(opts.llmProxy, opts.llmProxyUser, opts.llmProxyPassword) : undefined
+    const caBuf = opts.caCert ? Buffer.from(opts.caCert, 'utf8') : undefined
+    const needCustomFetch = !!(opts.llmProxy || opts.tlsInsecure || caBuf)
     const fetchFn = needCustomFetch
       ? (url: string | URL, init?: RequestInit) => {
           const extra: Record<string, unknown> = {}
           if (proxyUrl) extra['proxy'] = proxyUrl
-          if (opts.tlsInsecure) extra['tls'] = { rejectUnauthorized: false }
+          const tls: Record<string, unknown> = {}
+          if (opts.tlsInsecure) tls['rejectUnauthorized'] = false
+          if (caBuf) tls['ca'] = caBuf
+          if (Object.keys(tls).length) extra['tls'] = tls
           return fetch(url, { ...init, ...extra } as RequestInit)
         }
       : undefined
@@ -110,7 +114,7 @@ export class LlmClient {
             totalPromptTokens += chunk.usage.prompt_tokens ?? 0
             totalCompletionTokens += chunk.usage.completion_tokens ?? 0
             totalCachedTokens += chunk.usage.prompt_tokens_details?.cached_tokens ?? 0
-            // VseGPT extension: server-side billing in RUB
+            // VseGPT extension: server-side billing in the provider's currency
             const c = (chunk.usage as { total_cost?: number }).total_cost
             if (typeof c === 'number') totalCost += c
           }

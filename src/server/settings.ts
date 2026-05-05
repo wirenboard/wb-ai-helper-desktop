@@ -3,7 +3,10 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 
-export type LlmProvider = 'openai' | 'vsegpt' | 'custom'
+export type LlmProvider = 'openai' | 'custom' | 'custom_proxy'
+/** Только OpenAI Chat Completions сейчас. Anthropic-формат вырезан, оставлено
+ * поле для будущего — Responses API или ещё какие protocol-варианты. */
+export type ApiFormat = 'openai'
 
 /** All LLM-side settings live here, one set per provider. */
 export interface ProviderConfig {
@@ -14,6 +17,10 @@ export interface ProviderConfig {
   llmProxyUser: string
   llmProxyPassword: string
   tlsInsecure: boolean
+  /** PEM-содержимое CA-сертификата для доступа через MITM-прокси (e.g. Claude proxy). */
+  caCert: string
+  /** Формат API: 'openai' (Chat Completions) или 'anthropic' (Messages). Только Custom AI Proxy. */
+  apiFormat: ApiFormat
   priceInput: number | null
   priceOutput: number | null
   priceCached: number | null
@@ -22,7 +29,7 @@ export interface ProviderConfig {
 const EMPTY_PROVIDER: ProviderConfig = {
   apiKey: '', baseURL: '', model: '',
   llmProxy: '', llmProxyUser: '', llmProxyPassword: '',
-  tlsInsecure: false,
+  tlsInsecure: false, caCert: '', apiFormat: 'openai',
   priceInput: null, priceOutput: null, priceCached: null,
 }
 
@@ -40,10 +47,10 @@ export type Settings = {
   openBrowser: boolean
 }
 
-export const PROVIDER_DEFAULTS: Record<LlmProvider, { baseURL: string; label: string }> = {
-  openai: { baseURL: 'https://api.openai.com/v1', label: 'OpenAI' },
-  vsegpt: { baseURL: 'https://api.vsegpt.ru/v1', label: 'VseGPT.Ru' },
-  custom: { baseURL: '', label: 'Custom' },
+export const PROVIDER_DEFAULTS: Record<LlmProvider, { baseURL: string; label: string; apiFormat: ApiFormat }> = {
+  openai:       { baseURL: 'https://api.openai.com/v1', label: 'OpenAI',          apiFormat: 'openai' },
+  custom:       { baseURL: '',                          label: 'Custom',          apiFormat: 'openai' },
+  custom_proxy: { baseURL: '',                          label: 'Custom AI Proxy', apiFormat: 'openai' },
 }
 
 /** Redacted view of a provider's settings (no plaintext secrets). */
@@ -61,6 +68,8 @@ export type PublicSettings = {
   llmProxy: string
   llmProxyUser: string
   tlsInsecure: boolean
+  caCert: string
+  apiFormat: ApiFormat
   priceInput: number | null
   priceOutput: number | null
   priceCached: number | null
@@ -80,9 +89,9 @@ export type PublicSettings = {
 const DEFAULTS: Settings = {
   provider: 'openai',
   providers: {
-    openai: { ...EMPTY_PROVIDER },
-    vsegpt: { ...EMPTY_PROVIDER },
-    custom: { ...EMPTY_PROVIDER },
+    openai:       { ...EMPTY_PROVIDER, apiFormat: 'openai' },
+    custom:       { ...EMPTY_PROVIDER, apiFormat: 'openai' },
+    custom_proxy: { ...EMPTY_PROVIDER, apiFormat: 'openai' },
   },
   mqttUser: '',
   mqttPassword: '',
@@ -134,9 +143,9 @@ export class SettingsStore {
   toPublic(): PublicSettings {
     const cur = this.current()
     const providersPublic: Record<LlmProvider, ProviderConfigPublic> = {
-      openai: redactProvider(this.cache.providers.openai),
-      vsegpt: redactProvider(this.cache.providers.vsegpt),
-      custom: redactProvider(this.cache.providers.custom),
+      openai:       redactProvider(this.cache.providers.openai),
+      custom:       redactProvider(this.cache.providers.custom),
+      custom_proxy: redactProvider(this.cache.providers.custom_proxy),
     }
     return {
       provider: this.cache.provider,
@@ -146,6 +155,8 @@ export class SettingsStore {
       llmProxy: cur.llmProxy,
       llmProxyUser: cur.llmProxyUser,
       tlsInsecure: cur.tlsInsecure,
+      caCert: cur.caCert,
+      apiFormat: cur.apiFormat,
       priceInput: cur.priceInput,
       priceOutput: cur.priceOutput,
       priceCached: cur.priceCached,
@@ -222,7 +233,8 @@ export class SettingsStore {
 const PROVIDER_FIELDS = [
   'apiKey', 'baseURL', 'model',
   'llmProxy', 'llmProxyUser', 'llmProxyPassword',
-  'tlsInsecure', 'priceInput', 'priceOutput', 'priceCached',
+  'tlsInsecure', 'caCert', 'apiFormat',
+  'priceInput', 'priceOutput', 'priceCached',
 ] as const
 
 const SHARED_FIELDS = [
@@ -232,7 +244,9 @@ const SHARED_FIELDS = [
 ] as const
 
 function isLlmProvider(v: unknown): v is LlmProvider {
-  return v === 'openai' || v === 'vsegpt' || v === 'custom'
+  // Anthropic dropped — старые конфиги мигрируем в OpenAI на загрузке
+  if (v === 'anthropic') return false
+  return v === 'openai' || v === 'custom' || v === 'custom_proxy'
 }
 
 function redactProvider(p: ProviderConfig): ProviderConfigPublic {
@@ -242,6 +256,8 @@ function redactProvider(p: ProviderConfig): ProviderConfigPublic {
     llmProxy: p.llmProxy,
     llmProxyUser: p.llmProxyUser,
     tlsInsecure: p.tlsInsecure,
+    caCert: p.caCert,
+    apiFormat: p.apiFormat,
     priceInput: p.priceInput,
     priceOutput: p.priceOutput,
     priceCached: p.priceCached,
@@ -265,9 +281,9 @@ function mergeWithMigration(defaults: Settings, env: Partial<Settings> & Partial
     ...defaults,
     provider,
     providers: {
-      openai: { ...defaults.providers.openai },
-      vsegpt: { ...defaults.providers.vsegpt },
-      custom: { ...defaults.providers.custom },
+      openai:       { ...defaults.providers.openai },
+      custom:       { ...defaults.providers.custom },
+      custom_proxy: { ...defaults.providers.custom_proxy },
     },
   }
   for (const k of SHARED_FIELDS) {
@@ -279,7 +295,7 @@ function mergeWithMigration(defaults: Settings, env: Partial<Settings> & Partial
   // New schema: providers map — copy directly
   if (disk['providers'] && typeof disk['providers'] === 'object') {
     const providersOnDisk = disk['providers'] as Record<string, Partial<ProviderConfig>>
-    for (const p of ['openai', 'vsegpt', 'custom'] as const) {
+    for (const p of ['openai', 'custom', 'custom_proxy'] as const) {
       if (providersOnDisk[p]) {
         result.providers[p] = { ...EMPTY_PROVIDER, ...providersOnDisk[p] }
       }
@@ -338,24 +354,141 @@ function envOverrides(): Partial<Settings> & Partial<ProviderConfig> {
   return out
 }
 
-export async function listModels(apiKey: string, baseURL?: string): Promise<string[]> {
-  const url = (baseURL?.replace(/\/$/, '') ?? 'https://api.openai.com/v1') + '/models'
-  const res = await fetch(url, {
+export async function listModels(
+  apiKey: string,
+  baseURL?: string,
+  opts: { proxy?: string; proxyUser?: string; proxyPassword?: string; tlsInsecure?: boolean; caCert?: string } = {},
+): Promise<string[]> {
+  const root = baseURL?.replace(/\/$/, '') ?? 'https://api.openai.com/v1'
+  const url = root + '/models'
+  const proxyUrl = opts.proxy ? buildProxyUrl(opts.proxy, opts.proxyUser, opts.proxyPassword) : undefined
+
+  const tls: Record<string, unknown> = {}
+  if (opts.tlsInsecure) tls['rejectUnauthorized'] = false
+  if (opts.caCert) tls['ca'] = Buffer.from(opts.caCert, 'utf8')
+
+  const init: RequestInit = {
     headers: { authorization: `Bearer ${apiKey}` },
-    signal: AbortSignal.timeout(8000),
-  })
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`)
+    signal: AbortSignal.timeout(15000),
   }
-  const data = (await res.json()) as { data?: { id: string }[] }
-  if (!Array.isArray(data.data)) throw new Error('unexpected /v1/models response')
-  // Sort: Чат-модели (gpt/o*/claude/llama/qwen) сначала.
-  const ids = data.data.map((m) => m.id)
-  return ids.sort((a, b) => {
-    const score = (s: string) =>
-      /^(gpt|o\d|claude|llama|qwen|deepseek|mistral|mixtral)/i.test(s) ? 0 : 1
-    const sa = score(a)
-    const sb = score(b)
-    return sa !== sb ? sa - sb : a.localeCompare(b)
+  if (proxyUrl) (init as any).proxy = proxyUrl
+  if (Object.keys(tls).length) (init as any).tls = tls
+
+  // VseGPT (and a few other proxies) sometimes drops the first connection;
+  // retry once on a transient socket error.
+  let lastErr: unknown = null
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(url, init)
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`)
+      }
+      const data = (await res.json()) as { data?: { id: string }[] }
+      if (!Array.isArray(data.data)) throw new Error('unexpected /v1/models response')
+      const ids = data.data.map((m) => m.id)
+      return ids.sort((a, b) => {
+        const score = (s: string) =>
+          /^(gpt|o\d|claude|llama|qwen|deepseek|mistral|mixtral)/i.test(s) ? 0 : 1
+        const sa = score(a)
+        const sb = score(b)
+        return sa !== sb ? sa - sb : a.localeCompare(b)
+      })
+    } catch (e) {
+      lastErr = e
+      const msg = e instanceof Error ? e.message : String(e)
+      // Only retry transient socket errors, not auth/HTTP errors
+      if (!/socket|connection|ECONNRESET|fetch failed/i.test(msg)) break
+    }
+  }
+  // /v1/models didn't work — try the "ask for a missing model" discovery trick.
+  // GitHub Copilot's proxy (and similar gateways) return 400 with the full list
+  // of available models in the error message when an unknown model is requested.
+  try {
+    const probed = await probeModelsViaError(root, apiKey, init)
+    if (probed.length) return probed
+  } catch { /* probing failed too — fall through and surface the original error */ }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
+}
+
+/**
+ * Whitelist of models known to work via /v1/chat/completions through the
+ * Copilot-style proxies. Reasoning-only models (o1/o3, gpt-5.x main line)
+ * need /v1/responses — будут открыты когда допишем поддержку Responses API.
+ *
+ * Order = relevance: cheap mini first, then mid, then top-tier.
+ */
+const SUPPORTED_PROXY_MODELS = [
+  'gpt-4o-mini',
+  'gpt-4.1-mini',
+  'claude-haiku-4.5',
+  'grok-code-fast-1',
+  'gpt-4.1',
+  'gpt-4o',
+  'claude-sonnet-4.5',
+  'claude-sonnet-4.6',
+  'claude-opus-4.5',
+  'claude-opus-4.7',
+]
+
+/**
+ * GitHub Copilot premium-request multipliers (приблизительно по публичному
+ * документу — поправь если устарело). Показывается рядом с моделью в комбо-боксе:
+ *   0× — включено в подписку без лимита
+ *   N× — N premium-запросов из месячной квоты на каждое сообщение
+ */
+export const COPILOT_MULTIPLIERS: Record<string, string> = {
+  'gpt-4o-mini':       '0×',
+  'gpt-4.1-mini':      '0×',
+  'gpt-4o':            '0×',
+  'gpt-4.1':           '0×',
+  'grok-code-fast-1':  '0×',
+  'claude-haiku-4.5':  '0.33×',
+  'claude-sonnet-4.5': '1×',
+  'claude-sonnet-4.6': '1×',
+  'claude-opus-4.5':   '5×',
+  'claude-opus-4.7':   '5×',
+}
+
+/**
+ * Some OpenAI-compatible gateways (e.g. Copilot via the Claude proxy) don't
+ * expose `/v1/models` but DO list every valid model when you POST to
+ * `/v1/chat/completions` with a non-existent model name. Parse that out.
+ *
+ * For now the result is INTERSECTED with our whitelist of chat/completions-
+ * compatible models, otherwise the user could pick a reasoning-only model
+ * (gpt-5.4-mini, o3-mini, ...) and get an opaque 400.
+ */
+async function probeModelsViaError(root: string, apiKey: string, baseInit: RequestInit): Promise<string[]> {
+  const probeBody = JSON.stringify({
+    model: '__probe-' + Math.random().toString(36).slice(2, 8),
+    messages: [{ role: 'user', content: 'probe' }],
+    max_tokens: 1,
   })
+  const init: RequestInit = {
+    ...baseInit,
+    method: 'POST',
+    headers: { ...(baseInit.headers || {}), 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+    body: probeBody,
+  }
+  const res = await fetch(root + '/chat/completions', init)
+  if (res.ok) return []
+  const text = await res.text().catch(() => '')
+  const m = text.match(/[Aa]vailable\s+models?\s*[:\-]\s*\[?([^\]\n]+)\]?/)
+  if (!m) return []
+  const proxyOffered = new Set(m[1]!.split(/[\s,]+/).map(s => s.trim()).filter(s => s && !/^[\[\]]$/.test(s)))
+  // Intersection in our preferred order
+  const safe = SUPPORTED_PROXY_MODELS.filter(name => proxyOffered.has(name))
+  return safe.length ? safe : SUPPORTED_PROXY_MODELS  // если прокси не отдал список — используем дефолт
+}
+
+function buildProxyUrl(proxy: string, user?: string, password?: string): string {
+  if (!user) return proxy
+  try {
+    const u = new URL(proxy)
+    u.username = encodeURIComponent(user)
+    if (password) u.password = encodeURIComponent(password)
+    return u.toString()
+  } catch {
+    return proxy
+  }
 }

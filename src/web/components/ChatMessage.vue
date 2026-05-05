@@ -13,7 +13,7 @@ import sql from 'highlight.js/lib/languages/sql'
 import yaml from 'highlight.js/lib/languages/yaml'
 import ini from 'highlight.js/lib/languages/ini'
 import type { ChatItem, ChatItemToolCall, Settings } from '../api'
-import { api, calcCost } from '../api'
+import { api, calcCost, PROVIDER_INFO } from '../api'
 import { fmtCost, fmtSize, fmtTime } from '../utils'
 
 hljs.registerLanguage('bash', bash); hljs.registerLanguage('sh', bash)
@@ -49,6 +49,8 @@ function renderMd(text: string): string {
 }
 
 const props = defineProps<{ item: ChatItem; chatId: string; settings?: Settings | null }>()
+
+const providerLabel = computed(() => props.settings?.provider ? PROVIDER_INFO[props.settings.provider].label : '')
 
 const messageCost = computed(() => {
   if (props.item.type !== 'assistant_text') return null
@@ -159,8 +161,14 @@ async function downloadViaFetch(url: string, name: string) {
         {{ copied ? '✓' : '⎘' }}
       </button>
       <div ref="bubbleEl" v-html="assistantHtml" />
-      <div v-if="item.tokensPrompt || item.tokensCompletion || item.tokensCost || item.createdAt" class="msg-footer">
-        <span class="token-meta"><template v-if="item.createdAt">{{ fmtTime(item.createdAt) }}<template v-if="item.tokensPrompt || item.tokensCompletion"> · </template></template>↑{{ item.tokensPrompt ?? 0 }} ↓{{ item.tokensCompletion ?? 0 }}<template v-if="item.tokensCached"> ⊙{{ item.tokensCached }}</template><template v-if="messageCost"> · {{ fmtCost(messageCost) }}</template></span>
+      <div v-if="item.tokensPrompt || item.tokensCompletion || item.tokensCost || item.createdAt || settings?.model" class="msg-footer">
+        <span v-if="settings?.provider || settings?.model" class="footer-provider">
+          <template v-if="settings?.provider">{{ providerLabel }}</template><template v-if="settings?.model"> · {{ settings.model }}</template>
+        </span>
+        <span class="footer-tokens" v-if="item.tokensPrompt || item.tokensCompletion || messageCost">
+          ↑{{ item.tokensPrompt ?? 0 }} ↓{{ item.tokensCompletion ?? 0 }}<template v-if="item.tokensCached"> ⊙{{ item.tokensCached }}</template><template v-if="messageCost"> · {{ fmtCost(messageCost) }}</template>
+        </span>
+        <span v-if="item.createdAt" class="footer-time">{{ fmtTime(item.createdAt) }}</span>
       </div>
     </div>
   </div>
@@ -312,8 +320,10 @@ async function downloadViaFetch(url: string, name: string) {
 .bubble.markdown :deep(.hljs-property) { color: #9cdcfe; }
 
 /* ── Message footer (tokens) ────────────────────────────────── */
-.msg-footer { display: flex; align-items: center; margin-top: 6px; }
-.token-meta { font-size: 0.7rem; color: var(--text-mute); opacity: 0.7; font-family: 'JetBrains Mono', monospace; }
+.msg-footer { display: flex; align-items: center; gap: 10px; margin-top: 6px; font-size: 0.7rem; color: var(--text-mute); }
+.footer-provider { opacity: 0.7; flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.footer-tokens { opacity: 0.7; font-family: 'JetBrains Mono', monospace; flex-shrink: 0; margin-left: auto; }
+.footer-time { opacity: 0.55; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; }
 
 /* ── Copy buttons ───────────────────────────────────────────── */
 .copy-btn {
