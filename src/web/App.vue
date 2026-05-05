@@ -334,6 +334,7 @@ const visibleTurns = computed<ChatTurn[]>(() => {
         :turns="visibleTurns"
         :streaming="streaming"
         :llm-configured="health?.llmConfigured ?? true"
+        :chat-id="activeChat.id"
         @send="sendMessage"
         @stop="stopStreaming"
         @rename="renameChat"

@@ -8,7 +8,7 @@
 
 **Бэкап = tar.gz архив** с файлами, конфигами, списками пакетов. `save_state_for_diff` — НЕ бэкап, а слепок для верификации. Продолжай к фазе 2.
 
-**Все файлы — в `/mnt/data/ai/wb-cloud-assistant/backups/`.** Не раскидывай по `/tmp`, `/root`, `/mnt/data/backups`. Переменная `$B` ниже уже указывает на правильный каталог.
+**Все файлы — в `/mnt/data/ai/wb-ai-helper/backups/`.** Не раскидывай по `/tmp`, `/root`, `/mnt/data/backups`. Переменная `$B` ниже уже указывает на правильный каталог.
 
 ## Чеклист — выводи после каждого шага
 
@@ -75,15 +75,15 @@
 Запускай ЭТОТ скрипт через `ssh_exec_async`. Не придумывай свой скрипт для этой части.
 
 ```
-ssh_exec_async(sn, "set -e; TS=$(date +%Y%m%d-%H%M%S); B=/mnt/data/ai/wb-cloud-assistant/backups/$TS; mkdir -p $B; cat /etc/wb-fw-version > $B/fw-version 2>/dev/null || true; cp /usr/lib/wb-release $B/wb-release 2>/dev/null || true; apt-mark showmanual > $B/packages-manual.list; dpkg-query -W -f='${Package}=${Version}\n' > $B/packages-all.list; systemctl list-unit-files --state=enabled --no-legend | awk '{print $1}' > $B/services-enabled.list; find /etc -maxdepth 3 -type l -exec sh -c 'T=$(readlink -f \"$1\"); case \"$T\" in /mnt/data/*) echo \"$1 -> $T\";; esac' _ {} \\; > $B/symlinks-etc.list; tar czf $B/core.tar.gz -C / --warning=no-file-changed --ignore-failed-read mnt/data/etc etc/wb-rules etc/wb-mqtt-serial.conf etc/wb-mqtt-serial.conf.d etc/network etc/hostname etc/resolv.conf etc/ntp.conf etc/chrony 2>/dev/null || true; find / /mnt/data -xdev \\( -path /mnt/data/.docker -o -path /mnt/data/var/lib/containerd \\) -prune -o \\( -name 'docker-compose.y*ml' -o -name 'compose.y*ml' \\) -print 2>/dev/null | tar czf $B/compose-files.tar.gz -T - 2>/dev/null || true; SNAP=$(ls -t /mnt/data/ai/wb-cloud-assistant/snapshots/snapshot-*.json 2>/dev/null | head -1); [ -n \"$SNAP\" ] && cp \"$SNAP\" $B/state-snapshot.json; echo BACKUP_DIR=$B; du -sh $B $B/*", label="backup controller")
+ssh_exec_async(sn, "set -e; TS=$(date +%Y%m%d-%H%M%S); B=/mnt/data/ai/wb-ai-helper/backups/$TS; mkdir -p $B; cat /etc/wb-fw-version > $B/fw-version 2>/dev/null || true; cp /usr/lib/wb-release $B/wb-release 2>/dev/null || true; apt-mark showmanual > $B/packages-manual.list; dpkg-query -W -f='${Package}=${Version}\n' > $B/packages-all.list; systemctl list-unit-files --state=enabled --no-legend | awk '{print $1}' > $B/services-enabled.list; find /etc -maxdepth 3 -type l -exec sh -c 'T=$(readlink -f \"$1\"); case \"$T\" in /mnt/data/*) echo \"$1 -> $T\";; esac' _ {} \\; > $B/symlinks-etc.list; tar czf $B/core.tar.gz -C / --warning=no-file-changed --ignore-failed-read mnt/data/etc etc/wb-rules etc/wb-mqtt-serial.conf etc/wb-mqtt-serial.conf.d etc/network etc/hostname etc/resolv.conf etc/ntp.conf etc/chrony 2>/dev/null || true; find / /mnt/data -xdev \\( -path /mnt/data/.docker -o -path /mnt/data/var/lib/containerd \\) -prune -o \\( -name 'docker-compose.y*ml' -o -name 'compose.y*ml' \\) -print 2>/dev/null | tar czf $B/compose-files.tar.gz -T - 2>/dev/null || true; SNAP=$(ls -t /mnt/data/ai/wb-ai-helper/snapshots/snapshot-*.json 2>/dev/null | head -1); [ -n \"$SNAP\" ] && cp \"$SNAP\" $B/state-snapshot.json; echo BACKUP_DIR=$B; du -sh $B $B/*", label="backup controller")
 ```
 
-Из вывода джобы возьми путь `BACKUP_DIR=...` — например `/mnt/data/ai/wb-cloud-assistant/backups/20260419-224500`. **Подставляй этот конкретный путь во все последующие шаги.** Не пиши `$B` в следующих `ssh_exec_async` — переменная не сохраняется между вызовами!
+Из вывода джобы возьми путь `BACKUP_DIR=...` — например `/mnt/data/ai/wb-ai-helper/backups/20260419-224500`. **Подставляй этот конкретный путь во все последующие шаги.** Не пиши `$B` в следующих `ssh_exec_async` — переменная не сохраняется между вызовами!
 
 ### Шаг 2: данные по результатам аудита
 
 ```
-ssh_exec_async(sn, "tar czf /mnt/data/ai/wb-cloud-assistant/backups/<ts>/audit-files.tar.gz --warning=no-file-changed --ignore-failed-read <пути из аудита> 2>/dev/null || true; du -sh /mnt/data/ai/wb-cloud-assistant/backups/<ts>/audit-files.tar.gz", label="backup audit files")
+ssh_exec_async(sn, "tar czf /mnt/data/ai/wb-ai-helper/backups/<ts>/audit-files.tar.gz --warning=no-file-changed --ignore-failed-read <пути из аудита> 2>/dev/null || true; du -sh /mnt/data/ai/wb-ai-helper/backups/<ts>/audit-files.tar.gz", label="backup audit files")
 ```
 
 Подставляй **конкретные пути** из шага 3 фазы 1:
@@ -102,7 +102,7 @@ ssh_exec(sn, "docker volume ls -q 2>/dev/null")
 ```
 Если есть volumes с данными:
 ```
-ssh_exec_async(sn, "B=/mnt/data/ai/wb-cloud-assistant/backups/<ts>; for v in $(docker volume ls -q); do docker run --rm -v $v:/data alpine tar czf - /data > $B/docker-volume-$v.tar.gz 2>/dev/null; done; ls -lh $B/docker-volume-*.tar.gz 2>/dev/null", label="backup docker volumes")
+ssh_exec_async(sn, "B=/mnt/data/ai/wb-ai-helper/backups/<ts>; for v in $(docker volume ls -q); do docker run --rm -v $v:/data alpine tar czf - /data > $B/docker-volume-$v.tar.gz 2>/dev/null; done; ls -lh $B/docker-volume-*.tar.gz 2>/dev/null", label="backup docker volumes")
 ```
 
 ## Фаза 3 — доставка (после завершения ВСЕХ джоб)
@@ -113,7 +113,7 @@ ssh_exec_async(sn, "B=/mnt/data/ai/wb-cloud-assistant/backups/<ts>; for v in $(d
 
 Сгенерируй и запиши инструкцию восстановления:
 ```
-write_file(sn, '/mnt/data/ai/wb-cloud-assistant/backups/<ts>/RESTORE.md', '...')
+write_file(sn, '/mnt/data/ai/wb-ai-helper/backups/<ts>/RESTORE.md', '...')
 ```
 Содержимое — по фактическим данным аудита. **Обязательные** секции (не пропускай ни одну):
 
@@ -129,15 +129,15 @@ write_file(sn, '/mnt/data/ai/wb-cloud-assistant/backups/<ts>/RESTORE.md', '...')
 ### 2. Собери в один файл
 
 ```
-ssh_exec_async(sn, "cd /mnt/data/ai/wb-cloud-assistant/backups && tar czf backup-<ts>.tar.gz <ts>/ && du -sh backup-<ts>.tar.gz", label="pack backup")
+ssh_exec_async(sn, "cd /mnt/data/ai/wb-ai-helper/backups && tar czf backup-<ts>.tar.gz <ts>/ && du -sh backup-<ts>.tar.gz", label="pack backup")
 ```
 
 ### 3. Проверь размер и отдай
 
 ```
-ssh_exec(sn, "stat -c%s /mnt/data/ai/wb-cloud-assistant/backups/backup-<ts>.tar.gz")
+ssh_exec(sn, "stat -c%s /mnt/data/ai/wb-ai-helper/backups/backup-<ts>.tar.gz")
 ```
-- < 200 МБ → `fetch_from_controller(sn, '/mnt/data/ai/wb-cloud-assistant/backups/backup-<ts>.tar.gz')`
+- < 200 МБ → `fetch_from_controller(sn, '/mnt/data/ai/wb-ai-helper/backups/backup-<ts>.tar.gz')`
 - > 200 МБ → предложи `scp` (пользователь выполняет сам)
 
 ### 4. Итоговый отчёт
@@ -187,10 +187,10 @@ FIT перезаписывает rootfs, НЕ трогает `/mnt/data/`.
 
 ## Восстановление
 
-1. Найди бэкап: `ssh_exec(sn, "ls -lt /mnt/data/ai/wb-cloud-assistant/backups/")` (переживает FIT). Или пользователь загружает через чат → `upload_to_controller`.
-2. Читай RESTORE.md: `read_file(sn, '/mnt/data/ai/wb-cloud-assistant/backups/<ts>/RESTORE.md')`.
+1. Найди бэкап: `ssh_exec(sn, "ls -lt /mnt/data/ai/wb-ai-helper/backups/")` (переживает FIT). Или пользователь загружает через чат → `upload_to_controller`.
+2. Читай RESTORE.md: `read_file(sn, '/mnt/data/ai/wb-ai-helper/backups/<ts>/RESTORE.md')`.
 3. Выполняй по шагам с подтверждением пользователя. Пакеты — через `ssh_exec_async`.
-4. Верификация: `diff_snapshot(sn, "/mnt/data/ai/wb-cloud-assistant/backups/<ts>/state-snapshot.json")`.
+4. Верификация: `diff_snapshot(sn, "/mnt/data/ai/wb-ai-helper/backups/<ts>/state-snapshot.json")`.
 
 ## Грабли
 
@@ -201,7 +201,7 @@ FIT перезаписывает rootfs, НЕ трогает `/mnt/data/`.
 - Бэкапить `/etc` или `/mnt/data` целиком — огромно и бесполезно.
 - Молчать про `/mnt/data/.docker/` — предупреди что не в архиве.
 - Лить сырой JSON аудита — покажи отчёт по категориям.
-- Раскидывать файлы по `/tmp`, `/root`, `/mnt/data/backups` — всё в `/mnt/data/ai/wb-cloud-assistant/backups/`.
+- Раскидывать файлы по `/tmp`, `/root`, `/mnt/data/backups` — всё в `/mnt/data/ai/wb-ai-helper/backups/`.
 - Пропустить `modifiedConfigs` или `customSystemdUnits` — они тоже нужны в архиве.
 
 ## Документация

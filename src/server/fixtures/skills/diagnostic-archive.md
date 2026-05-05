@@ -13,7 +13,7 @@
 ### 1. Запусти сбор
 
 ```
-ssh_exec_async(sn, "wb-diag-collect /mnt/data/ai/wb-cloud-assistant/diag", label="сбор диагностики")
+ssh_exec_async(sn, "wb-diag-collect /mnt/data/ai/wb-ai-helper/diag", label="сбор диагностики")
 ```
 
 Утилита берёт аргумент как **префикс** и дописывает `_SN_ДАТА.zip`. Работает 10–30 сек.
@@ -21,7 +21,7 @@ ssh_exec_async(sn, "wb-diag-collect /mnt/data/ai/wb-cloud-assistant/diag", label
 ### 2. Найди готовый файл
 
 ```
-ssh_exec(sn, "ls -t /mnt/data/ai/wb-cloud-assistant/diag*.zip 2>/dev/null | head -1")
+ssh_exec(sn, "ls -t /mnt/data/ai/wb-ai-helper/diag*.zip 2>/dev/null | head -1")
 ```
 
 ### 3. Отдай пользователю
@@ -39,5 +39,5 @@ fetch_from_controller(sn, "<путь из вывода ls>")
 ## Грабли
 
 - Не выдумывать `wb-diag-collect --help`-аргументы. Один позиционный — префикс пути.
-- Не класть в `/tmp` — архив может быть потерян при ребуте. Только в `/mnt/data/ai/wb-cloud-assistant/diag*`.
+- Не класть в `/tmp` — архив может быть потерян при ребуте. Только в `/mnt/data/ai/wb-ai-helper/diag*`.
 - Не путать с бэкапом — в диаг-архиве нет пользовательских данных, compose-файлов, проектов. Только для саппорта.

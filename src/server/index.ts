@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import path from 'node:path'
 import { version } from '../../package.json'
 import { Hono } from 'hono'
 import { stream } from 'hono/streaming'
@@ -14,12 +15,20 @@ import { SettingsStore, listModels } from './settings.ts'
 import { openDb } from './db.ts'
 import { getTodos, formatTodos } from './todos.ts'
 import { listSkills, getLoadedSkills, seedSystemSkills } from './skills.ts'
+import { initAttachments, listSession as listAttachmentFiles, getAttachment, readAttachment, saveAttachment, deleteAttachment, cleanupExpired } from './attachments.ts'
 
 const PORT = Number(process.env['WB_HELPER_PORT'] ?? 17321)
 
 const settingsStore = new SettingsStore()
 const settings = await settingsStore.load()
 const db = await openDb()
+
+// Initialize attachments store next to the DB
+const attachmentsRoot = path.join(path.dirname(settingsStore.storagePath()), 'attachments')
+initAttachments(attachmentsRoot)
+
+// Cleanup expired attachments every hour
+setInterval(() => cleanupExpired(), 60 * 60 * 1000)
 
 seedSystemSkills(db)
 
@@ -171,7 +180,7 @@ app.post('/api/chats/:id/message', async (c) => {
     await send('user', { text: userText })
 
     const agentState: { checkpointSummary?: string } = {}
-    const ctx = { discovery, mqtt, ssh, contextSns: chat.contextSns, db, sessionId: id, agentState }
+    const ctx = { discovery, mqtt, ssh, contextSns: chat.contextSns, db, sessionId: id, agentState, braveApiKey: process.env['BRAVE_SEARCH_API_KEY'] }
     let assistantText = ''
     const pendingToolCalls: { id: string; name: string; arguments: string }[] = []
     let pendingUsage: { promptTokens: number; completionTokens: number } | null = null
@@ -191,6 +200,7 @@ app.post('/api/chats/:id/message', async (c) => {
               : '(нет доступных скиллов)'
             const todos = getTodos(id)
             const loadedSkills = getLoadedSkills(id)
+            const attachments = listAttachmentFiles(id)
             return [
               chat.contextSns.length
                 ? `Текущий контекст — выбранные контроллеры: ${chat.contextSns.join(', ')}. Когда пользователь говорит «текущий», «этот», «он» про контроллер без явного SN — это эти SN. Если пользователь явно называет другой SN — ориентируйся на него.`
@@ -199,6 +209,9 @@ app.post('/api/chats/:id/message', async (c) => {
               todos.length
                 ? `Текущий план работы (редактируй через todo_write):\n${formatTodos(todos)}`
                 : 'План работы не задан. На задачах в 3+ шага сначала вызови todo_write.',
+              attachments.length
+                ? `Вложения текущего чата (файлы загруженные пользователем):\n${attachments.map(a => `- ${a.id}: ${a.name} (${a.size} байт, ${a.mime})`).join('\n')}\nДля чтения используй read_attachment(fileId). Для загрузки на контроллер — upload_to_controller(sn, fileId, path).`
+                : 'Вложений нет. Если нужно загрузить файл на контроллер — попроси пользователя прикрепить его кнопкой 📎 в UI.',
               ...loadedSkills.map((s) => `Инструкции загруженного скилла "${s.name}" (активны в этой сессии):\n${s.content}`),
             ]
           },
@@ -262,6 +275,51 @@ app.get('/api/events', (c) =>
     sseClients.delete(push)
   }),
 )
+
+// Attachments API
+app.get('/api/attachments', (c) => {
+  const chatId = c.req.query('chatId') ?? ''
+  if (!chatId) return c.json({ error: 'chatId required' }, 400)
+  return c.json({ items: listAttachmentFiles(chatId) })
+})
+
+app.post('/api/attachments', async (c) => {
+  const form = await c.req.formData().catch(() => null)
+  if (!form) return c.json({ error: 'form data required' }, 400)
+  const chatId = form.get('chatId')
+  const file = form.get('file')
+  if (!chatId || typeof chatId !== 'string') return c.json({ error: 'chatId required' }, 400)
+  if (!file || !(file instanceof File)) return c.json({ error: 'file required' }, 400)
+  const buf = Buffer.from(await file.arrayBuffer())
+  const r = saveAttachment(chatId, file.name, buf)
+  if (!r.ok) return c.json({ error: r.error }, 400)
+  return c.json(r.meta)
+})
+
+app.get('/api/attachments/:id', (c) => {
+  const id = c.req.param('id')
+  const chatId = c.req.query('chatId') ?? ''
+  if (!chatId) return c.json({ error: 'chatId required' }, 400)
+  const meta = getAttachment(chatId, id)
+  if (!meta) return c.json({ error: 'not found' }, 404)
+  const buf = readAttachment(chatId, id)
+  if (!buf) return c.json({ error: 'data missing' }, 404)
+  return new Response(buf, {
+    headers: {
+      'Content-Type': meta.mime,
+      'Content-Disposition': `attachment; filename="${encodeURIComponent(meta.name)}"`,
+      'Content-Length': String(meta.size),
+    }
+  })
+})
+
+app.delete('/api/attachments/:id', (c) => {
+  const id = c.req.param('id')
+  const chatId = c.req.query('chatId') ?? ''
+  if (!chatId) return c.json({ error: 'chatId required' }, 400)
+  deleteAttachment(chatId, id)
+  return c.json({ ok: true })
+})
 
 // Static UI from embedded assets.
 app.get('/', () => embeddedIndex())

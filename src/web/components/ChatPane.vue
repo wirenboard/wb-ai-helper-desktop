@@ -2,6 +2,7 @@
 import { nextTick, ref, watch } from 'vue'
 import { marked } from 'marked'
 import type { ChatTurn } from '../api'
+import { useAttachments } from '../composables/useAttachments'
 
 marked.use({ breaks: true, gfm: true })
 
@@ -14,12 +15,44 @@ const props = defineProps<{
   turns: ChatTurn[]
   streaming: boolean
   llmConfigured: boolean
+  chatId: string
 }>()
 const emit = defineEmits<{
   send: [text: string]
   stop: []
   rename: [title: string]
 }>()
+
+const { items: attachItems, refresh: refreshAttachments, upload: uploadFile, remove: removeAttachment, downloadUrl } = useAttachments(() => props.chatId)
+
+watch(() => props.chatId, () => { if (props.chatId) void refreshAttachments() }, { immediate: true })
+
+const fileInput = ref<HTMLInputElement | null>(null)
+
+async function onFileSelected(e: Event) {
+  const files = (e.target as HTMLInputElement).files
+  if (!files?.length) return
+  for (const file of Array.from(files)) {
+    await uploadFile(file)
+  }
+  if (fileInput.value) fileInput.value.value = ''
+}
+
+function openFilePicker() {
+  fileInput.value?.click()
+}
+
+function parseFileChip(result: string): { fileId: string; fileName: string; size: number } | null {
+  try {
+    const j = JSON.parse(result)
+    if (j && typeof j.fileId === 'string' && j.fileName) {
+      return { fileId: j.fileId, fileName: j.fileName, size: j.size ?? 0 }
+    }
+  } catch {
+    /* ignore */
+  }
+  return null
+}
 
 const input = ref('')
 const body = ref<HTMLDivElement | null>(null)
@@ -158,7 +191,14 @@ watch(input, autoResize)
           <details>
             <summary>{{ info.name }}</summary>
             <pre v-if="!isEmptyArgs(info.args)">{{ info.args }}</pre>
-            <pre v-if="info.result">{{ info.result }}</pre>
+            <template v-if="parseFileChip(info.result)">
+              <div class="attach-chip file-result">
+                <a :href="downloadUrl(parseFileChip(info.result)!.fileId)" :download="parseFileChip(info.result)!.fileName">
+                  {{ parseFileChip(info.result)!.fileName }}
+                </a>
+              </div>
+            </template>
+            <pre v-else-if="info.result">{{ info.result }}</pre>
           </details>
         </template>
       </div>
@@ -176,11 +216,18 @@ watch(input, autoResize)
     </div>
   </Teleport>
 
+  <input ref="fileInput" type="file" multiple style="display:none" @change="onFileSelected" />
   <div class="chat-input-row">
     <div class="input-wrap">
       <div v-if="selQuote" class="quote-bar">
         <span class="quote-text">«{{ selQuote }}»</span>
         <button class="ghost small dismiss-btn" title="Убрать" @click="selQuote = ''">✕</button>
+      </div>
+      <div v-if="attachItems.length" class="attach-bar">
+        <div v-for="a in attachItems" :key="a.id" class="attach-chip">
+          <a :href="downloadUrl(a.id)" :download="a.name">{{ a.name }}</a>
+          <button class="ghost small dismiss-btn" @click="removeAttachment(a.id)">✕</button>
+        </div>
       </div>
       <textarea
         ref="textarea"
@@ -190,6 +237,7 @@ watch(input, autoResize)
         @keydown.enter="onEnter"
       />
     </div>
+    <button class="ghost" title="Прикрепить файл" @click="openFilePicker" :disabled="streaming">📎</button>
     <button v-if="streaming" class="danger" @click="emit('stop')">Стоп</button>
     <button v-else class="primary" :disabled="!llmConfigured || !input.trim()" @click="send">
       Отправить
@@ -224,8 +272,46 @@ watch(input, autoResize)
   overflow-y: auto;
   width: 100%;
 }
-.input-wrap .quote-bar + textarea {
+.input-wrap .quote-bar + textarea,
+.input-wrap .attach-bar + textarea {
   border-radius: 0 0 6px 6px;
   border-top: none;
+}
+.input-wrap .quote-bar + .attach-bar + textarea {
+  border-radius: 0 0 6px 6px;
+  border-top: none;
+}
+.attach-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: var(--bg-soft);
+}
+.attach-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 2px 8px;
+  font-size: 12px;
+  max-width: 200px;
+  overflow: hidden;
+}
+.attach-chip a {
+  color: var(--accent);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-result {
+  margin: 4px 0;
+  max-width: unset;
 }
 </style>
