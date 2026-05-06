@@ -100,6 +100,11 @@ bun scripts/build.ts --target=linux-x64 # явный таргет
 bun scripts/build-appimage.ts           # AppImage (нужен appimagetool + собранный linux-x64)
 bun scripts/smoke.ts                    # smoke-тест собранного бинаря
 
+# Тесты
+bun test                                # все тесты
+bun test:unit                           # юнит + лёгкая интеграция (без бинаря)
+bun test:api                            # API-интеграция (нужен собранный бинарник)
+
 # Проверка типов
 bun run typecheck                       # tsc + vue-tsc
 

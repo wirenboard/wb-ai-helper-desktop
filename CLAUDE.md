@@ -18,6 +18,11 @@ bun scripts/build.ts --target=linux-x64  # Explicit target
 bun scripts/build-appimage.ts            # Wrap linux-x64 binary into an AppImage
 bun scripts/smoke.ts                     # Spawn binary, hit API, verify embedded UI
 
+# Tests
+bun test                                 # All tests (unit + integration)
+bun test:unit                            # Unit + lightweight integration (no binary needed)
+bun test:api                             # API integration (needs built binary)
+
 # Type checking (no separate linter)
 bun run typecheck
 ```
