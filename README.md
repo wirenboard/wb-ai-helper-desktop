@@ -17,7 +17,7 @@
 2. **Получить API-ключ** у любого OpenAI-совместимого провайдера:
    - **OpenAI** — [platform.openai.com/api-keys](https://platform.openai.com/api-keys); пополнить баланс через credit card. Дешёвая модель — `gpt-4o-mini`
    - **Self-hosted** — Ollama / LiteLLM / vLLM на своём сервере, ключ необязателен
-   - **Корпоративный/MITM-прокси** с OpenAI-совместимым endpoint (Copilot и т.п.) — Custom AI Proxy с CA-сертификатом (см. ниже)
+   - **Корпоративный/MITM-прокси** — см. раздел [Custom AI Proxy](#custom-ai-proxy) ниже
 3. **Запустить и настроить:**
    - `chmod +x ./WB-AI-Helper-x86_64.AppImage && ./WB-AI-Helper-x86_64.AppImage`
    - В шапке открыть «Настройки» (⚙)
@@ -25,27 +25,29 @@
 4. Контроллеры в правой колонке появятся сами через mDNS. Если в сети закрыт mDNS — добавь вручную по hostname/IP.
 5. Чат активен. Например: «что подключено на шине RS-485?», «пришли график температуры процессора со вчерашнего дня».
 
+### Что качать?
+
+| Файл | ОС | Описание |
+|------|----|----------|
+| `WB-AI-Helper-x86_64.AppImage` | Linux | Всё-в-одном: сервер + автозапуск Chrome в app-режиме (без адресной строки). Если Chrome/Chromium не установлен — откроет UI в дефолтном браузере через `xdg-open` |
+| `wb-ai-helper-linux-x64` | Linux | Standalone CLI/сервер. Поднимает HTTP на порту 17321, открывает браузер. Подходит для headless или когда AppImage не нужен |
+| `wb-ai-helper-windows-x64.exe` | Windows | Standalone сервер. Поднимает HTTP на порту 17321 и открывает браузер |
+
 ## Что умеет
 
 **Поиск и работа с контроллерами:**
-- **mDNS-сканер сети** — автоматически находит контроллеры по паттерну `wirenboard-<SN>.local`. Список обновляется на лету каждые ~15 секунд. Если в сети закрыт mDNS, контроллер можно добавить вручную по hostname или IP
-- **Web UI прямо из приложения** — клик по 🌐 в карточке контроллера открывает его web-интерфейс в новой вкладке
-- **Встроенный SSH-терминал** — клик по ▷_ открывает выезжающую снизу панель с xterm.js, поверх ssh2-сессии. Все горячие клавиши, цвета, ANSI escape работают
+- **mDNS-сканер сети** — автоматически находит контроллеры по паттерну `wirenboard-<SN>.local`. Список обновляется каждые ~15 секунд. Если в сети закрыт mDNS, контроллер можно добавить вручную по hostname или IP
+- **Web UI контроллера** — клик по 🌐 в карточке открывает web-интерфейс контроллера в новой вкладке
+- **Встроенный SSH-терминал** — клик по ▷_ открывает выезжающую снизу панель с xterm.js поверх ssh2-сессии. Горячие клавиши, цвета, ANSI escape — всё работает
 - Несколько чатов параллельно, каждый со своим контекстом контроллеров (один / выбранная группа / все)
-- Кнопка пере-сканирования сети, ручное удаление неактуальных записей
 
 **LLM с tool-calling:**
-- 4 группы провайдеров в настройках:
-  - **OpenAI** — прямой доступ к `api.openai.com`
-  - **Custom** — произвольный OpenAI-совместимый endpoint (Ollama, LiteLLM, vLLM…)
-  - **Custom AI Proxy** — endpoint за MITM-прокси с CA-сертификатом (только OpenAI Chat Completions, например Copilot через прокси)
-  - Каждый профиль помнит свой ключ/baseURL/model/прокси/CA — переключаются мгновенно
+- 3 профиля провайдеров: **OpenAI** (прямой доступ), **Custom** (Ollama, LiteLLM, vLLM…), **Custom AI Proxy** (MITM-прокси с CA-сертификатом). Каждый хранит свой ключ/baseURL/model/прокси/CA — переключаются мгновенно
 - ~50 инструментов: `mqtt_*`, `ssh_*`, `wb_bus_scan`, `serial_debug_collect`, `audit_controller`, `get_history`/`get_history_chart` (графики через vega-lite — line/bar/area/point/histogram/heatmap/boxplot), `fetch_from_controller`/`upload_to_controller`, `save_rule`/`load_rule`/`delete_rule` (wb-rules через `wbrules/Editor`)
-- Скиллы (17 шт. в `src/server/fixtures/skills/`) — `controller-backup`, `controller-update`, `wb-mqtt-serial`, `wb-rules`, `troubleshooting-*`, `diagrams`, `history` и т.д. — подгружаются по запросу через `load_skill`
-- Фоновые задачи (`ssh_exec_async`, `wb_bus_scan`, `serial_debug_collect`) — запуск через `systemd-run` на контроллере, инлайн-индикатор в чате с обратной отменой (5 сек undo через «продолжить»)
-- Аттачменты: пользовательские (через 📎) и созданные моделью (`fetch_from_controller`/`get_history_chart`) разделены на бэке (`source: 'user'|'assistant'`) — модель не получает свои файлы обратно
-- Стоимость считается per-сообщение: USD/1M токенов для OpenAI, в Custom/Proxy скрыта (только токены)
-- Время сообщения и провайдер/модель — в футере каждого ответа
+- 17 скиллов (`controller-backup`, `controller-update`, `wb-mqtt-serial`, `wb-rules`, `troubleshooting-*`, `diagrams`, `history` и др.) — подгружаются по запросу через `load_skill`
+- Фоновые задачи (`ssh_exec_async`, `wb_bus_scan`, `serial_debug_collect`) — запуск через `systemd-run` на контроллере, инлайн-индикатор в чате с 5-сек undo отмены
+- Аттачменты: пользовательские (через 📎) и созданные моделью (`fetch_from_controller`/`get_history_chart`) разделены по source — модель не получает свои файлы обратно
+- Стоимость per-сообщение (USD/1M токенов для OpenAI, серверная стоимость для VseGPT и других провайдеров, возвращающих `total_cost`)
 
 **UI/UX:**
 - Сворачиваемые боковые панели (чаты слева, контроллеры справа)
@@ -53,42 +55,78 @@
 - Удаление чата + «удалить все» с 5-сек undo
 - Экспорт/импорт настроек в JSON (включая ключи и CA)
 - Тёмная/светлая/авто-тема, регулировка размера шрифта
-- Файл фронта встроен в бинарник, наружу только LLM (через прокси если задан) и контроллеры (22 / 80 / 1883)
 
 ## Где хранятся данные
 
-- **AppImage / dev**: `~/.config/wb-ai-helper/` (Linux/XDG) или `%APPDATA%\wb-ai-helper\` (Windows) — `settings.json`, `wb-ai-helper.db` (SQLite, чаты+история), `attachments/<chatId>/` (вложения)
-- **Standalone-бинарник**: эти же файлы создаются рядом с бинарником
+| Режим | Путь |
+|-------|------|
+| AppImage / dev | `~/.config/wb-ai-helper/` (Linux/XDG) |
+| Standalone-бинарник | рядом с бинарником |
 
-## Сборка
+Файлы: `settings.json`, `wb-ai-helper.db` (SQLite WAL — чаты, история), `attachments/<chatId>/` (вложения). Старые чаты автоматически чистятся через 24 ч.
 
-Зависимости: [Bun](https://bun.sh) 1.3+ (Node не требуется), для AppImage — `appimagetool` в `$PATH` или `/tmp/appimagetool`.
+## Аутентификация SSH
+
+По умолчанию `root` / `wirenboard` (заводские креды Wiren Board). В «Настройках»:
+
+1. **Приватный ключ** — путь к файлу. Используется первым.
+2. **Пароль** — fallback (с keyboard-interactive).
+
+## Custom AI Proxy
+
+Для корпоративных прокси с TLS-MITM, которые проксируют OpenAI-совместимые endpoint (Copilot, корпоративный gateway и т.п.):
+
+1. Провайдер: **Custom AI Proxy**
+2. Base URL: реальный upstream API (например `https://api.githubcopilot.com`)
+3. API-ключ: можно dummy, если прокси сам подставит реальный
+4. Прокси для LLM: `https://USER:PASS@host:port` (auth прямо в URL)
+5. CA-сертификат прокси: загрузить `.pem` файл — его содержимое сохранится в `settings.json` и пойдёт в `tls.ca` Bun fetch
+
+Кнопка «обновить список» работает даже если прокси не отдаёт `/v1/models`: дёргает `/v1/chat/completions` с фейковой моделью и парсит «Available models: …» из 400-го ответа.
+
+> **Только OpenAI Chat Completions API.** Anthropic Messages API не поддерживается.
+
+## Сборка и разработка
+
+Зависимости: [Bun](https://bun.sh) 1.3+ (Node.js не требуется).
 
 ```bash
 bun install
+
+# Сборка
 bun scripts/build.ts                    # бинарник под текущую платформу
 bun scripts/build.ts --all              # linux-x64 + windows-x64
 bun scripts/build.ts --target=linux-x64 # явный таргет
-bun scripts/build-appimage.ts           # AppImage из linux-x64 (нужно собрать бинарник до этого)
+bun scripts/build-appimage.ts           # AppImage (нужен appimagetool + собранный linux-x64)
 bun scripts/smoke.ts                    # smoke-тест собранного бинаря
+
+# Проверка типов
 bun run typecheck                       # tsc + vue-tsc
+
+# Разработка (два терминала)
+bun run dev:server                      # бэкенд с hot-reload на :17321
+bun run dev:web                         # vite-dev на :5173 с прокси /api → :17321
 ```
 
-Бинарники появятся в `build/`.
+Бинарники появятся в `build/`. В dev-режиме открыть `http://127.0.0.1:5173/`.
 
-## Разработка
+## CI/CD
+
+GitHub Actions автоматически собирает проект.
+
+- **CI** (push в `main`, pull requests) — typecheck → build (linux-x64 + windows-x64) → upload artifacts (14 дней)
+- **Release** (push тега `v*`) — typecheck → build → AppImage → GitHub Release с бинарниками
+
+### Как сделать релиз
 
 ```bash
-# 1. бэкенд с hot-reload на :17321
-bun run dev:server
-
-# 2. vite-dev для фронта на :5173 с прокси /api → :17321
-bun run dev:web
+git tag v0.13.0
+git push origin v0.13.0
 ```
 
-Открыть `http://127.0.0.1:5173/`. В dev-режиме settings.json и БД лежат в `~/.config/wb-ai-helper/`.
+Через ~1 минуту бинарники появятся на странице [Releases](../../releases).
 
-## Архитектура (кратко)
+## Архитектура
 
 ```
 src/
@@ -123,44 +161,22 @@ src/
     └── composables/useAttachments.ts
 ```
 
-Под `bun build --compile` фронт пакуется в exe через `import('./web/dist/...', { with: { type: 'file' } })` — отдельные ассеты не нужны. AppImage — это тонкий wrapper-script (AppRun) поверх того же бинарника + загрузочная HTML-страница пока сервер стартует.
-
-## Аутентификация SSH
-
-По умолчанию `root` / `wirenboard` (заводские креды Wirenboard). В «Настройках»:
-
-1. **Приватный ключ** — путь к файлу. Используется первым.
-2. **Пароль** — fallback (с keyboard-interactive).
-
-## Custom AI Proxy
-
-Для корпоративных прокси с TLS-MITM, которые проксируют OpenAI-совместимые endpoint (Copilot, корпоративный gateway и т.п.):
-
-1. Провайдер: **Custom AI Proxy**
-2. Base URL: реальный upstream API (например `https://api.githubcopilot.com`)
-3. API-ключ: можно dummy, если прокси сам подставит реальный
-4. Прокси для LLM: `https://USER:PASS@host:port` (auth прямо в URL — отдельные поля логин/пароль скрыты)
-5. CA-сертификат прокси: загрузить `.pem` файл — его содержимое сохранится в `settings.json` и пойдёт в `tls.ca` Bun fetch
-
-Кнопка «обновить список» работает даже если прокси не отдаёт `/v1/models`: дёргает `/v1/chat/completions` с фейковой моделью и парсит «Available models: …» из 400-го ответа. Whitelist режет до моделей, совместимых с `/chat/completions` (без reasoning-only — gpt-5.x main, o-серия и т.п.).
-
-> **Только OpenAI Chat Completions API.** Anthropic Messages API не поддерживается, даже если прокси умеет в обе стороны.
+Под `bun build --compile` фронт пакуется в бинарник через `import('./web/dist/...', { with: { type: 'file' } })` — отдельные ассеты не нужны. AppImage — wrapper-script (AppRun) поверх того же бинарника, который ищет Chrome/Chromium и запускает его в `--app` режиме.
 
 ## Переменные окружения
 
 Применяются только при первом запуске и записываются в `settings.json`:
 
-```
-OPENAI_API_KEY              стартовый ключ LLM
-OPENAI_BASE_URL             свой эндпоинт
-OPENAI_MODEL                имя модели
-WB_HELPER_PORT              порт UI (default 17321)
-WB_HELPER_OPEN_BROWSER      0 чтобы не открывать окно
-WB_HELPER_DISCOVERY_INTERVAL  интервал mDNS-скана, мс (default 15000)
-WB_HELPER_MQTT_USER         MQTT-логин
-WB_HELPER_MQTT_PASSWORD     MQTT-пароль
-WB_HELPER_SSH_USER          SSH-логин (default root)
-WB_HELPER_SSH_PASSWORD      SSH-пароль (default wirenboard)
-WB_HELPER_SSH_KEY           путь к приватному ключу
-```
-
+| Переменная | Описание | По умолчанию |
+|------------|----------|-------------|
+| `OPENAI_API_KEY` | стартовый ключ LLM | — |
+| `OPENAI_BASE_URL` | свой эндпоинт | `https://api.openai.com/v1` |
+| `OPENAI_MODEL` | имя модели | — |
+| `WB_HELPER_PORT` | порт UI | `17321` |
+| `WB_HELPER_OPEN_BROWSER` | `0` чтобы не открывать окно | `1` |
+| `WB_HELPER_DISCOVERY_INTERVAL` | интервал mDNS-скана, мс | `15000` |
+| `WB_HELPER_MQTT_USER` | MQTT-логин | — |
+| `WB_HELPER_MQTT_PASSWORD` | MQTT-пароль | — |
+| `WB_HELPER_SSH_USER` | SSH-логин | `root` |
+| `WB_HELPER_SSH_PASSWORD` | SSH-пароль | `wirenboard` |
+| `WB_HELPER_SSH_KEY` | путь к приватному ключу | — |
