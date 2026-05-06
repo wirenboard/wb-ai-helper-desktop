@@ -15,7 +15,7 @@
    - Linux CLI / сервер: `wb-ai-helper-linux-x64`
    - Windows: `wb-ai-helper-windows-x64.exe`
 2. **Получить API-ключ** у любого OpenAI-совместимого провайдера:
-   - **OpenAI** — [platform.openai.com/api-keys](https://platform.openai.com/api-keys); пополнить баланс через credit card. Рекомендуемая модель — `gpt-4.1`, бюджетная — `gpt-4.1-mini`
+   - **OpenAI** — [platform.openai.com/api-keys](https://platform.openai.com/api-keys); пополнить баланс через credit card. Рекомендуемая модель — `gpt-4.1` или `gpt-5.4-mini`
    - **Self-hosted** — Ollama / LiteLLM / vLLM на своём сервере, ключ необязателен
    - **Корпоративный/MITM-прокси** — см. раздел [Custom AI Proxy](#custom-ai-proxy) ниже
 3. **Запустить и настроить:**
