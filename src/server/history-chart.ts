@@ -83,7 +83,7 @@ function flatten(nonEmpty: HistorySeries[], labels: Map<HistorySeries, string>):
   return out
 }
 
-function legendCfg(seriesCount: number): TopLevelSpec['encoding'] extends infer _ ? any : never {
+function legendCfg(seriesCount: number): any {
   if (seriesCount <= 1) return null
   if (seriesCount <= 3) return { title: null, orient: 'bottom', direction: 'horizontal', columns: 0, labelLimit: 360, symbolSize: 80, padding: 8 }
   return { title: null, orient: 'right', direction: 'vertical', columns: 1, labelLimit: 280, symbolSize: 80, rowPadding: 4 }
@@ -126,15 +126,15 @@ export async function renderHistoryChart(
   const allLabels = nonEmpty.map(s => labelMap.get(s)!)
   const colorEnc = {
     field: 'series',
-    type: 'nominal',
+    type: 'nominal' as const,
     scale: { domain: allLabels, range: colorRange },
     legend: legendCfg(seriesCount),
   }
 
   const sideLegend = legendCfg(seriesCount)?.orient === 'right'
   const width = sideLegend ? 980 : 880
-  const baseSpec: Omit<TopLevelSpec, 'data'> = {
-    $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
+  const baseSpec = {
+    $schema: 'https://vega.github.io/schema/vega-lite/v5.json' as const,
     width,
     height: 360,
     background: '#ffffff',
@@ -197,7 +197,7 @@ export async function renderHistoryChart(
 
   // ─── boxplot: разброс по периодам (час / день в зависимости от длины) ─
   if (chartType === 'boxplot') {
-    const tu = durationSec <= 86400 ? 'hours' : durationSec <= 7 * 86400 ? 'yearmonthdate' : 'yearmonthweek'
+    const tu = durationSec <= 86400 ? 'hours' : durationSec <= 7 * 86400 ? 'yearmonthdate' : 'yearweek'
     return await renderSpec({
       ...baseSpec,
       data: { values },
