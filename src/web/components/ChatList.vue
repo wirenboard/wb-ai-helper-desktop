@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { nextTick, ref } from 'vue'
-import { calcCost, type Chat, type Settings, type TokenStats } from '../api'
+import { calcCost, type Cost, type Chat, type Settings, type TokenStats } from '../api'
 import { fmtCost, fmtTok } from '../utils'
 
 const props = defineProps<{
   chats: Chat[]
   activeId: string | null
   totalStats: TokenStats | null
-  totalCost: number | null
+  totalCost: Cost | null
   settings: Settings | null
   open: boolean
   pendingDeleteAll?: { remaining: number } | null

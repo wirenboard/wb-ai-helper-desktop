@@ -147,7 +147,7 @@ onBeforeUnmount(() => ro?.disconnect())
       <!-- Inline job indicators for this group -->
       <template v-for="job in groupRunningJobs(g)" :key="'job-' + job.jobId">
         <div v-if="pendingCancels?.[job.jobId]" class="inline-job inline-job--cancelling">
-          <span>⏳ Отмена через {{ pendingCancels[job.jobId].remaining }} с — {{ job.label }}</span>
+          <span>⏳ Отмена через {{ pendingCancels![job.jobId]!.remaining }} с — {{ job.label }}</span>
           <button class="inline-job-cancel ghost small" @click="emit('undoCancelJob', job.jobId)">продолжить</button>
         </div>
         <div v-else class="inline-job">
