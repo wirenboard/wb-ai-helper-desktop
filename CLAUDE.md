@@ -112,6 +112,32 @@ Per chat: `attachments/<chatId>/<id>_<u\|a>__<name>` — `clearAttachmentSession
 
 `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`, `WB_HELPER_PORT` (default 17321), `WB_HELPER_OPEN_BROWSER` (`0` to skip), `WB_HELPER_DISCOVERY_INTERVAL`, `WB_HELPER_MQTT_USER`, `WB_HELPER_MQTT_PASSWORD`, `WB_HELPER_SSH_USER`, `WB_HELPER_SSH_PASSWORD`, `WB_HELPER_SSH_KEY`.
 
+## CI/CD
+
+GitHub Actions автоматически собирает проект при каждом пуше и релизе.
+
+### CI (`.github/workflows/ci.yml`)
+
+Запускается на push в `main` и на pull request. Шаги: typecheck → build (linux-x64 + windows-x64) → upload artifacts (14 дней).
+
+### Release (`.github/workflows/release.yml`)
+
+Запускается при пуше тега `v*`. Собирает бинарники и создаёт GitHub Release с файлами:
+- `wb-ai-helper-linux-x64`
+- `wb-ai-helper-windows-x64.exe`
+- `README.txt`
+
+### Как сделать релиз
+
+1. Убедиться что CI на `main` зелёный
+2. Обновить `version` в `package.json` если нужно
+3. Создать и запушить тег:
+   ```bash
+   git tag v0.12.0
+   git push origin v0.12.0
+   ```
+4. Release workflow соберёт бинарники и опубликует на https://github.com/wirenboard/wb-ai-helper-desktop/releases
+
 ## TypeScript notes
 
 - `tsconfig.json` targets ES2022 with `strict: true` and `noUncheckedIndexedAccess: true`
