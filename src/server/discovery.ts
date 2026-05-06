@@ -215,7 +215,7 @@ export class Discovery {
   }
 }
 
-function parseSn(host: string): string | null {
+export function parseSn(host: string): string | null {
   const trimmed = host.trim().replace(/\.$/, '')
   const m = trimmed.match(SN_FROM_HOST)
   return m && m[1] ? m[1].toUpperCase() : null

@@ -25,14 +25,14 @@ interface FlatPoint {
 
 const PALETTE = ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d']
 
-function pickTimeFormat(durationSec: number): string {
+export function pickTimeFormat(durationSec: number): string {
   if (durationSec <= 3600)         return '%H:%M:%S'
   if (durationSec <= 86400)        return '%H:%M'
   if (durationSec <= 7 * 86400)    return '%d.%m %H:%M'
   return '%d.%m'
 }
 
-function emptySvg(message: string): string {
+export function emptySvg(message: string): string {
   return (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 240" font-family="system-ui,sans-serif">' +
     '<rect width="880" height="240" fill="#ffffff"/>' +
@@ -41,7 +41,7 @@ function emptySvg(message: string): string {
   )
 }
 
-function groupByUnits(series: HistorySeries[]): Map<string, HistorySeries[]> {
+export function groupByUnits(series: HistorySeries[]): Map<string, HistorySeries[]> {
   const groups = new Map<string, HistorySeries[]>()
   for (const s of series) {
     const key = s.units ?? ''
@@ -52,7 +52,7 @@ function groupByUnits(series: HistorySeries[]): Map<string, HistorySeries[]> {
   return groups
 }
 
-function buildLabelMap(series: HistorySeries[]): Map<HistorySeries, string> {
+export function buildLabelMap(series: HistorySeries[]): Map<HistorySeries, string> {
   const devices = new Set<string>()
   for (const s of series) {
     const slash = s.label.indexOf('/')
@@ -69,7 +69,7 @@ function buildLabelMap(series: HistorySeries[]): Map<HistorySeries, string> {
   return map
 }
 
-function flatten(nonEmpty: HistorySeries[], labels: Map<HistorySeries, string>): FlatPoint[] {
+export function flatten(nonEmpty: HistorySeries[], labels: Map<HistorySeries, string>): FlatPoint[] {
   const out: FlatPoint[] = []
   for (const s of nonEmpty) {
     const range = s.max - s.min
@@ -83,7 +83,7 @@ function flatten(nonEmpty: HistorySeries[], labels: Map<HistorySeries, string>):
   return out
 }
 
-function legendCfg(seriesCount: number): any {
+export function legendCfg(seriesCount: number): any {
   if (seriesCount <= 1) return null
   if (seriesCount <= 3) return { title: null, orient: 'bottom', direction: 'horizontal', columns: 0, labelLimit: 360, symbolSize: 80, padding: 8 }
   return { title: null, orient: 'right', direction: 'vertical', columns: 1, labelLimit: 280, symbolSize: 80, rowPadding: 4 }
