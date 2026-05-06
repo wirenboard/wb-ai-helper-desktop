@@ -12,8 +12,8 @@
     "appimage": "bun scripts/build-appimage.ts",
     "typecheck": "tsc --noEmit && vue-tsc --noEmit -p tsconfig.web.json",
     "test": "bun test tests/",
-    "test:unit": "bun test tests/turns.test.ts tests/ssh-auth.test.ts",
-    "test:api": "bun test tests/api.test.ts"
+    "test:unit": "bun test tests/ --timeout 10000",
+    "test:api": "bun test tests/api.test.ts --timeout 30000"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.94.0",

@@ -34,7 +34,7 @@ const COLLECT_SCRIPT = [
   `echo ${SECTION}end`
 ].join('; ')
 
-function splitSections(stdout: string): Record<string, string[]> {
+export function splitSections(stdout: string): Record<string, string[]> {
   const out: Record<string, string[]> = {}
   let current = ''
   for (const line of stdout.split('\n')) {
@@ -54,7 +54,7 @@ interface ModifiedPath {
   isConffile: boolean
 }
 
-function parseDpkgVerify(lines: string[]): ModifiedPath[] {
+export function parseDpkgVerify(lines: string[]): ModifiedPath[] {
   const out: ModifiedPath[] = []
   for (const line of lines) {
     const m = line.match(/^(\S+)(?:\s+(\S))?\s+(\/.*)$/)
@@ -224,7 +224,7 @@ export async function runSnapshot(ssh: SshPool, c: Controller): Promise<Snapshot
   }
 }
 
-function diffArrays(before: string[], after: string[]): { added: string[]; removed: string[] } {
+export function diffArrays(before: string[], after: string[]): { added: string[]; removed: string[] } {
   const beforeSet = new Set(before)
   const afterSet = new Set(after)
   return {

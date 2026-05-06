@@ -24,7 +24,7 @@ export function embeddedAsset(rel: string): Response | null {
   })
 }
 
-function mimeFor(p: string): string {
+export function mimeFor(p: string): string {
   if (p.endsWith('.js')) return 'application/javascript; charset=utf-8'
   if (p.endsWith('.css')) return 'text/css; charset=utf-8'
   if (p.endsWith('.svg')) return 'image/svg+xml'
