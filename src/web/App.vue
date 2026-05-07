@@ -512,8 +512,11 @@ async function refreshJobs() {
       stopJobPolling()
     }
   } catch (e) {
+    // Транзиентная ошибка (сеть/таймаут) — НЕ сбрасываем runningJobs,
+    // иначе баннер «моргает» (исчезает на 1-2 секунды до следующего успешного
+    // poll). Реальное завершение задачи приходит штатным ответом, не через
+    // catch.
     console.warn('[jobs] refresh failed:', e)
-    runningJobs.value = []
   }
 }
 
