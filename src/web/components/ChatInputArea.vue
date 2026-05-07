@@ -58,7 +58,14 @@ function submit() {
     flashNotice('Модель ещё отвечает. Дождись её ответа и нажми Enter ещё раз — или нажми «■ Прервать», и можно будет отправить сразу.')
     return
   }
-  const msg = quote.value ? `> ${quote.value.replace(/\n/g, '\n> ')}\n\n${v}` : v || items.value.map(a => `📎 ${a.name}`).join(', ')
+  // Прикреплённые файлы кодируем токенами `[file:id:name]` в начало
+  // content — фронт парсит и рисует превью (img для image-расширений,
+  // chip для остальных). Модель тоже видит этот токен и понимает что
+  // есть вложение; для содержимого использует read_attachment.
+  const fileTokens = items.value.map(a => `[file:${a.id}:${a.name}]`).join(' ')
+  const body = quote.value ? `> ${quote.value.replace(/\n/g, '\n> ')}\n\n${v}` : v
+  const msg = [fileTokens, body].filter(Boolean).join(' ').trim()
+  if (!msg) return
   emit('send', msg)
   text.value = ''
   quote.value = ''

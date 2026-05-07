@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 
-export type LlmProvider = 'openai' | 'aitunnel' | 'custom' | 'custom_proxy'
+export type LlmProvider = 'openai' | 'aitunnel' | 'openrouter' | 'custom' | 'custom_proxy'
 /** Только OpenAI Chat Completions сейчас. Anthropic-формат вырезан, оставлено
  * поле для будущего — Responses API или ещё какие protocol-варианты. */
 export type ApiFormat = 'openai'
@@ -33,6 +33,10 @@ export interface ProviderConfig {
   /** Override модельной/провайдерской temperature (0..2). null = не передавать
    * параметр, провайдер выберет дефолт сам. */
   temperature: number | null
+  /** Минимальный интервал между запросами к провайдеру в миллисекундах.
+   * null/0 = без троттлинга. Например, 1000 — не чаще одного запроса
+   * в секунду, чтобы не словить бан у строгих провайдеров. */
+  minRequestIntervalMs: number | null
   /** Формат API: 'openai' (Chat Completions) или 'anthropic' (Messages). Только Custom AI Proxy. */
   apiFormat: ApiFormat
   priceInput: number | null
@@ -48,6 +52,7 @@ const EMPTY_PROVIDER: ProviderConfig = {
   contextWindow: null, compactModel: '',
   autoCompact: true, autoCompactThreshold: 0.85,
   temperature: null,
+  minRequestIntervalMs: null,
 }
 
 export type Settings = {
@@ -65,10 +70,11 @@ export type Settings = {
 }
 
 export const PROVIDER_DEFAULTS: Record<LlmProvider, { baseURL: string; label: string; apiFormat: ApiFormat }> = {
-  openai:       { baseURL: 'https://api.openai.com/v1', label: 'OpenAI',          apiFormat: 'openai' },
-  aitunnel:     { baseURL: 'https://api.aitunnel.ru/v1', label: 'AITunnel',       apiFormat: 'openai' },
-  custom:       { baseURL: '',                          label: 'Custom',          apiFormat: 'openai' },
-  custom_proxy: { baseURL: '',                          label: 'Custom AI Proxy', apiFormat: 'openai' },
+  openai:       { baseURL: 'https://api.openai.com/v1',     label: 'OpenAI',          apiFormat: 'openai' },
+  aitunnel:     { baseURL: 'https://api.aitunnel.ru/v1',    label: 'AITunnel',        apiFormat: 'openai' },
+  openrouter:   { baseURL: 'https://openrouter.ai/api/v1',  label: 'OpenRouter',      apiFormat: 'openai' },
+  custom:       { baseURL: '',                              label: 'Custom',          apiFormat: 'openai' },
+  custom_proxy: { baseURL: '',                              label: 'Custom AI Proxy', apiFormat: 'openai' },
 }
 
 /** Redacted view of a provider's settings (no plaintext secrets). */
@@ -96,6 +102,7 @@ export type PublicSettings = {
   autoCompact: boolean
   autoCompactThreshold: number
   temperature: number | null
+  minRequestIntervalMs: number | null
   apiKeyConfigured: boolean
   llmProxyPasswordConfigured: boolean
   // Shared (controller/UI):
@@ -117,6 +124,10 @@ const DEFAULTS: Settings = {
     // поэтому клиентское авто-сжатие по умолчанию выключено. Юзер может
     // включить вручную если хочет явный checkpoint с summary в истории чата.
     aitunnel:     { ...EMPTY_PROVIDER, apiFormat: 'openai', autoCompact: false },
+    // OpenRouter: одна галочка `autoCompact` управляет режимом — off
+    // включает серверный middle-out (см. buildLlmClient), on — клиентский
+    // checkpoint. По дефолту off → серверное сжатие.
+    openrouter:   { ...EMPTY_PROVIDER, apiFormat: 'openai', autoCompact: false },
     custom:       { ...EMPTY_PROVIDER, apiFormat: 'openai' },
     custom_proxy: { ...EMPTY_PROVIDER, apiFormat: 'openai' },
   },
@@ -172,6 +183,7 @@ export class SettingsStore {
     const providersPublic: Record<LlmProvider, ProviderConfigPublic> = {
       openai:       redactProvider(this.cache.providers.openai),
       aitunnel:     redactProvider(this.cache.providers.aitunnel),
+      openrouter:   redactProvider(this.cache.providers.openrouter),
       custom:       redactProvider(this.cache.providers.custom),
       custom_proxy: redactProvider(this.cache.providers.custom_proxy),
     }
@@ -193,6 +205,7 @@ export class SettingsStore {
       autoCompact: cur.autoCompact,
       autoCompactThreshold: cur.autoCompactThreshold,
       temperature: cur.temperature,
+      minRequestIntervalMs: cur.minRequestIntervalMs,
       apiKeyConfigured: !!cur.apiKey,
       llmProxyPasswordConfigured: !!cur.llmProxyPassword,
       mqttUser: this.cache.mqttUser,
@@ -270,7 +283,7 @@ const PROVIDER_FIELDS = [
   'priceInput', 'priceOutput', 'priceCached',
   'contextWindow', 'compactModel',
   'autoCompact', 'autoCompactThreshold',
-  'temperature',
+  'temperature', 'minRequestIntervalMs',
 ] as const
 
 const SHARED_FIELDS = [
@@ -282,7 +295,7 @@ const SHARED_FIELDS = [
 function isLlmProvider(v: unknown): v is LlmProvider {
   // Anthropic dropped — старые конфиги мигрируем в OpenAI на загрузке
   if (v === 'anthropic') return false
-  return v === 'openai' || v === 'aitunnel' || v === 'custom' || v === 'custom_proxy'
+  return v === 'openai' || v === 'aitunnel' || v === 'openrouter' || v === 'custom' || v === 'custom_proxy'
 }
 
 function redactProvider(p: ProviderConfig): ProviderConfigPublic {
@@ -302,6 +315,7 @@ function redactProvider(p: ProviderConfig): ProviderConfigPublic {
     autoCompact: p.autoCompact,
     autoCompactThreshold: p.autoCompactThreshold,
     temperature: p.temperature,
+    minRequestIntervalMs: p.minRequestIntervalMs,
     apiKeyConfigured: !!p.apiKey,
     llmProxyPasswordConfigured: !!p.llmProxyPassword,
   }
@@ -324,6 +338,7 @@ function mergeWithMigration(defaults: Settings, env: Partial<Settings> & Partial
     providers: {
       openai:       { ...defaults.providers.openai },
       aitunnel:     { ...defaults.providers.aitunnel },
+      openrouter:   { ...defaults.providers.openrouter },
       custom:       { ...defaults.providers.custom },
       custom_proxy: { ...defaults.providers.custom_proxy },
     },
@@ -337,7 +352,7 @@ function mergeWithMigration(defaults: Settings, env: Partial<Settings> & Partial
   // New schema: providers map — copy directly
   if (disk['providers'] && typeof disk['providers'] === 'object') {
     const providersOnDisk = disk['providers'] as Record<string, Partial<ProviderConfig>>
-    for (const p of ['openai', 'aitunnel', 'custom', 'custom_proxy'] as const) {
+    for (const p of ['openai', 'aitunnel', 'openrouter', 'custom', 'custom_proxy'] as const) {
       if (providersOnDisk[p]) {
         result.providers[p] = { ...EMPTY_PROVIDER, ...providersOnDisk[p] }
       }
@@ -406,7 +421,7 @@ export interface ModelInfo {
 
 /** Достаём context length из произвольного объекта модели в ответе /v1/models.
  * Разные провайдеры называют поле по-разному: пытаемся все распространённые. */
-function pickContextLength(m: Record<string, unknown>): number | undefined {
+export function pickContextLength(m: Record<string, unknown>): number | undefined {
   const candidates = [
     m['context_length'],
     m['context_window'],

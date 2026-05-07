@@ -23,14 +23,25 @@ export type StreamEvent =
   | { type: 'tool-call'; id: string; name: string; arguments: string }
   | { type: 'tool-result'; id: string; name: string; result: string; ok: boolean }
   | { type: 'usage'; promptTokens?: number; completionTokens?: number; cachedTokens?: number; totalCost?: number; promptTokensLast?: number }
+  | { type: 'retry-wait'; reason: string; delayMs: number; attempt: number; max: number }
   | { type: 'done'; finish_reason: string | null }
   | { type: 'error'; message: string }
 
 export class LlmClient {
   private client: OpenAI
   readonly model: string
+  /** Запрос `usage.cost` (USD) у провайдеров, которым нужен явный флаг
+   * `usage: { include: true }` в теле запроса — например OpenRouter. */
+  private readonly includeUsageAccounting: boolean
+  /** OpenRouter middle-out: `transforms: ["middle-out"]` в теле запроса. */
+  private readonly middleOut: boolean
+  /** Минимальный интервал между запросами в миллисекундах (опциональный
+   * клиентский троттлинг чтобы не быть забаненным строгими провайдерами). */
+  private readonly minRequestIntervalMs: number
+  /** Время последнего запроса (Date.now()) для троттлинга. */
+  private lastRequestAt: number = 0
 
-  constructor(opts: { apiKey: string; baseURL?: string; model?: string; llmProxy?: string; llmProxyUser?: string; llmProxyPassword?: string; tlsInsecure?: boolean; caCert?: string; apiFormat?: 'openai' }) {
+  constructor(opts: { apiKey: string; baseURL?: string; model?: string; llmProxy?: string; llmProxyUser?: string; llmProxyPassword?: string; tlsInsecure?: boolean; caCert?: string; apiFormat?: 'openai'; includeUsageAccounting?: boolean; middleOut?: boolean; minRequestIntervalMs?: number | null }) {
     const proxyUrl = opts.llmProxy ? buildProxyUrl(opts.llmProxy, opts.llmProxyUser, opts.llmProxyPassword) : undefined
     const caBuf = opts.caCert ? Buffer.from(opts.caCert, 'utf8') : undefined
     const needCustomFetch = !!(opts.llmProxy || opts.tlsInsecure || caBuf)
@@ -47,6 +58,10 @@ export class LlmClient {
       : undefined
     this.client = new OpenAI({ apiKey: opts.apiKey, baseURL: opts.baseURL, fetch: fetchFn })
     this.model = opts.model ?? 'gpt-4.1-mini'
+    this.includeUsageAccounting = !!opts.includeUsageAccounting
+    this.middleOut = !!opts.middleOut
+    this.minRequestIntervalMs = (typeof opts.minRequestIntervalMs === 'number' && opts.minRequestIntervalMs > 0)
+      ? opts.minRequestIntervalMs : 0
   }
 
   /** Run an agent loop streaming events until model stops requesting tools. */
@@ -63,6 +78,12 @@ export class LlmClient {
       modelOverride?: string
       /** Sampling temperature (0..2). Undefined → omit, provider chooses default. */
       temperature?: number
+      /** Loader для image-вложений: id → buffer/mime. Если задан — `[file:id:name]`
+       * токены в user-сообщениях для image-расширений преобразуются в
+       * multi-modal content (`type: 'image_url'`), модель получает картинку
+       * нативно через vision-API. Для не-image файлов и при отсутствии
+       * loader токены остаются в тексте. */
+      loadAttachmentBuffer?: (id: string) => { buffer: Buffer; mime: string } | null
     },
   ): AsyncGenerator<StreamEvent> {
     const maxTurns = opts?.maxTurns ?? 8
@@ -70,7 +91,7 @@ export class LlmClient {
     const temperature = typeof opts?.temperature === 'number' && Number.isFinite(opts.temperature)
       ? opts.temperature
       : undefined
-    const messages = history.map(toApi)
+    const messages = history.map((t) => toApi(t, opts?.loadAttachmentBuffer))
     let totalPromptTokens = 0
     let totalCompletionTokens = 0
     let totalCachedTokens = 0
@@ -95,19 +116,61 @@ export class LlmClient {
         : [...injected]
 
       let stream: Stream<ChatCompletionChunk>
-      try {
-        stream = await this.client.chat.completions.create({
-          model: activeModel,
-          messages: messagesForApi,
-          tools: isLastTurn ? undefined : (tools.length ? tools : undefined),
-          stream: true,
-          stream_options: { include_usage: true },
-          ...(temperature !== undefined ? { temperature } : {}),
-        })
-      } catch (e: any) {
-        yield { type: 'error', message: formatLlmError(e) }
+      const createBody: Record<string, unknown> = {
+        model: activeModel,
+        messages: messagesForApi,
+        tools: isLastTurn ? undefined : (tools.length ? tools : undefined),
+        stream: true,
+        stream_options: { include_usage: true },
+      }
+      if (temperature !== undefined) createBody['temperature'] = temperature
+      // OpenRouter: явно запрашиваем `cost` в usage.
+      if (this.includeUsageAccounting) createBody['usage'] = { include: true }
+      // OpenRouter middle-out — серверное сжатие при переполнении окна.
+      if (this.middleOut) createBody['transforms'] = ['middle-out']
+
+      // Клиентский троттлинг — не чаще одного запроса раз в N мс.
+      // Помогает избежать бана у строгих провайдеров.
+      if (this.minRequestIntervalMs > 0) {
+        const since = Date.now() - this.lastRequestAt
+        if (since < this.minRequestIntervalMs) {
+          await new Promise((r) => setTimeout(r, this.minRequestIntervalMs - since))
+        }
+      }
+      this.lastRequestAt = Date.now()
+
+      // Retry на 429 (rate limit) с backoff. Free-tier модели OpenRouter
+      // часто упираются в upstream-лимит провайдера — даём шанс пройти.
+      // Backoff фиксированный: 3с / 8с / 20с (3 попытки).
+      const RETRY_DELAYS = [3000, 8000, 20000]
+      let attempt = 0
+      let createError: unknown = null
+      while (true) {
+        try {
+          stream = await this.client.chat.completions.create(createBody as any) as unknown as Stream<ChatCompletionChunk>
+          createError = null
+          break
+        } catch (e: any) {
+          createError = e
+          const status = e?.status ?? e?.error?.code
+          if (status !== 429 || attempt >= RETRY_DELAYS.length) break
+          const delay = RETRY_DELAYS[attempt]!
+          yield {
+            type: 'retry-wait',
+            reason: 'Провайдер вернул 429 (rate limit). Ждём и пробуем снова.',
+            delayMs: delay,
+            attempt: attempt + 1,
+            max: RETRY_DELAYS.length,
+          }
+          await new Promise((r) => setTimeout(r, delay))
+          attempt++
+        }
+      }
+      if (createError) {
+        yield { type: 'error', message: formatLlmError(createError) }
         return
       }
+      stream = stream!
 
       let text = ''
       const toolBuf = new Map<number, { id: string; name: string; args: string }>()
@@ -125,13 +188,26 @@ export class LlmClient {
             totalCompletionTokens += chunk.usage.completion_tokens ?? 0
             totalCachedTokens += chunk.usage.prompt_tokens_details?.cached_tokens ?? 0
             lastPromptTokens = chunk.usage.prompt_tokens ?? lastPromptTokens
-            // Server-side billing in the provider's currency. Different
-            // gateways use different field names: VseGPT/OpenRouter — total_cost
-            // (USD), aitunnel — cost_rub (RUB). Same channel — frontend sees
-            // it as tokensCost and pairs it with the active provider currency.
-            const u = chunk.usage as { total_cost?: number; cost_rub?: number }
-            const c = u.total_cost ?? u.cost_rub
+            // Server-side billing in the provider's currency. Разные
+            // шлюзы используют разные имена поля:
+            //   VseGPT — total_cost (USD)
+            //   AITunnel — cost_rub (RUB)
+            //   OpenRouter — cost (USD), требует `usage: { include: true }`
+            //     в запросе, иначе поле не приходит.
+            // Одно поле во frontend как tokensCost, валюта — из PROVIDER_INFO.
+            const u = chunk.usage as { total_cost?: number; cost_rub?: number; cost?: number }
+            const c = u.total_cost ?? u.cost_rub ?? u.cost
             if (typeof c === 'number') totalCost += c
+            // Эмитим прогресс сразу — frontend обновит счётчики в шапке
+            // в реальном времени, не дожидаясь конца agent-loop'а.
+            yield {
+              type: 'usage',
+              promptTokens: totalPromptTokens,
+              completionTokens: totalCompletionTokens,
+              cachedTokens: totalCachedTokens,
+              ...(totalCost > 0 ? { totalCost } : {}),
+              promptTokensLast: lastPromptTokens,
+            }
           }
           const choice = chunk.choices[0]
           if (!choice) continue
@@ -204,7 +280,18 @@ export class LlmClient {
         const sysMsg = messages[0]
         messages.length = 0
         if (sysMsg) messages.push(sysMsg)
-        messages.push({ role: 'system', content: `Чекпоинт — итог предыдущего этапа:\n${summary}` })
+        // Внедряем явный пинок: после checkpoint модель часто выдаёт текст
+        // вида «дальше проверю...» и останавливается, ожидая что юзер
+        // ткнёт. Чёткое указание продолжать или давать финальный ответ
+        // удерживает агентный цикл живым без user-input'а.
+        messages.push({
+          role: 'system',
+          content: `Чекпоинт — итог предыдущего этапа:\n${summary}\n\n` +
+            'Сделан checkpoint, история сжата. ПРОДОЛЖАЙ выполнение текущей задачи: ' +
+            'следующий шаг по плану через нужный инструмент. Если задача полностью ' +
+            'завершена и больше делать нечего — дай финальный ответ пользователю. ' +
+            'Не пиши «дальше проверю / посмотрю / попробую» как обещание — сразу делай.',
+        })
         messages.push(...thisRound)
       }
     }
@@ -281,7 +368,22 @@ function buildProxyUrl(proxy: string, user?: string, password?: string): string 
   }
 }
 
-function toApi(t: ChatTurn): ChatCompletionMessageParam {
+/** Расширения которые мы передаём как image через vision-API. */
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp)$/i
+
+/** Detect mime-type из имени файла для data:URL. */
+function imageMime(name: string): string {
+  const ext = name.toLowerCase().match(/\.(png|jpe?g|gif|webp)$/)?.[1] ?? 'png'
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg'
+  if (ext === 'webp') return 'image/webp'
+  if (ext === 'gif') return 'image/gif'
+  return 'image/png'
+}
+
+function toApi(
+  t: ChatTurn,
+  loadAttachment?: (id: string) => { buffer: Buffer; mime: string } | null,
+): ChatCompletionMessageParam {
   if (t.role === 'tool') return { role: 'tool', tool_call_id: t.toolCallId, content: t.content }
   if (t.role === 'assistant') {
     if (t.toolCalls?.length) {
@@ -298,5 +400,36 @@ function toApi(t: ChatTurn): ChatCompletionMessageParam {
     return { role: 'assistant', content: t.content }
   }
   if (t.role === 'system') return { role: 'system', content: t.content }
+
+  // user. Парсим токены `[file:id:name]` — для image-расширений преобразуем
+  // в multi-modal content (vision API), для остальных — оставляем токен в
+  // тексте, чтобы модель видела что прикреплено и при необходимости вызывала
+  // read_attachment.
+  if (loadAttachment) {
+    const re = /\[file:([^:\]]+):([^\]]+)\]\s*/g
+    const images: { id: string; name: string }[] = []
+    const cleanedText = t.content.replace(re, (match, id: string, name: string) => {
+      if (IMAGE_EXT_RE.test(name)) {
+        images.push({ id, name })
+        return ''
+      }
+      return match
+    }).trim()
+    if (images.length) {
+      const parts: Array<
+        | { type: 'text'; text: string }
+        | { type: 'image_url'; image_url: { url: string } }
+      > = []
+      if (cleanedText) parts.push({ type: 'text', text: cleanedText })
+      for (const img of images) {
+        const data = loadAttachment(img.id)
+        if (!data) continue
+        const mime = data.mime || imageMime(img.name)
+        const dataUrl = `data:${mime};base64,${data.buffer.toString('base64')}`
+        parts.push({ type: 'image_url', image_url: { url: dataUrl } })
+      }
+      return { role: 'user', content: parts as any }
+    }
+  }
   return { role: 'user', content: t.content }
 }

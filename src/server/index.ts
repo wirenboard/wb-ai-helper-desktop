@@ -97,6 +97,15 @@ function buildLlmClient(s: Settings): LlmClient | null {
     tlsInsecure: cur.tlsInsecure,
     caCert: cur.caCert || undefined,
     apiFormat: cur.apiFormat,
+    // OpenRouter возвращает usage.cost (USD) только если в теле явно
+    // передан `usage: { include: true }`.
+    includeUsageAccounting: s.provider === 'openrouter',
+    // OpenRouter middle-out: серверное сжатие включается одной общей
+    // галочкой autoCompact (как у AITunnel). autoCompact=off → серверное
+    // сжатие провайдера; autoCompact=on → клиентский checkpoint, а
+    // серверный middle-out отключён, чтобы не было двойной обработки.
+    middleOut: s.provider === 'openrouter' && !cur.autoCompact,
+    minRequestIntervalMs: cur.minRequestIntervalMs,
   })
 }
 
@@ -146,7 +155,7 @@ app.put('/api/settings', async (c) => {
   for (const f of stringFields) {
     if (typeof body[f] === 'string') patch[f] = body[f]
   }
-  if (typeof body['provider'] === 'string' && ['openai', 'aitunnel', 'custom', 'custom_proxy'].includes(body['provider'] as string)) {
+  if (typeof body['provider'] === 'string' && ['openai', 'aitunnel', 'openrouter', 'custom', 'custom_proxy'].includes(body['provider'] as string)) {
     patch['provider'] = body['provider']
   }
   if (typeof body['apiFormat'] === 'string' && ['openai'].includes(body['apiFormat'] as string)) {
@@ -161,7 +170,7 @@ app.put('/api/settings', async (c) => {
       && body['autoCompactThreshold'] < 1) {
     patch['autoCompactThreshold'] = body['autoCompactThreshold']
   }
-  for (const f of ['priceInput', 'priceOutput', 'priceCached', 'contextWindow', 'temperature']) {
+  for (const f of ['priceInput', 'priceOutput', 'priceCached', 'contextWindow', 'temperature', 'minRequestIntervalMs']) {
     if (typeof body[f] === 'number' || body[f] === null) patch[f] = body[f]
   }
   await settingsStore.update(patch)
@@ -226,6 +235,39 @@ app.get('/api/aitunnel/info', async (c) => {
       return c.json({ error: `HTTP ${balRes.status}: ${txt.slice(0, 200)}` }, balRes.status as any)
     }
     return c.json({ balance, stats, me })
+  } catch (e: any) {
+    return c.json({ error: e?.message ?? String(e) }, 502)
+  }
+})
+
+/**
+ * OpenRouter-specific: total credits / total usage / лимиты ключа.
+ * Доступно только когда активный провайдер — `openrouter`.
+ */
+app.get('/api/openrouter/info', async (c) => {
+  const s = settingsStore.get()
+  if (s.provider !== 'openrouter') return c.json({ error: 'провайдер не openrouter' }, 400)
+  const cur = s.providers.openrouter
+  if (!cur.apiKey) return c.json({ error: 'apiKey не задан' }, 400)
+  const root = (cur.baseURL || PROVIDER_DEFAULTS.openrouter.baseURL).replace(/\/$/, '')
+  const headers = { authorization: `Bearer ${cur.apiKey}` }
+  try {
+    const [creditsRes, keyRes] = await Promise.all([
+      fetch(`${root}/credits`, { headers, signal: AbortSignal.timeout(10000) }),
+      fetch(`${root}/auth/key`, { headers, signal: AbortSignal.timeout(10000) }),
+    ])
+    const [creditsBody, keyBody] = await Promise.all([
+      creditsRes.ok ? creditsRes.json().catch(() => null) : null,
+      keyRes.ok ? keyRes.json().catch(() => null) : null,
+    ])
+    if (!creditsRes.ok && !keyRes.ok) {
+      const txt = await creditsRes.text().catch(() => '')
+      return c.json({ error: `HTTP ${creditsRes.status}: ${txt.slice(0, 200)}` }, creditsRes.status as any)
+    }
+    return c.json({
+      credits: (creditsBody as any)?.data ?? null,
+      key: (keyBody as any)?.data ?? null,
+    })
   } catch (e: any) {
     return c.json({ error: e?.message ?? String(e) }, 502)
   }
@@ -358,7 +400,8 @@ app.post('/api/chats/:id/message', async (c) => {
   if (!chat) return c.json({ error: 'not found' }, 404)
   const body = await c.req.json().catch(() => ({}))
   const userText = String(body.text ?? '').trim()
-  if (!userText) return c.json({ error: 'text required' }, 400)
+  const retryLast = body && body.retryLast === true
+  if (!retryLast && !userText) return c.json({ error: 'text required' }, 400)
   const compactRequested = body && body.compact === true
   // Override the model only when the caller requested compaction AND a separate
   // compactModel is configured for this provider — otherwise stay on the main model.
@@ -369,7 +412,12 @@ app.post('/api/chats/:id/message', async (c) => {
       ? cur.temperature
       : undefined
 
-  const chatWithUser = chats.appendTurn(id, { role: 'user', content: userText })!
+  // retryLast: не добавляем user-turn повторно — берём последний из DB.
+  // Используется кнопкой «Повторить» в баннере ошибок: текст уже сохранён
+  // в чате при первой попытке, дубль не нужен.
+  const chatWithUser = retryLast
+    ? chats.get(id)!
+    : chats.appendTurn(id, { role: 'user', content: userText })!
 
   return stream(c, async (s) => {
     const send = (event: string, data: unknown) => s.write(formatSse(event, data))
@@ -392,6 +440,17 @@ app.post('/api/chats/:id/message', async (c) => {
           agentState,
           modelOverride,
           temperature: temperatureOverride,
+          // Vision: при отправке user-сообщения с прикреплёнными
+          // картинками llm.ts превратит токены `[file:id:name]` для
+          // image-расширений в multi-modal content (image_url + base64).
+          // Если модель не vision-capable, провайдер вернёт ошибку —
+          // formatLlmError её распарсит для пользователя.
+          loadAttachmentBuffer: (id: string) => {
+            const meta = getAttachment(id, id) ?? getAttachment(chat.id, id)
+            const buf = readAttachment(chat.id, id)
+            if (!buf) return null
+            return { buffer: buf, mime: meta?.mime ?? 'application/octet-stream' }
+          },
           getExtraSystemMsgs: () => {
             const skills = listSkills(db)
             const catalog = skills.length

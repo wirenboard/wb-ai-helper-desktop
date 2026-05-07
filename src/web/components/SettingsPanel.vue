@@ -1,12 +1,16 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { api, COPILOT_MULTIPLIERS, PROVIDER_INFO, type AitunnelInfo, type ApiFormat, type LlmProvider, type Settings } from '../api'
+import { api, COPILOT_MULTIPLIERS, PROVIDER_INFO, type AitunnelInfo, type ApiFormat, type LlmProvider, type OpenRouterInfo, type Settings } from '../api'
 import ComboboxSearch from './ComboboxSearch.vue'
 
 const props = defineProps<{ settings: Settings | null; open: boolean; version?: string; fontSize?: number }>()
 const emit = defineEmits<{
   close: []
+  /** Юзер нажал «Сохранить» — родитель может закрыть окно. */
   saved: [Settings]
+  /** Авто-сохранение (ключ / провайдер) — родитель только обновляет
+   * локальный state, окно НЕ закрывает (юзер ещё в процессе настройки). */
+  autoSaved: [Settings]
   fontSizeChange: [number]
 }>()
 
@@ -28,6 +32,7 @@ const contextWindow = ref<number | null>(null)
 const autoCompact = ref(true)
 const autoCompactThreshold = ref(0.85)
 const temperature = ref<number | null>(null)
+const minRequestIntervalMs = ref<number | null>(null)
 /** id → context length, заполняется после fetchModels(); используется как
  * подсказка/auto-fill для contextWindow. */
 const contextLengths = ref<Record<string, number>>({})
@@ -64,6 +69,7 @@ function loadProviderFields(next: LlmProvider) {
     autoCompact.value = cfg.autoCompact ?? true
     autoCompactThreshold.value = cfg.autoCompactThreshold ?? 0.85
     temperature.value = cfg.temperature
+    minRequestIntervalMs.value = cfg.minRequestIntervalMs ?? null
   } else {
     baseURL.value = info.defaultBaseURL
     model.value = ''
@@ -80,12 +86,13 @@ function loadProviderFields(next: LlmProvider) {
     autoCompact.value = true
     autoCompactThreshold.value = 0.85
     temperature.value = null
+    minRequestIntervalMs.value = null
   }
   // If the loaded baseURL is empty (user never customised), suggest provider's default
   if (!baseURL.value) baseURL.value = info.defaultBaseURL
 }
 
-function onProviderChange(next: LlmProvider) {
+async function onProviderChange(next: LlmProvider) {
   provider.value = next
   loadProviderFields(next)
   models.value = []
@@ -93,7 +100,21 @@ function onProviderChange(next: LlmProvider) {
   modelsError.value = null
   aitunnelInfo.value = null
   aitunnelInfoError.value = null
+  openrouterInfo.value = null
+  openrouterInfoError.value = null
+  // Сохраняем выбор провайдера на бэке немедленно — иначе info-эндпоинты
+  // (`/api/aitunnel/info`, `/api/openrouter/info`) возвращают 400 «провайдер
+  // не <name>». Это согласуется с auto-save API-ключа. Эмитим autoSaved,
+  // чтобы родитель не закрывал окно настроек посреди работы юзера.
+  try {
+    const saved = await api.saveSettings({ provider: next })
+    emit('autoSaved', saved)
+  } catch (e: any) {
+    saveError.value = `Не удалось переключить провайдера: ${e?.message ?? String(e)}`
+    return
+  }
   void refreshAitunnelInfo()
+  void refreshOpenrouterInfo()
 }
 const mqttUser = ref('')
 const mqttPassword = ref('')
@@ -140,6 +161,35 @@ async function refreshAitunnelInfo() {
   }
 }
 
+// OpenRouter-specific: credits + лимиты ключа
+const openrouterInfo = ref<OpenRouterInfo | null>(null)
+const openrouterInfoError = ref<string | null>(null)
+const loadingOpenrouterInfo = ref(false)
+
+async function refreshOpenrouterInfo() {
+  if (provider.value !== 'openrouter') return
+  if (!apiKeyConfiguredForProvider.value) return
+  loadingOpenrouterInfo.value = true
+  openrouterInfoError.value = null
+  try {
+    openrouterInfo.value = await api.openrouterInfo()
+  } catch (e: any) {
+    openrouterInfoError.value = e?.message ?? String(e)
+  } finally {
+    loadingOpenrouterInfo.value = false
+  }
+}
+
+const openrouterRemaining = computed<number | null>(() => {
+  const info = openrouterInfo.value
+  if (!info?.credits) return null
+  return info.credits.total_credits - info.credits.total_usage
+})
+const openrouterLowBalance = computed(() => {
+  const r = openrouterRemaining.value
+  return r !== null && r < 1
+})
+
 /** Контекстное окно текущей модели по данным от провайдера (если он
  * вернул их в /v1/models). Пусто = автоопределение недоступно. */
 const detectedContextWindow = computed<number | null>(() => {
@@ -156,6 +206,22 @@ const contextWindowPlaceholder = computed(() => {
 function applyDetectedContextWindow() {
   if (detectedContextWindow.value) contextWindow.value = detectedContextWindow.value
 }
+
+/** Провайдер умеет сжимать контекст на своей стороне — тогда чекбокс
+ * `autoCompact` работает как переключатель: off = серверное сжатие,
+ * on = клиентский checkpoint (серверное в этом случае отключаем
+ * на стороне backend, чтобы не было двойной обработки).
+ * AITunnel: server-side всегда, флаг работает как «доп. checkpoint».
+ * OpenRouter: middle-out управляется backend'ом из !autoCompact. */
+const providerHasServerCompaction = computed(() =>
+  provider.value === 'aitunnel' || provider.value === 'openrouter',
+)
+
+// Если провайдер не сжимает сам — клиентское авто-сжатие принудительно ВКЛ
+// (без него длинный чат просто упадёт при переполнении окна).
+watch(providerHasServerCompaction, (has) => {
+  if (!has && !autoCompact.value) autoCompact.value = true
+}, { immediate: true })
 
 const canFetchModels = computed(() => {
   // For Custom AI Proxy auth often comes from the proxy itself (CA cert + URL-embedded
@@ -207,7 +273,9 @@ async function importSettings(file: File) {
     })
     if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text().catch(() => '')}`)
     const next = await r.json() as Settings
-    emit('saved', next)
+    // autoSaved — окно не закрываем, юзер только что импортировал
+    // и может ещё подправить.
+    emit('autoSaved', next)
     // Re-load the form from imported state
     provider.value = next.provider
     loadProviderFields(provider.value)
@@ -233,6 +301,7 @@ watch(
       if (apiKeyConfiguredForProvider.value) {
         void fetchModels()
         void refreshAitunnelInfo()
+        void refreshOpenrouterInfo()
       }
     }
   },
@@ -295,10 +364,11 @@ async function autoSaveApiKey() {
     if (providerInfo.value.baseURLEditable) patch.baseURL = baseURL.value
     const next = await api.saveSettings(patch)
     apiKey.value = ''
-    emit('saved', next)
-    // С новым ключом сразу подтягиваем модели и баланс (для AITunnel)
+    emit('autoSaved', next)
+    // С новым ключом сразу подтягиваем модели и провайдерскую info
     void fetchModels()
     void refreshAitunnelInfo()
+    void refreshOpenrouterInfo()
   } catch (e: any) {
     saveError.value = `Не удалось сохранить ключ: ${e?.message ?? String(e)}`
   }
@@ -335,6 +405,7 @@ async function save() {
       priceCached: priceCached.value != null ? Number(priceCached.value) : null,
       contextWindow: contextWindow.value != null && contextWindow.value > 0 ? Number(contextWindow.value) : null,
       temperature: temperature.value != null && Number.isFinite(Number(temperature.value)) ? Number(temperature.value) : null,
+      minRequestIntervalMs: minRequestIntervalMs.value != null && Number(minRequestIntervalMs.value) > 0 ? Number(minRequestIntervalMs.value) : null,
     }
     if (apiKey.value) patch.apiKey = apiKey.value
     if (provider.value === 'custom_proxy') {
@@ -362,7 +433,7 @@ async function removeKey() {
   try {
     const next = await api.clearApiKey()
     models.value = []
-    emit('saved', next)
+    emit('autoSaved', next)
   } catch (e: any) {
     saveError.value = e?.message ?? String(e)
   }
@@ -382,12 +453,28 @@ async function removeKey() {
           <label class="field">
             <span>Провайдер</span>
             <div class="provider-row">
-              <label v-for="(info, key) in PROVIDER_INFO" :key="key" class="provider-opt" :class="{ active: provider === key }">
+              <label
+                v-for="(info, key) in PROVIDER_INFO"
+                :key="key"
+                class="provider-opt"
+                :class="{ active: provider === key }"
+                :title="key === 'aitunnel'
+                  ? 'Доступен из России без VPN, оплата в рублях'
+                  : key === 'openrouter'
+                  ? 'Оплата картой или Alipay (можно пополнить из Сбербанка или ТБанка)'
+                  : undefined"
+              >
                 <input type="radio" :value="key" :checked="provider === key" @change="onProviderChange(key as LlmProvider)" />
                 <span>{{ info.label }}</span>
               </label>
             </div>
           </label>
+          <div v-if="provider === 'aitunnel'" class="muted small provider-hint">
+            Доступен из России без VPN, оплата в рублях
+          </div>
+          <div v-else-if="provider === 'openrouter'" class="muted small provider-hint">
+            Оплата картой или Alipay (можно пополнить из Сбербанка или ТБанка)
+          </div>
           <div v-if="provider === 'aitunnel' && apiKeyConfiguredForProvider" class="aitunnel-info" :class="{ 'aitunnel-low': aitunnelLowBalance }">
             <div v-if="loadingAitunnelInfo" class="muted small">загрузка баланса…</div>
             <div v-else-if="aitunnelInfoError" class="error small">Не удалось получить данные: {{ aitunnelInfoError }}</div>
@@ -420,6 +507,39 @@ async function removeKey() {
                 </span>
               </div>
               <div v-if="aitunnelInfo.me?.email" class="muted small">{{ aitunnelInfo.me.email }}</div>
+            </template>
+          </div>
+
+          <div v-if="provider === 'openrouter' && apiKeyConfiguredForProvider" class="aitunnel-info" :class="{ 'aitunnel-low': openrouterLowBalance }">
+            <div v-if="loadingOpenrouterInfo" class="muted small">загрузка баланса…</div>
+            <div v-else-if="openrouterInfoError" class="error small">Не удалось получить данные: {{ openrouterInfoError }}</div>
+            <template v-else-if="openrouterInfo">
+              <div class="aitunnel-row">
+                <span class="aitunnel-label">Остаток:</span>
+                <strong :class="{ 'aitunnel-low-text': openrouterLowBalance }">
+                  ${{ openrouterRemaining !== null ? openrouterRemaining.toLocaleString('en-US', { maximumFractionDigits: 4 }) : '—' }}
+                </strong>
+                <span v-if="openrouterInfo.credits" class="muted small">
+                  · потрачено ${{ openrouterInfo.credits.total_usage.toLocaleString('en-US', { maximumFractionDigits: 4 }) }}
+                  / куплено ${{ openrouterInfo.credits.total_credits.toLocaleString('en-US', { maximumFractionDigits: 2 }) }}
+                </span>
+                <span style="flex:1"></span>
+                <button type="button" class="ghost small" @click="refreshOpenrouterInfo" title="Обновить">↻</button>
+              </div>
+              <div v-if="openrouterInfo.key" class="aitunnel-stats muted small">
+                <span v-if="openrouterInfo.key.label">Ключ: <code>{{ openrouterInfo.key.label }}</code></span>
+                <span v-if="openrouterInfo.key.is_free_tier">·</span>
+                <span v-if="openrouterInfo.key.is_free_tier">free-tier</span>
+                <span v-if="openrouterInfo.key.limit != null">·</span>
+                <span v-if="openrouterInfo.key.limit != null">
+                  лимит ${{ openrouterInfo.key.limit }}<template v-if="openrouterInfo.key.limit_remaining != null">,
+                  осталось ${{ openrouterInfo.key.limit_remaining.toLocaleString('en-US', { maximumFractionDigits: 4 }) }}</template>
+                </span>
+                <span v-if="openrouterInfo.key.rate_limit">·</span>
+                <span v-if="openrouterInfo.key.rate_limit">
+                  rate {{ openrouterInfo.key.rate_limit.requests }}/{{ openrouterInfo.key.rate_limit.interval }}
+                </span>
+              </div>
             </template>
           </div>
 
@@ -539,6 +659,20 @@ async function removeKey() {
             />
           </label>
 
+          <label class="field">
+            <span>Минимальный интервал между запросами, мс <span class="muted small">(пусто = без троттлинга)</span></span>
+            <input
+              type="number"
+              min="0"
+              step="100"
+              v-model.number="minRequestIntervalMs"
+              placeholder="напр. 1000 — не чаще одного запроса в секунду"
+            />
+            <div class="muted small" style="margin-top:4px">
+              Помогает избежать бана у строгих провайдеров. На 429 (rate-limit) клиент автоматически ждёт и пробует снова — это видно в чате как «Провайдер занят, ждём…».
+            </div>
+          </label>
+
           <template v-if="showPriceFields">
             <div class="subsection-label">Стоимость</div>
             <label class="field">
@@ -562,8 +696,13 @@ async function removeKey() {
             (<a href="https://docs.aitunnel.ru/features/message-transforms.html" target="_blank" rel="noopener noreferrer">message-transforms</a>).
             Включи клиентское сжатие ниже, если хочешь явный <code>checkpoint</code> с summary в твоей истории чата.
           </div>
+          <div v-else-if="provider === 'openrouter'" class="muted small" style="margin-bottom:6px; padding:6px 8px; border-left:2px solid var(--accent); background: color-mix(in srgb, var(--accent) 4%, var(--bg))">
+            OpenRouter сжимает контекст автоматически на своей стороне
+            (<a href="https://openrouter.ai/docs/features/message-transforms" target="_blank" rel="noopener noreferrer">middle-out</a>).
+            Включи клиентское сжатие ниже, если хочешь явный <code>checkpoint</code> с summary в твоей истории чата.
+          </div>
 
-          <label class="field checkbox-field">
+          <label v-if="providerHasServerCompaction" class="field checkbox-field">
             <input type="checkbox" v-model="autoCompact" />
             <span>Клиентское авто-сжатие контекста (через инструмент checkpoint)</span>
           </label>
@@ -725,7 +864,7 @@ async function removeKey() {
 }
 .modal {
   background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
-  width: min(720px, 92vw); max-height: 90vh; display: flex; flex-direction: column;
+  width: min(900px, 92vw); max-height: 90vh; display: flex; flex-direction: column;
   box-shadow: 0 10px 40px rgba(0,0,0,0.25);
 }
 .modal-header {
@@ -757,6 +896,7 @@ code { background: var(--bg-mute); padding: 2px 4px; border-radius: 3px; font-si
   transition: border-color 0.1s, background 0.1s;
 }
 .provider-opt:hover { background: var(--bg-soft); }
+.provider-hint { margin: -4px 0 8px; font-size: 0.78rem; }
 .provider-opt.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
 .provider-opt input { width: auto; margin: 0; flex-shrink: 0; }
 .key-link {

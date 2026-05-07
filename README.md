@@ -16,7 +16,8 @@
    - Windows: `wb-ai-helper-windows-x64.exe`
 2. **Получить API-ключ** у любого OpenAI-совместимого провайдера:
    - **OpenAI** — [platform.openai.com/api-keys](https://platform.openai.com/api-keys); пополнить баланс через credit card. Рекомендуемая модель — `gpt-4.1` или `gpt-5.4-mini`
-   - **AITunnel** — [aitunnel.ru](https://aitunnel.ru/) (RUB-биллинг, оплата с российской карты, 200+ моделей включая Claude/GPT/Gemini)
+   - **AITunnel** — [aitunnel.ru](https://aitunnel.ru/) (доступен из России без VPN, RUB-биллинг, оплата с российской карты, 200+ моделей включая Claude/GPT/Gemini)
+   - **OpenRouter** — [openrouter.ai](https://openrouter.ai/) (300+ моделей; оплата картой или через Alipay, который можно пополнить из Сбербанка или ТБанка)
    - **Self-hosted** — Ollama / LiteLLM / vLLM на своём сервере, ключ необязателен
    - **Корпоративный/MITM-прокси** — см. раздел [Custom AI Proxy](#custom-ai-proxy) ниже
 3. **Запустить и настроить:**
@@ -43,7 +44,7 @@
 - Несколько чатов параллельно, каждый со своим контекстом контроллеров (один / выбранная группа / все)
 
 **LLM с tool-calling:**
-- 4 профиля провайдеров: **OpenAI** (прямой доступ), **AITunnel** (RUB-биллинг, баланс/статистика прямо в настройках), **Custom** (Ollama, LiteLLM, vLLM…), **Custom AI Proxy** (MITM-прокси с CA-сертификатом). Каждый хранит свой ключ/baseURL/model/прокси/CA/temperature/contextWindow/auto-сжатие — переключаются мгновенно
+- 5 профилей провайдеров: **OpenAI** (прямой доступ), **AITunnel** (RUB-биллинг, баланс/статистика прямо в настройках), **OpenRouter** (USD, баланс/лимиты ключа в настройках, 300+ моделей, авто-определение контекста из `/v1/models`), **Custom** (Ollama, LiteLLM, vLLM…), **Custom AI Proxy** (MITM-прокси с CA-сертификатом). Каждый хранит свой ключ/baseURL/model/прокси/CA/temperature/contextWindow/auto-сжатие — переключаются мгновенно
 - Per-provider контроль контекстного окна: автоопределение из `/v1/models` (для провайдеров типа OpenRouter), ручной override, опциональная отдельная (более дешёвая) модель для checkpoint, авто-сжатие при заполнении ≥ настраиваемого порога
 - ~50 инструментов: `mqtt_*`, `ssh_*`, `wb_bus_scan`, `serial_debug_collect`, `audit_controller`, `get_history`/`get_history_chart` (графики через vega-lite — line/bar/area/point/histogram/heatmap/boxplot), `fetch_from_controller`/`upload_to_controller`, `save_rule`/`load_rule`/`delete_rule` (wb-rules через `wbrules/Editor`)
 - 17 скиллов (`controller-backup`, `controller-update`, `wb-mqtt-serial`, `wb-rules`, `troubleshooting-*`, `diagrams`, `history` и др.) — подгружаются по запросу через `load_skill`
