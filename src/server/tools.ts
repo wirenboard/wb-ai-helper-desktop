@@ -7,13 +7,17 @@ import type { DbHandle } from './db.ts'
 import { getTodos, setTodos, formatTodos, type TodoItem, type TodoStatus } from './todos.ts'
 import {
   getSkill, upsertUserSkill, deleteUserSkill,
-  trackLoadedSkill, unloadSkillFromSession, extractDescription, SKILL_NAME_RE,
+  trackLoadedSkill, unloadSkillFromSession, getLoadedSkills, extractDescription, SKILL_NAME_RE,
 } from './skills.ts'
 import { truncateLog } from './log-truncate.ts'
 import { trackJob, getRunningJobForSn, updateJobState } from './jobs.ts'
 import { runAudit, runSnapshot, runDiffSnapshot } from './audit.ts'
 import { basename } from 'node:path'
 import { saveAttachment, getAttachment, readAttachment, listSession as listAttachments } from './attachments.ts'
+import JSZip from 'jszip'
+import { extract as tarExtract } from 'tar-stream'
+import { Readable } from 'node:stream'
+import { gunzipSync } from 'node:zlib'
 import { renderHistoryChart } from './history-chart.ts'
 
 export function toolSchemas(): ChatCompletionTool[] {
@@ -828,6 +832,54 @@ export function toolSchemas(): ChatCompletionTool[] {
         },
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: 'list_archive_contents',
+        description: 'Показать листинг файлов внутри архива, прикреплённого к чату. Поддерживаются zip, tar, tar.gz/tgz (формат определяется автоматически по magic-bytes). Возвращает массив записей {path, size, isDir}. Используй чтобы понять что внутри прежде чем извлекать.',
+        parameters: {
+          type: 'object',
+          properties: {
+            fileId: { type: 'string', description: 'ID архива из list_attachments.' },
+          },
+          required: ['fileId'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'read_from_archive',
+        description: 'Прочитать один файл из архива (zip / tar / tar.gz / tgz) по path. encoding="utf8" для текста, "base64" для бинарного. Лимит ~200KB на файл — для больших используй extract_archive.',
+        parameters: {
+          type: 'object',
+          properties: {
+            fileId: { type: 'string', description: 'ID архива.' },
+            path: { type: 'string', description: 'Путь файла внутри архива (как из list_archive_contents).' },
+            encoding: { type: 'string', enum: ['utf8', 'base64'], description: 'Кодировка: utf8 (по умолчанию) или base64.' },
+          },
+          required: ['fileId', 'path'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'extract_archive',
+        description: 'Извлечь файлы из архива (zip / tar / tar.gz / tgz) в attachments чата как отдельные файлы — каждый получает свой fileId, доступный для read_attachment / upload_to_controller. Параметр paths — массив конкретных путей для извлечения; если не задан или пуст — извлекается весь архив. Возвращает массив {path, fileId, name, size, mime}.',
+        parameters: {
+          type: 'object',
+          properties: {
+            fileId: { type: 'string', description: 'ID архива.' },
+            paths: { type: 'array', items: { type: 'string' }, description: 'Опционально: подмножество путей для извлечения. Если не указано — извлекается всё.' },
+          },
+          required: ['fileId'],
+          additionalProperties: false,
+        },
+      },
+    },
   ]
 }
 
@@ -841,6 +893,58 @@ type Ctx = {
   sessionId: string
   agentState: { checkpointSummary?: string }
   braveApiKey?: string
+}
+
+/** Унифицированная запись о файле в архиве: путь, размер, флаг директории
+ * и raw-данные (загружаются по требованию). */
+export type ArchiveEntry = { path: string; size: number; isDir: boolean; data: () => Promise<Buffer> }
+
+/** Открывает архив (zip / tar / tar.gz / tgz) и возвращает список записей.
+ * Автодетект по magic-bytes: ZIP — `PK\x03\x04`, gzip — `1f 8b`, иначе пробуем
+ * как plain tar. */
+export async function openArchive(buf: Buffer): Promise<ArchiveEntry[]> {
+  // ZIP
+  if (buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04) {
+    const zip = await JSZip.loadAsync(buf)
+    const out: ArchiveEntry[] = []
+    for (const [path, file] of Object.entries(zip.files)) {
+      const size = file.dir ? 0 : ((file as any)._data?.uncompressedSize ?? 0)
+      out.push({
+        path, size, isDir: file.dir,
+        data: async () => Buffer.from(await file.async('uint8array')),
+      })
+    }
+    return out
+  }
+  // gzip — распаковываем и обрабатываем как tar
+  let tarBuf = buf
+  if (buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b) {
+    tarBuf = gunzipSync(buf)
+  }
+  // tar
+  return await new Promise<ArchiveEntry[]>((resolve, reject) => {
+    const out: ArchiveEntry[] = []
+    const ext = tarExtract()
+    ext.on('entry', (header, stream, next) => {
+      const chunks: Buffer[] = []
+      stream.on('data', (c: Buffer) => chunks.push(c))
+      stream.on('end', () => {
+        const body = Buffer.concat(chunks)
+        out.push({
+          path: header.name,
+          size: header.size ?? body.length,
+          isDir: header.type === 'directory',
+          data: async () => body,
+        })
+        next()
+      })
+      stream.on('error', reject)
+      stream.resume()
+    })
+    ext.on('finish', () => resolve(out))
+    ext.on('error', reject)
+    Readable.from(tarBuf).pipe(ext)
+  })
 }
 
 export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promise<string> {
@@ -1038,7 +1142,19 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
       const pending = currentTodos.filter((t) => t.status !== 'completed')
       const todosPart = pending.length ? `\nОставшийся план:\n${formatTodos(pending)}` : ''
       ctx.agentState.checkpointSummary = summary + todosPart
-      return JSON.stringify({ ok: true, message: 'Чекпоинт принят. Контекст будет сжат после этого хода.' })
+      // Авто-выгрузка всех загруженных скиллов: если модель сделала
+      // checkpoint — этап завершён, скиллы для следующей фазы скорее всего
+      // другие. Если они всё ещё нужны — модель сама перезагрузит. Иначе
+      // их content продолжал бы инжектиться в каждый turn и засорять контекст.
+      const loaded = getLoadedSkills(ctx.sessionId)
+      const unloadedNames: string[] = []
+      for (const s of loaded) {
+        if (unloadSkillFromSession(ctx.sessionId, s.name)) unloadedNames.push(s.name)
+      }
+      const unloadedPart = unloadedNames.length
+        ? ` Авто-выгружены скиллы: ${unloadedNames.join(', ')} — если они нужны для следующей фазы, перезагрузи через load_skill.`
+        : ''
+      return JSON.stringify({ ok: true, message: `Чекпоинт принят. Контекст будет сжат после этого хода.${unloadedPart}` })
     }
 
     case 'load_skill': {
@@ -1814,6 +1930,71 @@ import json as j; print(j.dumps(m))
       if (!buf) return JSON.stringify({ error: `file ${fileId} data missing` })
       const content = encoding === 'base64' ? buf.toString('base64') : buf.toString('utf8')
       return JSON.stringify({ fileId, name: meta.name, mime: meta.mime, size: meta.size, encoding, content })
+    }
+
+    case 'list_archive_contents': {
+      const fileId = String(args['fileId'] ?? '').trim()
+      if (!fileId) return JSON.stringify({ error: 'fileId required' })
+      const buf = readAttachment(ctx.sessionId, fileId)
+      if (!buf) return JSON.stringify({ error: `file ${fileId} not found` })
+      try {
+        const entries = await openArchive(buf)
+        return JSON.stringify({
+          fileId,
+          entries: entries.map(({ path, size, isDir }) => ({ path, size, isDir })),
+        })
+      } catch (e: any) {
+        return JSON.stringify({ error: `Не удалось прочитать архив (поддерживаются zip, tar, tar.gz/tgz): ${e?.message ?? String(e)}` })
+      }
+    }
+
+    case 'read_from_archive': {
+      const fileId = String(args['fileId'] ?? '').trim()
+      const innerPath = String(args['path'] ?? '').trim()
+      const encoding = args['encoding'] === 'base64' ? 'base64' : 'utf8'
+      if (!fileId || !innerPath) return JSON.stringify({ error: 'fileId and path required' })
+      const buf = readAttachment(ctx.sessionId, fileId)
+      if (!buf) return JSON.stringify({ error: `file ${fileId} not found` })
+      try {
+        const entries = await openArchive(buf)
+        const entry = entries.find((e) => e.path === innerPath && !e.isDir)
+        if (!entry) return JSON.stringify({ error: `«${innerPath}» в архиве не найден` })
+        const data = await entry.data()
+        const MAX_READ = 200 * 1024
+        if (data.length > MAX_READ) return JSON.stringify({ error: `file too large for context (${data.length} bytes, limit ${MAX_READ}). Используй extract_archive чтобы вытащить как отдельный attachment.` })
+        const content = encoding === 'base64' ? data.toString('base64') : data.toString('utf8')
+        return JSON.stringify({ fileId, path: innerPath, size: data.length, encoding, content })
+      } catch (e: any) {
+        return JSON.stringify({ error: `Не удалось прочитать архив: ${e?.message ?? String(e)}` })
+      }
+    }
+
+    case 'extract_archive': {
+      const fileId = String(args['fileId'] ?? '').trim()
+      const wanted = Array.isArray(args['paths']) ? (args['paths'] as unknown[]).map(String) : null
+      if (!fileId) return JSON.stringify({ error: 'fileId required' })
+      const buf = readAttachment(ctx.sessionId, fileId)
+      if (!buf) return JSON.stringify({ error: `file ${fileId} not found` })
+      try {
+        const entries = await openArchive(buf)
+        const out: { path: string; fileId: string; name: string; size: number; mime: string }[] = []
+        for (const entry of entries) {
+          if (entry.isDir) continue
+          if (wanted && wanted.length && !wanted.includes(entry.path)) continue
+          const data = await entry.data()
+          const baseName = entry.path.split('/').filter(Boolean).pop() || entry.path
+          const r = saveAttachment(ctx.sessionId, baseName, data, 'assistant')
+          if (r.ok) {
+            out.push({ path: entry.path, fileId: r.meta.id, name: baseName, size: data.length, mime: r.meta.mime })
+          } else {
+            out.push({ path: entry.path, fileId: '', name: baseName, size: data.length, mime: 'error: ' + r.error } as any)
+          }
+        }
+        if (!out.length) return JSON.stringify({ error: 'Архив пуст или указанные paths не найдены.' })
+        return JSON.stringify({ fileId, extracted: out })
+      } catch (e: any) {
+        return JSON.stringify({ error: `Не удалось прочитать архив: ${e?.message ?? String(e)}` })
+      }
     }
   }
   return JSON.stringify({ error: `unknown tool ${name}` })

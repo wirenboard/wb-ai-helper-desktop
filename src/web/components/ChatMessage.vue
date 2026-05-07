@@ -146,20 +146,67 @@ async function downloadViaFetch(url: string, name: string) {
 <template>
   <!-- User message -->
   <div v-if="item.type === 'user'" class="msg user">
-    <div class="bubble user-bubble">
+    <div v-if="item.attachments?.length" class="user-attachments">
+      <template v-for="a in item.attachments" :key="a.id">
+        <!-- image — thumbnail с открытием в новой вкладке -->
+        <div
+          v-if="a.isImage && !deletedAttachments.has(a.id)"
+          class="user-attach-img"
+          :title="`${a.name} · ${a.id}`"
+        >
+          <a :href="`/api/attachments/${a.id}?chatId=${chatId}`" target="_blank" rel="noopener noreferrer">
+            <img :src="`/api/attachments/${a.id}?chatId=${chatId}`" :alt="a.name" />
+          </a>
+          <button
+            class="user-attach-del"
+            title="Удалить файл из чата"
+            @click="deleteFileFromChat(a.id)"
+          >×</button>
+          <div class="user-attach-meta">
+            <span class="user-attach-name">{{ a.name }}</span>
+            <code class="user-attach-id">{{ a.id }}</code>
+          </div>
+        </div>
+        <!-- non-image — chip -->
+        <div
+          v-else-if="!deletedAttachments.has(a.id)"
+          class="user-attach-chip"
+          :title="`${a.name} · ${a.id}`"
+        >
+          <a :href="`/api/attachments/${a.id}?chatId=${chatId}`" target="_blank" rel="noopener noreferrer" class="user-attach-link">
+            <span class="user-attach-icon">📎</span>
+            <span class="user-attach-name">{{ a.name }}</span>
+            <code class="user-attach-id">{{ a.id }}</code>
+          </a>
+          <button
+            class="user-attach-del"
+            title="Удалить файл из чата"
+            @click="deleteFileFromChat(a.id)"
+          >×</button>
+        </div>
+        <div v-else class="user-attach-deleted">
+          📎 {{ a.name }} <code class="user-attach-id">{{ a.id }}</code> — удалено
+        </div>
+      </template>
+    </div>
+    <div v-if="item.text" class="bubble user-bubble">
       {{ item.text }}
-      <button class="copy-btn user-copy" :title="userCopied ? 'Скопировано!' : 'Копировать'" @click="copyUser">
-        {{ userCopied ? '✓' : '⎘' }}
-      </button>
+      <button
+        class="user-copy"
+        :title="userCopied ? 'Скопировано!' : 'Копировать'"
+        @click="copyUser"
+      >{{ userCopied ? '✓' : '⎘' }}</button>
     </div>
   </div>
 
   <!-- Assistant text -->
   <div v-else-if="item.type === 'assistant_text'" class="msg assistant">
     <div class="bubble markdown">
-      <button class="copy-btn" :title="copied ? 'Скопировано!' : 'Копировать'" @click="copyText">
-        {{ copied ? '✓' : '⎘' }}
-      </button>
+      <button
+        class="copy-btn"
+        :title="copied ? 'Скопировано!' : 'Копировать'"
+        @click="copyText"
+      >{{ copied ? '✓' : '⎘' }}</button>
       <div ref="bubbleEl" v-html="assistantHtml" />
       <div v-if="item.tokensPrompt || item.tokensCompletion || item.tokensCost || item.createdAt || settings?.model" class="msg-footer">
         <span v-if="settings?.provider || settings?.model" class="footer-provider">
@@ -325,20 +372,116 @@ async function downloadViaFetch(url: string, name: string) {
 .footer-tokens { opacity: 0.7; font-family: 'JetBrains Mono', monospace; flex-shrink: 0; margin-left: auto; }
 .footer-time { opacity: 0.55; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; }
 
-/* ── Copy buttons ───────────────────────────────────────────── */
-.copy-btn {
-  position: absolute; top: 8px; right: 10px;
-  border: none; background: transparent; color: var(--text-mute); cursor: pointer;
-  font-size: 0.8rem; padding: 0 2px; opacity: 0; transition: opacity 0.15s;
-}
-.assistant:hover .copy-btn { opacity: 1; }
-.copy-btn:hover { color: var(--text); }
+/* ── Copy button: верхний правый угол bubble, на hover, в цвет bubble ── */
+.copy-btn,
 .user-copy {
   position: absolute; top: 6px; right: 8px;
-  border: none; background: transparent; color: var(--text-mute); cursor: pointer;
-  font-size: 0.8rem; padding: 0 2px; opacity: 0; transition: opacity 0.15s;
+  border: 1px solid transparent; border-radius: 4px;
+  background: transparent; color: var(--text-mute); cursor: pointer;
+  font-family: inherit; font-size: 0.78rem; line-height: 1;
+  padding: 3px 7px;
+  opacity: 0; transition: opacity 0.12s, color 0.12s, background 0.12s, border-color 0.12s;
 }
-.user-copy:hover { color: var(--text); }
+/* подложка в цвет соответствующего bubble — иконка не мажет текст */
+.assistant:hover .copy-btn {
+  opacity: 1; background: var(--bg-soft);
+  border-color: color-mix(in srgb, var(--text-mute) 18%, transparent);
+}
+.user:hover .user-copy {
+  opacity: 1; background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.copy-btn:hover, .user-copy:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* User-attachments — компактные превью/чипы справа */
+.user-attachments {
+  display: flex; flex-direction: column; align-items: flex-end;
+  gap: 6px; margin-bottom: 4px;
+}
+.user-attach-img {
+  position: relative;
+  display: flex; flex-direction: column; align-items: stretch;
+  max-width: 220px;
+  border-radius: 8px; overflow: hidden;
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.user-attach-img a {
+  display: block; line-height: 0;
+  background: var(--bg-mute, var(--border));
+}
+.user-attach-img img {
+  display: block; width: 100%; max-height: 160px; object-fit: cover;
+}
+.user-attach-meta {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px;
+  font-size: 0.72rem; line-height: 1.2;
+  color: var(--text-mute);
+  min-width: 0;
+}
+.user-attach-meta .user-attach-name {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.user-attach-id {
+  flex-shrink: 0;
+  font-family: 'JetBrains Mono', monospace; font-size: 0.66rem;
+  padding: 0 4px; border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text-mute);
+}
+.user-attach-del {
+  position: absolute; top: 4px; right: 4px;
+  width: 22px; height: 22px;
+  border: none; border-radius: 4px;
+  background: rgba(0,0,0,0.45); color: #fff; cursor: pointer;
+  font-size: 0.95rem; line-height: 1;
+  opacity: 0; transition: opacity 0.15s, background 0.15s;
+  display: flex; align-items: center; justify-content: center;
+}
+.user-attach-img:hover .user-attach-del,
+.user-attach-chip:hover .user-attach-del { opacity: 1; }
+.user-attach-del:hover { background: var(--danger, #ef4444); }
+
+.user-attach-chip {
+  position: relative;
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 320px;
+  padding: 5px 28px 5px 10px;
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-radius: 6px;
+  font-size: 0.85rem; color: var(--text);
+  text-decoration: none;
+}
+.user-attach-chip .user-attach-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: inherit; text-decoration: none;
+  min-width: 0;
+}
+.user-attach-chip .user-attach-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 220px;
+}
+.user-attach-chip .user-attach-del {
+  /* для чипа кнопка inline в правой части — overlay-подложка не нужна */
+  position: absolute; top: 50%; right: 4px; transform: translateY(-50%);
+  background: transparent; color: var(--text-mute);
+  width: 20px; height: 20px;
+}
+.user-attach-chip:hover .user-attach-del { opacity: 0.7; }
+.user-attach-chip .user-attach-del:hover { color: var(--danger, #ef4444); background: transparent; }
+.user-attach-deleted {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 6px;
+  background: color-mix(in srgb, var(--text-mute) 12%, var(--bg));
+  color: var(--text-mute); font-size: 0.85rem; font-style: italic;
+  text-decoration: line-through;
+}
 
 /* ── Tool call ──────────────────────────────────────────────── */
 .tool { font-size: 0.85rem; }

@@ -19,7 +19,8 @@ export type ChatTurn =
   | { role: 'system'; content: string }
 
 // ── Chat items (UI layer, derived from ChatTurn[]) ────────────────────────
-export type ChatItemUser = { type: 'user'; text: string }
+export type ChatItemUserAttachment = { id: string; name: string; isImage: boolean }
+export type ChatItemUser = { type: 'user'; text: string; attachments?: ChatItemUserAttachment[] }
 export type ChatItemAssistantText = { type: 'assistant_text'; text: string; createdAt?: number; tokensPrompt?: number; tokensCompletion?: number; tokensCached?: number; tokensCost?: number }
 export type ChatItemToolCall = { type: 'tool_call'; id: string; name: string; input: Record<string, unknown>; result?: { content: string; isError: boolean } }
 export type ChatItemAssistantFile = { type: 'assistant_file'; attachmentId: string; name: string; mime: string; size: number; url: string; sourceSn?: string; sourcePath?: string }
@@ -38,7 +39,16 @@ export function turnsToItems(turns: ChatTurn[], chatId: string): ChatItem[] {
         items.push({ type: 'system_event', text: t.content.slice('[Система]'.length).trim().split('\n')[0]! })
         continue
       }
-      items.push({ type: 'user', text: t.content })
+      // Парсим токены вложений `[file:id:name]` (вставляются ChatInputArea
+      // при отправке). Image-расширения помечаем для рендера thumbnail.
+      const attachments: ChatItemUserAttachment[] = []
+      const text = t.content.replace(/\[file:([^:\]]+):([^\]]+)\]\s*/g, (_match, id: string, name: string) => {
+        attachments.push({ id, name, isImage: /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name) })
+        return ''
+      }).trim()
+      items.push(attachments.length
+        ? { type: 'user', text, attachments }
+        : { type: 'user', text })
     } else if (t.role === 'assistant') {
       for (const tc of t.toolCalls ?? []) {
         let input: Record<string, unknown> = {}
@@ -131,7 +141,7 @@ export type Health = {
   discoveryInterval: number
 }
 
-export type LlmProvider = 'openai' | 'aitunnel' | 'custom' | 'custom_proxy'
+export type LlmProvider = 'openai' | 'aitunnel' | 'openrouter' | 'custom' | 'custom_proxy'
 export type ApiFormat = 'openai'
 
 export interface ProviderInfo {
@@ -163,6 +173,18 @@ export const PROVIDER_INFO: Record<LlmProvider, ProviderInfo & { apiFormat: ApiF
     // ручные цены не нужны.
     pricesEditable: false,
     signupUrl: 'https://aitunnel.ru/',
+    apiFormat: 'openai',
+    baseURLEditable: false,
+    supportsCaCert: false,
+    apiFormatEditable: false,
+  },
+  openrouter: {
+    label: 'OpenRouter',
+    defaultBaseURL: 'https://openrouter.ai/api/v1',
+    currency: 'USD',
+    // OpenRouter возвращает usage.cost — ручные цены не нужны.
+    pricesEditable: false,
+    signupUrl: 'https://openrouter.ai/keys',
     apiFormat: 'openai',
     baseURLEditable: false,
     supportsCaCert: false,
@@ -282,6 +304,8 @@ export type ProviderConfigPublic = {
   autoCompactThreshold: number
   /** Sampling temperature override (per-provider). null = use provider default. */
   temperature: number | null
+  /** Минимальный интервал между запросами к провайдеру, мс. null = нет троттлинга. */
+  minRequestIntervalMs: number | null
   apiKeyConfigured: boolean
   llmProxyPasswordConfigured: boolean
 }
@@ -306,6 +330,7 @@ export type Settings = {
   autoCompact: boolean
   autoCompactThreshold: number
   temperature?: number | null
+  minRequestIntervalMs?: number | null
   // Shared (controller / UI):
   mqttUser: string
   sshUser: string
@@ -341,6 +366,7 @@ export type SettingsPatch = Partial<{
   autoCompact: boolean
   autoCompactThreshold: number
   temperature: number | null
+  minRequestIntervalMs: number | null
 }>
 
 const json = async <T>(res: Response): Promise<T> => {
@@ -364,6 +390,7 @@ export const api = {
     fetch('/api/settings/api-key', { method: 'DELETE' }).then((r) => json<Settings>(r)),
   models: () => fetch('/api/models').then((r) => json<{ models: string[]; contextLengths?: Record<string, number> }>(r)),
   aitunnelInfo: () => fetch('/api/aitunnel/info').then((r) => json<AitunnelInfo>(r)),
+  openrouterInfo: () => fetch('/api/openrouter/info').then((r) => json<OpenRouterInfo>(r)),
   controllers: () => fetch('/api/controllers').then((r) => json<{ controllers: Controller[] }>(r)),
   refresh: () =>
     fetch('/api/controllers/refresh', { method: 'POST' }).then((r) =>
@@ -410,18 +437,25 @@ export const api = {
 
   /** Send a message and stream SSE events.
    * `compact: true` сигнализирует backend использовать configured `compactModel`
-   * (если задан) для этого вызова — вместо основной модели. */
+   * (если задан) для этого вызова — вместо основной модели.
+   * `retryLast: true` — backend НЕ добавляет user-turn повторно (использует
+   * последний из DB), text может быть пустым. Используется кнопкой
+   * «Повторить» в баннере ошибок. */
   sendMessage(
     id: string,
     text: string,
     onEvent: (event: string, data: any) => void,
     signal?: AbortSignal,
-    opts?: { compact?: boolean },
+    opts?: { compact?: boolean; retryLast?: boolean },
   ): Promise<void> {
     return fetch(`/api/chats/${id}/message`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text, ...(opts?.compact ? { compact: true } : {}) }),
+      body: JSON.stringify({
+        text,
+        ...(opts?.compact ? { compact: true } : {}),
+        ...(opts?.retryLast ? { retryLast: true } : {}),
+      }),
       signal,
     }).then(async (res) => {
       if (!res.ok) {
@@ -494,6 +528,19 @@ export type AitunnelInfo = {
     top_model_by_requests_value: number
   } | null
   me: { email: string; id: number } | null
+}
+
+export type OpenRouterInfo = {
+  credits: { total_credits: number; total_usage: number } | null
+  key: {
+    label?: string
+    usage?: number
+    limit?: number | null
+    limit_remaining?: number | null
+    is_free_tier?: boolean
+    is_provisioning_key?: boolean
+    rate_limit?: { requests: number; interval: string }
+  } | null
 }
 
 export type Cost = { value: number; currency: 'USD' | 'RUB' }

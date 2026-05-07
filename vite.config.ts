@@ -15,7 +15,11 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5173,
     proxy: {
-      '^/api(/|$)': { target: 'http://127.0.0.1:17321', changeOrigin: false },
+      // ws: true прокидывает WebSocket-апгрейды (SSH-терминал на
+      // /api/ssh/<sn>/shell). Без этого dev-сервер не пробрасывает WS
+      // на backend и xterm видит «WebSocket error» / 404. В prod-сборке
+      // (один процесс) этого нет — фронт и WS обслуживаются одним сервером.
+      '^/api(/|$)': { target: 'http://127.0.0.1:17321', changeOrigin: false, ws: true },
     },
   },
 })

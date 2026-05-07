@@ -93,6 +93,109 @@ const liveTurns = reactive<{ [chatId: string]: ChatTurn[] }>({})
 const streaming = ref(false)
 const scanning = ref(false)
 const errorBanner = ref<string | null>(null)
+/** Параметры последней отправки — чтобы кнопка «Повторить» в баннере
+ * ошибки могла переотправить тот же запрос. */
+const lastSentMessage = ref<{ text: string; opts?: { compact?: boolean } } | null>(null)
+
+async function retryLastMessage() {
+  if (!lastSentMessage.value || streaming.value || !activeChat.value) return
+  errorBanner.value = null
+  // Очищаем retry-events предыдущей попытки из live — без них чат чище.
+  const live = liveTurns[activeChat.value.id]
+  if (live) {
+    for (let i = live.length - 1; i >= 0; i--) {
+      const t = live[i]
+      if (t?.role === 'user' && t.content.startsWith('[Система] ⏳')) {
+        live.splice(i, 1)
+      }
+      // Удаляем оборванный пустой assistant turn от прошлой попытки —
+      // новый стрим напишет в свой свежий пустой assistant.
+      else if (t?.role === 'assistant' && !t.content && (!('toolCalls' in t) || !t.toolCalls?.length)) {
+        live.splice(i, 1)
+      }
+    }
+  }
+  // retryLast: backend НЕ дублирует user-turn в DB. Локально user-msg
+  // в live тоже уже на месте, так что просто запускаем стрим заново.
+  const id = activeChat.value.id
+  const opts = { ...(lastSentMessage.value.opts ?? {}), retryLast: true }
+  streaming.value = true
+  // Добавляем «свежий» пустой assistant в конец live, куда придёт ответ.
+  if (live) live.push({ role: 'assistant', content: '' })
+  abortStream = new AbortController()
+  try {
+    await api.sendMessage(
+      id,
+      '',
+      (event, data) => handleStreamEvent(id, event, data),
+      abortStream.signal,
+      opts,
+    )
+  } catch (e: any) {
+    if (e?.name !== 'AbortError') errorBanner.value = e.message
+  } finally {
+    abortStream = null
+    if (activeChatId.value === id && activeChat.value?.id === id) {
+      const c = await api.getChat(id).catch(() => null)
+      if (c) {
+        const cur = activeChat.value
+        cur.tokensPrompt = c.tokensPrompt
+        cur.tokensCompletion = c.tokensCompletion
+        cur.tokensCached = c.tokensCached
+        cur.totalCost = c.totalCost
+        cur.title = c.title
+      }
+    }
+    streaming.value = false
+    void api.stats().then((s) => { totalStats.value = s }).catch(() => {})
+    void refreshJobs().then(() => {
+      if (runningJobs.value.length > 0) startJobPolling()
+    })
+  }
+}
+
+/** Разделяем баннер ошибки на «заголовок» и «детали».
+ * formatLlmError на бэке возвращает строки вида:
+ *   «Недостаточно средств на счёте провайдера (402). <upstream-текст>»
+ *   «LLM error: <текст>»
+ * Берём первую часть как title (до первой точки или ":"), остальное — detail. */
+function errorTitle(msg: string): string {
+  // 1) «… (NNN). xxx» → «… (NNN)»
+  const m = msg.match(/^(.+?\(\d{3}\))\.\s/)
+  if (m) return m[1]!
+  // 2) «Foo: bar» → «Foo»
+  const idx = msg.indexOf(':')
+  if (idx > 0 && idx < 60) return msg.slice(0, idx)
+  // fallback: первое предложение, не длиннее 80 символов
+  const dot = msg.indexOf('. ')
+  if (dot > 0 && dot < 80) return msg.slice(0, dot)
+  return msg.length > 80 ? msg.slice(0, 80) + '…' : msg
+}
+
+function errorDetail(msg: string): string {
+  const t = errorTitle(msg)
+  if (t === msg) return ''
+  return msg.slice(t.length).replace(/^[.:\s]+/, '').trim()
+}
+
+/** Превращает упоминания http(s)-URL в кликабельные ссылки. Безопасно: всё
+ * остальное эскейпится. Используется только на текстах, которые приходят
+ * с нашего бэкенда (formatLlmError) — не от модели. */
+function linkifyError(text: string): string {
+  const escape = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!))
+  const parts: string[] = []
+  let lastIdx = 0
+  const re = /https?:\/\/[\w./?=&%#:+-]+/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text)) !== null) {
+    parts.push(escape(text.slice(lastIdx, m.index)))
+    const url = m[0]
+    parts.push(`<a href="${escape(url)}" target="_blank" rel="noopener noreferrer">${escape(url)}</a>`)
+    lastIdx = m.index + url.length
+  }
+  parts.push(escape(text.slice(lastIdx)))
+  return parts.join('')
+}
 const toast = ref<string | null>(null)
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -109,9 +212,17 @@ let abortStream: AbortController | null = null
 
 const selectedSns = computed(() => activeChat.value?.contextSns ?? [])
 
+/** Источник правды для всех агрегированных счётчиков чата: liveTurns
+ * (там аккумулируется свежее состояние стрима + token-данные после in-place
+ * merge), с fallback на activeChat.turns для случая «чат только что выбран
+ * и live ещё не сформирован». */
+function turnsForCounters(): ChatTurn[] {
+  if (!activeChat.value) return []
+  return liveTurns[activeChat.value.id] ?? activeChat.value.turns
+}
+
 const currentChatTokens = computed(() => {
-  const turns = activeChat.value?.turns ?? []
-  return turns.reduce(
+  return turnsForCounters().reduce(
     (acc, t) => {
       if (t.role === 'assistant') {
         acc.prompt += t.tokensPrompt ?? 0
@@ -126,7 +237,7 @@ const currentChatTokens = computed(() => {
 
 const currentChatTokensCost = computed(() => {
   // Sum of provider-reported tokensCost across assistant turns (VseGPT only — 0 for OpenAI)
-  return (activeChat.value?.turns ?? []).reduce(
+  return turnsForCounters().reduce(
     (acc, t) => acc + (t.role === 'assistant' ? (t.tokensCost ?? 0) : 0),
     0,
   )
@@ -138,7 +249,7 @@ const currentContextUsage = computed(() => {
   if (!settings.value || !activeChat.value) return null
   const ctx = contextWindowOf(settings.value.model, settings.value.contextWindow)
   if (!ctx) return null
-  const turns = activeChat.value.turns
+  const turns = turnsForCounters()
   let last = 0
   for (let i = turns.length - 1; i >= 0; i--) {
     const t = turns[i]
@@ -235,6 +346,13 @@ async function onSettingsSaved(next: Settings) {
   if (next.apiKeyConfigured && next.model) settingsOpen.value = false
 }
 
+/** Авто-сохранение из SettingsPanel (смена провайдера, ввод ключа,
+ * импорт, удаление ключа) — обновляем state, окно НЕ закрываем. */
+async function onSettingsAutoSaved(next: Settings) {
+  settings.value = next
+  health.value = await api.health()
+}
+
 async function refreshControllers() {
   const r = await api.controllers()
   controllers.value = r.controllers
@@ -274,7 +392,15 @@ async function selectChat(id: string) {
   activeChatId.value = id
   const c = await api.getChat(id)
   activeChat.value = c
-  if (!liveTurns[id]) liveTurns[id] = []
+  // Live теперь всегда инициализируется полной историей чата (без system),
+  // и единственный источник правды для visibleTurns. Без этого пустой live
+  // + новый user-msg «затирали» персистентную историю в UI, а после
+  // стрима activeChat.turns не обновлялся in-place — UI показывал старое.
+  // Копируем каждый turn неглубоко, чтобы мутации в стриме (push,
+  // content +=) не задевали activeChat.turns.
+  liveTurns[id] = c.turns
+    .filter((t) => t.role !== 'system')
+    .map((t) => ({ ...t }))
   void refreshJobs().then(() => {
     if (runningJobs.value.length > 0) startJobPolling()
   })
@@ -377,6 +503,7 @@ async function sendMessage(text: string, opts?: { compact?: boolean }) {
   const id = activeChat.value.id
   streaming.value = true
   errorBanner.value = null
+  lastSentMessage.value = { text, ...(opts ? { opts } : {}) }
   const prevHistory = liveTurns[id] ?? activeChat.value.turns.filter((t) => t.role !== 'system')
   liveTurns[id] = [
     ...prevHistory,
@@ -460,6 +587,36 @@ function handleStreamEvent(chatId: string, event: string, data: any) {
   if (event === 'text-delta') {
     const last = buf[buf.length - 1]
     if (last?.role === 'assistant') last.content += data.text
+    return
+  }
+  if (event === 'retry-wait') {
+    // Бэк сообщил что провайдер вернул 429 и мы ждём перед повтором.
+    // Пишем как system_event прямо в чат (turnsToItems рендерит user-turn
+    // c префиксом «[Система]» компактно с шестерёнкой) — тосты сжимаются
+    // друг друга и юзер видит только последний, а так остаётся след
+    // всех попыток в истории чата для текущего стрима.
+    const sec = Math.round((data.delayMs ?? 0) / 1000)
+    buf.push({
+      role: 'user',
+      content: `[Система] ⏳ Провайдер вернул 429 (rate limit). Попытка ${data.attempt}/${data.max}, жду ${sec}с…`,
+    })
+    return
+  }
+  if (event === 'usage') {
+    // Live-обновление токенов в шапке чата: бэк присылает накопленный
+    // usage после каждой итерации agent-loop'а. Записываем в последний
+    // assistant turn (currentChatTokens суммирует по live, остальные
+    // assistant'ы остаются с tokens=0 — итог == последний накопленный).
+    for (let i = buf.length - 1; i >= 0; i--) {
+      const t = buf[i]
+      if (t?.role === 'assistant') {
+        t.tokensPrompt = data.promptTokens ?? 0
+        t.tokensCompletion = data.completionTokens ?? 0
+        t.tokensCached = data.cachedTokens ?? 0
+        if (typeof data.totalCost === 'number') t.tokensCost = data.totalCost
+        break
+      }
+    }
     return
   }
   if (event === 'tool-call') {
@@ -655,12 +812,13 @@ onBeforeUnmount(() => {
 
 const visibleTurns = computed<ChatTurn[]>(() => {
   if (!activeChat.value) return []
-  const persisted = activeChat.value.turns.filter((t) => t.role !== 'system')
-  const live = liveTurns[activeChat.value.id] ?? []
-  // Prefer whichever is longer — protects against a brief race during the
-  // post-stream `getChat` refresh that would otherwise blank out earlier
-  // history while liveTurns is being torn down.
-  return live.length >= persisted.length ? live : persisted
+  // selectChat при выборе чата всегда инициализирует liveTurns[id] полной
+  // историей (без system) — live единственный источник правды для рендера.
+  // Fallback на persisted остаётся на случай гонки (selectChat ещё не
+  // дочитал api.getChat, но computed уже стартовал).
+  const live = liveTurns[activeChat.value.id]
+  if (live) return live
+  return activeChat.value.turns.filter((t) => t.role !== 'system')
 })
 </script>
 
@@ -718,7 +876,20 @@ const visibleTurns = computed<ChatTurn[]>(() => {
         <button class="ghost" :title="`Тема: ${themeLabel[theme]}`" @click="cycleTheme">{{ themeIcon[theme] }}</button>
         <button class="ghost" title="Настройки" @click="settingsOpen = true">⚙</button>
       </div>
-      <div v-if="errorBanner" class="error">{{ errorBanner }}</div>
+      <div v-if="errorBanner" class="error-banner">
+        <span class="error-icon">⚠</span>
+        <div class="error-body">
+          <div class="error-title">{{ errorTitle(errorBanner) }}</div>
+          <div v-if="errorDetail(errorBanner)" class="error-detail" v-html="linkifyError(errorDetail(errorBanner))"></div>
+        </div>
+        <button
+          v-if="lastSentMessage && !streaming"
+          class="error-retry"
+          title="Повторить отправку с теми же параметрами"
+          @click="retryLastMessage"
+        >↻ Повторить</button>
+        <button class="error-close ghost small" @click="errorBanner = null" title="Скрыть">×</button>
+      </div>
       <!-- Running/done jobs are rendered inline next to the tool group that
            started them (see ChatMessageList) — no need to duplicate here. -->
       <ChatPane
@@ -756,6 +927,7 @@ const visibleTurns = computed<ChatTurn[]>(() => {
       :font-size="fontSize"
       @close="settingsOpen = false"
       @saved="onSettingsSaved"
+      @auto-saved="onSettingsAutoSaved"
       @font-size-change="onFontSizeChange"
     />
 
@@ -787,6 +959,45 @@ const visibleTurns = computed<ChatTurn[]>(() => {
 </template>
 
 <style scoped>
+.error-banner {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 14px; margin: 0;
+  border-bottom: 1px solid color-mix(in srgb, #ef4444 40%, transparent);
+  background: color-mix(in srgb, #ef4444 8%, var(--bg));
+  font-size: 0.85rem; color: var(--text);
+}
+.error-banner .error-icon {
+  font-size: 1.1rem; line-height: 1.2; color: #ef4444; flex-shrink: 0;
+  margin-top: 1px;
+}
+.error-banner .error-body { flex: 1; min-width: 0; }
+.error-banner .error-title {
+  font-weight: 600; color: #b91c1c;
+}
+.error-banner :deep(.error-detail) {
+  margin-top: 3px; color: var(--text-mute);
+  font-size: 0.8rem; line-height: 1.4;
+  word-break: break-word;
+}
+.error-banner :deep(.error-detail a) {
+  color: var(--accent); text-decoration: underline;
+}
+.error-banner .error-retry {
+  flex-shrink: 0; align-self: center;
+  padding: 4px 10px; font-family: inherit; font-size: 0.8rem;
+  background: var(--bg); color: var(--accent);
+  border: 1px solid var(--accent); border-radius: 4px; cursor: pointer;
+  white-space: nowrap;
+}
+.error-banner .error-retry:hover {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+}
+.error-banner .error-close {
+  flex-shrink: 0; padding: 0 6px; line-height: 1;
+  font-size: 1.2rem; color: var(--text-mute); cursor: pointer;
+}
+.error-banner .error-close:hover { color: var(--text); }
+
 .toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
   background: var(--text); color: var(--bg);
