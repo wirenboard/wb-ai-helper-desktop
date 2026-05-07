@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { api, calcCost, contextWindowOf, type Chat, type ChatTurn, type Controller, type Health, type Settings, type TokenStats, type TrackedJob } from './api'
 import { fmtCost, fmtTok } from './utils'
 import ChatList from './components/ChatList.vue'
@@ -154,8 +154,30 @@ const currentContextUsage = computed(() => {
 function compactContext() {
   // Просим модель сжать историю — вызвать tool `checkpoint`. Сама модель решит
   // что положить в summary. Текст подсказывающий, остальное — её ответственность.
-  void sendMessage('Контекст приближается к лимиту. Вызови сейчас checkpoint(summary=...) с кратким итогом текущего этапа, чтобы освободить память.')
+  // `compact: true` — backend подменит модель на configured compactModel (если задан).
+  void sendMessage(
+    'Контекст приближается к лимиту. Вызови сейчас checkpoint(summary=...) с кратким итогом текущего этапа, чтобы освободить память.',
+    { compact: true },
+  )
 }
+
+// Авто-сжатие: следим за заполнением контекста и, при превышении порога,
+// автоматически отправляем тот же запрос на checkpoint. Дебаунсим, чтобы не
+// триггериться на каждом тике, и не запускаемся пока есть активный стрим.
+let autoCompactTriggeredForRatio = 0
+watch(currentContextUsage, (u) => {
+  if (!u || !settings.value?.autoCompact || streaming.value) return
+  const threshold = settings.value.autoCompactThreshold || 0.85
+  if (u.ratio < threshold) {
+    // ratio упал ниже порога (после сжатия) — сбрасываем гард
+    autoCompactTriggeredForRatio = 0
+    return
+  }
+  // Уже триггерили на текущем "пике" — ждём пока ratio просядет ниже порога
+  if (autoCompactTriggeredForRatio > 0) return
+  autoCompactTriggeredForRatio = u.ratio
+  compactContext()
+})
 
 const currentChatCost = computed(() => {
   if (!settings.value) return null
@@ -347,7 +369,7 @@ async function renameChat(title: string) {
   patchLocalChat(await api.patchChat(activeChatId.value, { title }))
 }
 
-async function sendMessage(text: string) {
+async function sendMessage(text: string, opts?: { compact?: boolean }) {
   if (!activeChat.value || streaming.value) return
   const id = activeChat.value.id
   streaming.value = true
@@ -365,6 +387,7 @@ async function sendMessage(text: string) {
       text,
       (event, data) => handleStreamEvent(id, event, data),
       abortStream.signal,
+      opts,
     )
   } catch (e: any) {
     if (e?.name !== 'AbortError') errorBanner.value = e.message
@@ -628,7 +651,7 @@ const visibleTurns = computed<ChatTurn[]>(() => {
           :title="`Сколько потратили токенов в чате (биллинг): ↑${fmtTok(currentChatTokens.prompt)} prompt${currentChatTokens.cached ? ` (⊙${fmtTok(currentChatTokens.cached)} кэш)` : ''} / ↓${fmtTok(currentChatTokens.completion)} completion`"
         >↑{{ fmtTok(currentChatTokens.prompt) }} ↓{{ fmtTok(currentChatTokens.completion) }}<template v-if="currentChatTokens.cached"> ⊙{{ fmtTok(currentChatTokens.cached) }}</template><template v-if="currentChatCost != null"> · {{ fmtCost(currentChatCost) }}</template></div>
         <div
-          v-if="currentContextUsage"
+          v-if="currentContextUsage && settings?.autoCompact"
           class="ctx-meter small"
           :class="{ warn: currentContextUsage.ratio >= 0.8, crit: currentContextUsage.ratio >= 0.95 }"
           :title="`Текущий активный контекст ${fmtTok(currentContextUsage.used)} из ${fmtTok(currentContextUsage.total)} (${Math.round(currentContextUsage.ratio * 100)}%)`"

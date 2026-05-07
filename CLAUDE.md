@@ -44,17 +44,32 @@ WB AI Helper is a single-binary desktop AI assistant for Wiren Board IoT control
 
 ### LLM provider profiles
 
-`settings.providers: Record<provider, ProviderConfig>` — switching `settings.provider` swaps every LLM-side field at once (apiKey, baseURL, model, prices, llmProxy, tlsInsecure, caCert, apiFormat). Three profiles:
+`settings.providers: Record<provider, ProviderConfig>` — switching `settings.provider` swaps every LLM-side field at once. **Per-provider** fields (см. `PROVIDER_FIELDS` в `settings.ts`): apiKey, baseURL, model, llmProxy*, tlsInsecure, caCert, apiFormat, priceInput/Output/Cached, **contextWindow**, **compactModel**, **autoCompact**, **autoCompactThreshold**, **temperature**. Только `mqtt*`, `ssh*`, `discoveryInterval`, `openBrowser` остаются shared.
 
-| profile        | baseURL editable | apiFormat editable | caCert | typical use |
-|----------------|------------------|--------------------|--------|-------------|
-| `openai`       | no (api.openai.com fixed) | no | no  | direct OpenAI |
-| `custom`       | yes              | yes                | no  | any OpenAI-compatible (Ollama, LiteLLM, vLLM…) |
-| `custom_proxy` | yes              | yes                | yes | MITM proxy (Claude proxy) — auth in URL, CA-cert PEM stored inline in settings.json |
+| profile        | baseURL editable | apiFormat editable | caCert | currency | autoCompact default | typical use |
+|----------------|------------------|--------------------|--------|----------|--------------------|-------------|
+| `openai`       | no (api.openai.com fixed) | no | no | USD | true | direct OpenAI |
+| `aitunnel`     | no (api.aitunnel.ru/v1 fixed) | no | no | RUB | **false** (server-side message-transforms) | RUB-биллинг, баланс/статистика inline |
+| `custom`       | yes              | yes                | no  | none | true | any OpenAI-compatible (Ollama, LiteLLM, vLLM…) |
+| `custom_proxy` | yes              | yes                | yes | none | true | MITM proxy (Claude proxy) — auth in URL, CA-cert PEM stored inline in settings.json |
 
 `apiFormat` is `'openai'` for now; the type allows for future Anthropic/Responses-API support but no other backend exists today.
 
 `buildLlmClient(s)` in `index.ts` picks `cur = s.providers[s.provider]` and builds OpenAI client with a custom fetch that handles `proxy`, `tls.rejectUnauthorized`, `tls.ca`. Settings whitelisted on PUT; per-provider fields are routed into `providers[targetProvider]` automatically by `mergeWithMigration`.
+
+### Context window + auto-compact
+
+Per-provider behaviour:
+1. **Detection** — `listModels()` parses `context_length`/`context_window`/`max_input_tokens`/`top_provider.context_length`/`details.context_length` (covers OpenRouter, LiteLLM, Ollama-compat). `/api/models` exposes them as `contextLengths: Record<modelId, number>`.
+2. **Manual override** — `ProviderConfig.contextWindow` (settings.json). UI shows the auto-detected value as a placeholder + «подставить авто» button.
+3. **Auto-compact watch** in `App.vue`: when `currentContextUsage.ratio >= autoCompactThreshold` and `autoCompact === true`, posts the «вызови checkpoint» nudge with `compact: true`. Backend swaps the model to `compactModel` (if set) only for that single stream via `runAgent({ modelOverride })`. Guard: doesn't re-trigger until ratio drops below threshold.
+4. **Hidden when off** — when `autoCompact === false`, the chat header progress bar, manual «📦 сжать» button, and Settings panel context fields (size / compactModel / threshold) are all hidden. AITunnel relies on this default.
+
+### AITunnel-specific
+
+- `usage.cost_rub` parsed alongside `total_cost` in `llm.ts` → surfaces as `tokensCost` with currency from `PROVIDER_INFO`.
+- `GET /api/aitunnel/info` calls `/v1/aitunnel/{balance,stats/summary,me}` in parallel and surfaces balance + 30-day spend + email in `SettingsPanel`. Computed `daysLeft` (`balance / avg_daily_spend`) goes red below 3 days.
+- `formatLlmError()` in `llm.ts` decodes AITunnel error structure (`{error: {code, message, metadata}}`) — covers 400/401/402 (нет средств)/403 (модерация — с reasons/flagged_input/provider_name)/408/429/502 (с upstream provider/raw). Same parser handles standard OpenAI errors.
 
 ### Key source files
 

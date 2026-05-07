@@ -133,11 +133,11 @@ app.get('/api/settings', (c) => c.json(settingsStore.toPublic()))
 app.put('/api/settings', async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
   const patch: Record<string, unknown> = {}
-  const stringFields = ['apiKey', 'baseURL', 'model', 'llmProxy', 'llmProxyUser', 'llmProxyPassword', 'mqttUser', 'mqttPassword', 'sshUser', 'sshPassword', 'sshKeyPath', 'caCert']
+  const stringFields = ['apiKey', 'baseURL', 'model', 'llmProxy', 'llmProxyUser', 'llmProxyPassword', 'mqttUser', 'mqttPassword', 'sshUser', 'sshPassword', 'sshKeyPath', 'caCert', 'compactModel']
   for (const f of stringFields) {
     if (typeof body[f] === 'string') patch[f] = body[f]
   }
-  if (typeof body['provider'] === 'string' && ['openai', 'custom', 'custom_proxy'].includes(body['provider'] as string)) {
+  if (typeof body['provider'] === 'string' && ['openai', 'aitunnel', 'custom', 'custom_proxy'].includes(body['provider'] as string)) {
     patch['provider'] = body['provider']
   }
   if (typeof body['apiFormat'] === 'string' && ['openai'].includes(body['apiFormat'] as string)) {
@@ -146,7 +146,13 @@ app.put('/api/settings', async (c) => {
   if (typeof body['discoveryInterval'] === 'number') patch['discoveryInterval'] = body['discoveryInterval']
   if (typeof body['openBrowser'] === 'boolean') patch['openBrowser'] = body['openBrowser']
   if (typeof body['tlsInsecure'] === 'boolean') patch['tlsInsecure'] = body['tlsInsecure']
-  for (const f of ['priceInput', 'priceOutput', 'priceCached']) {
+  if (typeof body['autoCompact'] === 'boolean') patch['autoCompact'] = body['autoCompact']
+  if (typeof body['autoCompactThreshold'] === 'number'
+      && body['autoCompactThreshold'] >= 0.5
+      && body['autoCompactThreshold'] < 1) {
+    patch['autoCompactThreshold'] = body['autoCompactThreshold']
+  }
+  for (const f of ['priceInput', 'priceOutput', 'priceCached', 'contextWindow', 'temperature']) {
     if (typeof body[f] === 'number' || body[f] === null) patch[f] = body[f]
   }
   await settingsStore.update(patch)
@@ -184,19 +190,56 @@ app.delete('/api/settings/api-key', async (c) => {
   return c.json(settingsStore.toPublic())
 })
 
+/**
+ * AITunnel-specific: баланс + сводная статистика + email юзера. Доступно только
+ * когда активный провайдер — `aitunnel` (используем его apiKey/baseURL).
+ */
+app.get('/api/aitunnel/info', async (c) => {
+  const s = settingsStore.get()
+  if (s.provider !== 'aitunnel') return c.json({ error: 'провайдер не aitunnel' }, 400)
+  const cur = s.providers.aitunnel
+  if (!cur.apiKey) return c.json({ error: 'apiKey не задан' }, 400)
+  const root = (cur.baseURL || PROVIDER_DEFAULTS.aitunnel.baseURL).replace(/\/$/, '')
+  const headers = { authorization: `Bearer ${cur.apiKey}` }
+  try {
+    const [balRes, statsRes, meRes] = await Promise.all([
+      fetch(`${root}/aitunnel/balance`, { headers, signal: AbortSignal.timeout(10000) }),
+      fetch(`${root}/aitunnel/stats/summary`, { headers, signal: AbortSignal.timeout(10000) }),
+      fetch(`${root}/aitunnel/me`, { headers, signal: AbortSignal.timeout(10000) }),
+    ])
+    const [balance, stats, me] = await Promise.all([
+      balRes.ok ? balRes.json().catch(() => null) : null,
+      statsRes.ok ? statsRes.json().catch(() => null) : null,
+      meRes.ok ? meRes.json().catch(() => null) : null,
+    ])
+    if (!balRes.ok) {
+      const txt = await balRes.text().catch(() => '')
+      return c.json({ error: `HTTP ${balRes.status}: ${txt.slice(0, 200)}` }, balRes.status as any)
+    }
+    return c.json({ balance, stats, me })
+  } catch (e: any) {
+    return c.json({ error: e?.message ?? String(e) }, 502)
+  }
+})
+
 app.get('/api/models', async (c) => {
   const s = settingsStore.get()
   const cur = s.providers[s.provider]
   if (!cur.apiKey) return c.json({ error: 'apiKey не задан' }, 400)
   try {
-    const models = await listModels(cur.apiKey, resolveBaseUrl(s), {
+    const items = await listModels(cur.apiKey, resolveBaseUrl(s), {
       proxy: cur.llmProxy || undefined,
       proxyUser: cur.llmProxyUser || undefined,
       proxyPassword: cur.llmProxyPassword || undefined,
       tlsInsecure: cur.tlsInsecure,
       caCert: cur.caCert || undefined,
     })
-    return c.json({ models })
+    const models = items.map((m) => m.id)
+    const contextLengths: Record<string, number> = {}
+    for (const m of items) {
+      if (typeof m.contextLength === 'number') contextLengths[m.id] = m.contextLength
+    }
+    return c.json({ models, contextLengths })
   } catch (e: any) {
     return c.json({ error: e?.message ?? String(e) }, 502)
   }
@@ -318,6 +361,15 @@ app.post('/api/chats/:id/message', async (c) => {
   const body = await c.req.json().catch(() => ({}))
   const userText = String(body.text ?? '').trim()
   if (!userText) return c.json({ error: 'text required' }, 400)
+  const compactRequested = body && body.compact === true
+  // Override the model only when the caller requested compaction AND a separate
+  // compactModel is configured for this provider — otherwise stay on the main model.
+  const cur = settingsStore.current()
+  const modelOverride = compactRequested && cur.compactModel ? cur.compactModel : undefined
+  const temperatureOverride =
+    typeof cur.temperature === 'number' && Number.isFinite(cur.temperature)
+      ? cur.temperature
+      : undefined
 
   const chatWithUser = chats.appendTurn(id, { role: 'user', content: userText })!
 
@@ -340,6 +392,8 @@ app.post('/api/chats/:id/message', async (c) => {
         {
           maxTurns: 20,
           agentState,
+          modelOverride,
+          temperature: temperatureOverride,
           getExtraSystemMsgs: () => {
             const skills = listSkills(db)
             const catalog = skills.length

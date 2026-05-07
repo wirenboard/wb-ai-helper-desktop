@@ -945,14 +945,28 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
           }
         }),
       )
+      // Hint когда модель спрашивает «есть ли обновления» через `apt list
+      // --upgradable` без предварительного `apt-get update` — список будет
+      // устаревший. Загрузить controller-update скилл — он покрывает сценарий.
+      const isStaleAptCheck = /\bapt(?:-get)?\s+list\s+--upgradable\b/.test(command)
+        || /\bapt-cache\s+(?:show|search|policy)\b/.test(command)
+      const cleanedStderr = (s: string) =>
+        // apt при вызове из скрипта печатает «WARNING: apt does not have
+        // a stable CLI interface...» — известный шум, в нём нет полезной
+        // для модели информации, фильтруем чтобы не засорять контекст.
+        s.replace(/^WARNING: apt does not have a stable CLI interface\..*$/gm, '').trim()
       if (results.length === 1) {
         const r = results[0]!
         if (r.error) return `[${r.sn}] error: ${r.error}`
         const parts: string[] = []
         if (r.stdout) parts.push(r.stdout)
-        if (r.stderr) parts.push(`[stderr]\n${r.stderr}`)
+        const stderr = cleanedStderr(r.stderr)
+        if (stderr) parts.push(`[stderr]\n${stderr}`)
         if (r.truncated) parts.push('[вывод обрезан]')
         parts.push(`[exit: ${r.code}]`)
+        if (isStaleAptCheck && r.code === 0) {
+          parts.push('[hint] Локальный кэш apt мог устареть. Перед итоговым ответом «есть/нет обновления» запусти `apt-get update -qq` через ssh_exec_async, потом повтори этот запрос. Для развёрнутых сценариев — load_skill("controller-update").')
+        }
         return parts.join('\n')
       }
       // Multiple targets — group by SN
@@ -960,9 +974,13 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
         if (r.error) return `[${r.sn}]\nerror: ${r.error}`
         const parts: string[] = [`[${r.sn}]`]
         if (r.stdout) parts.push(r.stdout)
-        if (r.stderr) parts.push(`[stderr]\n${r.stderr}`)
+        const stderr = cleanedStderr(r.stderr)
+        if (stderr) parts.push(`[stderr]\n${stderr}`)
         if (r.truncated) parts.push('[вывод обрезан]')
         parts.push(`[exit: ${r.code}]`)
+        if (isStaleAptCheck && r.code === 0) {
+          parts.push('[hint] Локальный кэш apt мог устареть. Перед итоговым ответом запусти `apt-get update -qq` через ssh_exec_async, потом повтори этот запрос.')
+        }
         return parts.join('\n')
       }).join('\n---\n')
     }

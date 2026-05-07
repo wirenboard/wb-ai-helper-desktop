@@ -59,9 +59,17 @@ export class LlmClient {
       signal?: AbortSignal
       agentState?: { checkpointSummary?: string }
       getExtraSystemMsgs?: () => string[]
+      /** Override the model for this run only (e.g. cheaper compactModel). */
+      modelOverride?: string
+      /** Sampling temperature (0..2). Undefined → omit, provider chooses default. */
+      temperature?: number
     },
   ): AsyncGenerator<StreamEvent> {
     const maxTurns = opts?.maxTurns ?? 8
+    const activeModel = opts?.modelOverride?.trim() || this.model
+    const temperature = typeof opts?.temperature === 'number' && Number.isFinite(opts.temperature)
+      ? opts.temperature
+      : undefined
     const messages = history.map(toApi)
     let totalPromptTokens = 0
     let totalCompletionTokens = 0
@@ -89,14 +97,15 @@ export class LlmClient {
       let stream: Stream<ChatCompletionChunk>
       try {
         stream = await this.client.chat.completions.create({
-          model: this.model,
+          model: activeModel,
           messages: messagesForApi,
           tools: isLastTurn ? undefined : (tools.length ? tools : undefined),
           stream: true,
           stream_options: { include_usage: true },
+          ...(temperature !== undefined ? { temperature } : {}),
         })
       } catch (e: any) {
-        yield { type: 'error', message: `LLM error: ${e?.message ?? String(e)}` }
+        yield { type: 'error', message: formatLlmError(e) }
         return
       }
 
@@ -116,8 +125,12 @@ export class LlmClient {
             totalCompletionTokens += chunk.usage.completion_tokens ?? 0
             totalCachedTokens += chunk.usage.prompt_tokens_details?.cached_tokens ?? 0
             lastPromptTokens = chunk.usage.prompt_tokens ?? lastPromptTokens
-            // VseGPT extension: server-side billing in the provider's currency
-            const c = (chunk.usage as { total_cost?: number }).total_cost
+            // Server-side billing in the provider's currency. Different
+            // gateways use different field names: VseGPT/OpenRouter — total_cost
+            // (USD), aitunnel — cost_rub (RUB). Same channel — frontend sees
+            // it as tokensCost and pairs it with the active provider currency.
+            const u = chunk.usage as { total_cost?: number; cost_rub?: number }
+            const c = u.total_cost ?? u.cost_rub
             if (typeof c === 'number') totalCost += c
           }
           const choice = chunk.choices[0]
@@ -200,6 +213,59 @@ export class LlmClient {
       yield { type: 'usage', promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens, cachedTokens: totalCachedTokens }
     }
     yield { type: 'done', finish_reason: 'max_turns' }
+  }
+}
+
+/**
+ * Превращает ошибку OpenAI SDK / fetch в человекочитаемое сообщение.
+ * Покрывает специфичные коды AITunnel ([docs](https://docs.aitunnel.ru/api/errors.html)),
+ * ровно те же коды у других OpenAI-совместимых шлюзов трактуются так же.
+ *
+ * Структура ответа AITunnel: `{ error: { code: number, message: string, metadata? } }`,
+ * у OpenAI — `{ error: { message, type, code? } }`. Достаём оба варианта.
+ */
+export function formatLlmError(e: unknown): string {
+  const err = e as { status?: number; message?: string; error?: any; cause?: any }
+  // OpenAI SDK кладёт parsed body в `err.error`
+  const body = err?.error
+  const status = err?.status
+  const innerCode = (typeof body?.code === 'number' ? body.code : undefined)
+                  ?? (typeof body?.error?.code === 'number' ? body.error.code : undefined)
+  const httpCode = innerCode ?? status
+  const innerMsg: string | undefined = body?.message ?? body?.error?.message
+  const meta = body?.metadata ?? body?.error?.metadata
+  const detail = innerMsg ?? err?.message ?? String(e)
+  switch (httpCode) {
+    case 400: return `Неверный запрос (400): ${detail}`
+    case 401: return `Недействительный API-ключ (401). Проверь ключ в настройках. ${detail}`
+    case 402: {
+      // У AITunnel 402 = недостаточно средств; meta может содержать `provider_name`
+      return `Недостаточно средств на счёте провайдера (402). ${detail}`
+    }
+    case 403: {
+      const reasons: unknown = meta?.reasons
+      const flagged: unknown = meta?.flagged_input
+      const provider: unknown = meta?.provider_name
+      const parts = [`Запрос отклонён модерацией (403)`]
+      if (Array.isArray(reasons) && reasons.length) parts.push(`причина: ${reasons.join(', ')}`)
+      if (typeof flagged === 'string') parts.push(`фрагмент: «${flagged.slice(0, 100)}»`)
+      if (typeof provider === 'string') parts.push(`провайдер: ${provider}`)
+      parts.push(detail)
+      return parts.join(' — ')
+    }
+    case 408: return `Превышено время ожидания (408). Попробуй ещё раз. ${detail}`
+    case 429: return `Превышен лимит запросов (429). Подожди и попробуй снова. ${detail}`
+    case 502: {
+      const provider: unknown = meta?.provider_name
+      const raw: unknown = meta?.raw
+      const parts = [`Модель временно недоступна (502)`]
+      if (typeof provider === 'string') parts.push(`провайдер: ${provider}`)
+      if (typeof raw === 'string') parts.push(`upstream: ${raw}`)
+      parts.push(detail)
+      return parts.join(' — ')
+    }
+    default:
+      return `LLM error: ${detail}`
   }
 }
 
