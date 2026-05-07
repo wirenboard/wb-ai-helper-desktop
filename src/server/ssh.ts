@@ -392,15 +392,29 @@ export class SshPool {
     if (!/^[a-f0-9]{8}$/.test(jobId)) throw new Error(`jobTail: invalid jobId ${jobId}`)
     const n = Math.max(1, Math.min(maxLines, 1000))
     const from = Math.max(1, fromLine)
+    const unit = JOB_UNIT_PREFIX + jobId
     const logPath = `${JOB_DIR}/${jobId}.log`
-    const cmd = `wc -l < ${logPath} 2>/dev/null || echo 0; echo ---; sed -n '${from},$p' ${logPath} 2>/dev/null | head -n ${n}`
+    const cmd =
+      `systemctl is-active ${unit} 2>/dev/null || echo unknown; echo ---; ` +
+      `wc -l < ${logPath} 2>/dev/null || echo 0; echo ---; ` +
+      `sed -n '${from},$p' ${logPath} 2>/dev/null | head -n ${n}`
     const r = await this.exec(controller, cmd, 10_000)
-    const [head, body] = r.stdout.split('\n---\n')
+    const [activePart, head, body] = r.stdout.split('\n---\n')
+    const activeState = (activePart || '').trim()
+    const state: 'running' | 'exited' | 'unknown' =
+      (activeState === 'active' || activeState === 'activating') ? 'running' :
+      (activeState === 'inactive' || activeState === 'failed' || activeState === 'deactivating') ? 'exited' : 'unknown'
     const totalLines = parseInt((head || '0').trim(), 10) || 0
     const raw = (body ?? '').replace(/\n$/, '')
     const lines = raw === '' ? [] : raw.split('\n')
     const nextFromLine = from + lines.length
-    return { jobId, lines, fromLine: from, nextFromLine, totalLines, truncated: from + lines.length - 1 < totalLines && lines.length >= n }
+    const truncated = from + lines.length - 1 < totalLines && lines.length >= n
+    const result: Record<string, unknown> = { jobId, state, lines, fromLine: from, nextFromLine, totalLines, truncated }
+    if (state === 'running') {
+      result['_hint'] =
+        'Задача ещё работает, лог неполный. Это промежуточные данные — НЕ используй их как окончательный результат и НЕ давай финальный ответ пользователю. Заверши ход и жди системное сообщение «Фоновая задача завершена».'
+    }
+    return result
   }
 
   async jobCancel(controller: Controller, jobId: string): Promise<void> {

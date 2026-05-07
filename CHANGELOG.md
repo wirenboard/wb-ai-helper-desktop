@@ -7,6 +7,18 @@
 
 ## [Unreleased]
 
+## [0.13.5] — 2026-05-08
+
+### Fixed
+- `job_tail` теперь возвращает поле `state` (`running` / `exited` /
+  `unknown`) и при `running` — ещё и `_hint`, явно говорящий модели, что
+  лог неполный и финальный ответ давать рано. Раньше `job_tail`
+  бесшумно отдавал пустой/частичный хвост незавершённой задачи, и
+  модель, увидев «logs пустые», делала ложный вывод (например,
+  «обновлений нет», когда `apt update` ещё не дописал лог). Защита на
+  уровне инструмента, а не системного промпта — state теперь часть
+  данных, которую нельзя «забыть».
+
 ## [0.13.4] — 2026-05-08
 
 ### Added
@@ -236,7 +248,8 @@
   CLI interface...`; для `apt list --upgradable` без свежего `apt-get
   update` подсказывает обновить кэш и подгрузить скилл `controller-update`.
 
-[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.4...HEAD
+[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.5...HEAD
+[0.13.5]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.4...v0.13.5
 [0.13.4]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.3...v0.13.4
 [0.13.3]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.2...v0.13.3
 [0.13.2]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.1...v0.13.2
