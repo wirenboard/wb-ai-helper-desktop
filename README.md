@@ -16,6 +16,7 @@
    - Windows: `wb-ai-helper-windows-x64.exe`
 2. **Получить API-ключ** у любого OpenAI-совместимого провайдера:
    - **OpenAI** — [platform.openai.com/api-keys](https://platform.openai.com/api-keys); пополнить баланс через credit card. Рекомендуемая модель — `gpt-4.1` или `gpt-5.4-mini`
+   - **AITunnel** — [aitunnel.ru](https://aitunnel.ru/) (RUB-биллинг, оплата с российской карты, 200+ моделей включая Claude/GPT/Gemini)
    - **Self-hosted** — Ollama / LiteLLM / vLLM на своём сервере, ключ необязателен
    - **Корпоративный/MITM-прокси** — см. раздел [Custom AI Proxy](#custom-ai-proxy) ниже
 3. **Запустить и настроить:**
@@ -42,12 +43,14 @@
 - Несколько чатов параллельно, каждый со своим контекстом контроллеров (один / выбранная группа / все)
 
 **LLM с tool-calling:**
-- 3 профиля провайдеров: **OpenAI** (прямой доступ), **Custom** (Ollama, LiteLLM, vLLM…), **Custom AI Proxy** (MITM-прокси с CA-сертификатом). Каждый хранит свой ключ/baseURL/model/прокси/CA — переключаются мгновенно
+- 4 профиля провайдеров: **OpenAI** (прямой доступ), **AITunnel** (RUB-биллинг, баланс/статистика прямо в настройках), **Custom** (Ollama, LiteLLM, vLLM…), **Custom AI Proxy** (MITM-прокси с CA-сертификатом). Каждый хранит свой ключ/baseURL/model/прокси/CA/temperature/contextWindow/auto-сжатие — переключаются мгновенно
+- Per-provider контроль контекстного окна: автоопределение из `/v1/models` (для провайдеров типа OpenRouter), ручной override, опциональная отдельная (более дешёвая) модель для checkpoint, авто-сжатие при заполнении ≥ настраиваемого порога
 - ~50 инструментов: `mqtt_*`, `ssh_*`, `wb_bus_scan`, `serial_debug_collect`, `audit_controller`, `get_history`/`get_history_chart` (графики через vega-lite — line/bar/area/point/histogram/heatmap/boxplot), `fetch_from_controller`/`upload_to_controller`, `save_rule`/`load_rule`/`delete_rule` (wb-rules через `wbrules/Editor`)
 - 17 скиллов (`controller-backup`, `controller-update`, `wb-mqtt-serial`, `wb-rules`, `troubleshooting-*`, `diagrams`, `history` и др.) — подгружаются по запросу через `load_skill`
 - Фоновые задачи (`ssh_exec_async`, `wb_bus_scan`, `serial_debug_collect`) — запуск через `systemd-run` на контроллере, инлайн-индикатор в чате с 5-сек undo отмены
 - Аттачменты: пользовательские (через 📎) и созданные моделью (`fetch_from_controller`/`get_history_chart`) разделены по source — модель не получает свои файлы обратно
-- Стоимость per-сообщение (USD/1M токенов для OpenAI, серверная стоимость для VseGPT и других провайдеров, возвращающих `total_cost`)
+- Стоимость per-сообщение (USD/1M токенов для OpenAI, серверная стоимость в RUB для AITunnel/VseGPT через `usage.cost_rub`/`total_cost`)
+- Понятные ошибки провайдера: 401 «недействительный ключ», 402 «недостаточно средств», 403 «модерация» (с причинами/фрагментом), 408/429/502 — без сырого stacktrace
 
 **UI/UX:**
 - Сворачиваемые боковые панели (чаты слева, контроллеры справа)
@@ -128,6 +131,8 @@ GitHub Actions автоматически собирает проект.
 git tag v0.13.0
 git push origin v0.13.0
 ```
+
+Тег должен соответствовать `package.json:version`.
 
 Через ~1 минуту бинарники появятся на странице [Releases](../../releases).
 
