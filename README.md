@@ -127,12 +127,17 @@ GitHub Actions автоматически собирает проект.
 
 ### Как сделать релиз
 
+Перед тегом:
+1. Поднять `version` в `package.json`.
+2. Перенести записи из `## [Unreleased]` в `CHANGELOG.md` в новый раздел `## [X.Y.Z] — YYYY-MM-DD` и добавить ссылку сравнения внизу.
+3. Закоммитить «chore: release X.Y.Z», смержить в `main`.
+
 ```bash
 git tag v0.13.0
 git push origin v0.13.0
 ```
 
-Тег должен соответствовать `package.json:version`.
+Тег должен соответствовать `package.json:version`. Через ~1 минуту release-workflow соберёт и опубликует.
 
 Через ~1 минуту бинарники появятся на странице [Releases](../../releases).
 

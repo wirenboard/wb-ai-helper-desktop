@@ -261,7 +261,10 @@ async function refreshChats() {
 }
 
 async function newChat() {
-  const c = await api.createChat([...selectedSns.value])
+  // Каждый новый чат — отдельная задача: контекст не наследуется от
+  // предыдущего активного чата. Иначе SN «прилипает» из закрытого чата
+  // и кажется что приложение само его выбрало.
+  const c = await api.createChat([])
   chats.value = [c, ...chats.value.filter((x) => x.id !== c.id)]
   await selectChat(c.id)
 }
