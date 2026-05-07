@@ -7,6 +7,41 @@
 
 ## [Unreleased]
 
+## [0.13.3] — 2026-05-07
+
+### Fixed
+- Сообщение, отправленное по Enter в момент окончания ответа модели, больше
+  не «теряется» и не появляется не на своём месте. Race condition в
+  `sendMessage` finally: `streaming.value = false` ставился ДО
+  `await api.getChat(id)` + `delete liveTurns[id]`, и юзер успевал
+  нажать Enter в эту паузу — второй `sendMessage` создавал свой
+  `liveTurns[id]`, который тут же затирался старым finally.
+- User-сообщение могло отрисовываться вместе с первым ответом модели
+  (когда модель отвечает мгновенно). Добавлен `await nextTick()` после
+  оптимистичной вставки в `liveTurns` — Vue гарантированно перерисует
+  баббл с user-message до начала стрим-ответа.
+- Чат «дёргался» периодически в двух местах:
+  - `refreshJobs()` каждые 3 секунды заменял `runningJobs.value` на новый
+    array даже если состав не менялся — теперь обновление только при
+    реальном изменении состояния задач.
+  - После стрима делался полный `patchLocalChat(c)` — `activeChat.value`
+    подменялся новым объектом, ChatMessageList перерендеривал
+    markdown/highlight/mermaid. Теперь in-place обновляются только
+    counters + tokens на последнем assistant turn; live-state остаётся
+    источником правды до переключения чата.
+- SSH handshake-таймаут к свежезагруженному контроллеру:
+  `Timed out while waiting for handshake`. Раньше использовался один
+  `CONNECT_TIMEOUT = 4 с`, на armv7 после reboot RSA-3072 init не
+  успевал. Введён отдельный `HANDSHAKE_TIMEOUT = 15 с` + retry с backoff
+  5/10/20 с (только при handshake-таймауте, auth-ошибки не ретраются).
+
+### Changed
+- Textarea ввода НЕ блокируется во время ответа модели — юзер может
+  набирать следующий вопрос. Если нажать Enter пока модель ещё пишет —
+  под полем ввода появляется мягкая подсказка: «Модель ещё отвечает.
+  Дождись её ответа и нажми Enter ещё раз — или нажми «■ Прервать», и
+  можно будет отправить сразу.» Введённый текст сохраняется.
+
 ## [0.13.2] — 2026-05-07
 
 ### Fixed
@@ -70,7 +105,8 @@
   CLI interface...`; для `apt list --upgradable` без свежего `apt-get
   update` подсказывает обновить кэш и подгрузить скилл `controller-update`.
 
-[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.2...HEAD
+[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.3...HEAD
+[0.13.3]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.2...v0.13.3
 [0.13.2]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.1...v0.13.2
 [0.13.1]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.12.1...v0.13.0
