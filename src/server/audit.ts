@@ -28,7 +28,7 @@ const COLLECT_SCRIPT = [
   'for p in /etc/wb-rules /etc/wb-rules-modules /etc/wb-mqtt-serial.conf /etc/wb-mqtt-serial.conf.d; do ' +
     'echo "$p|$(readlink -f $p 2>/dev/null)"; done',
   `echo ${SECTION}mntdata`,
-  'for d in /mnt/data/*/; do case "$(basename "$d")" in etc|var|root|snapshots|backups|uploads|.docker|ai) continue;; *) du -sh "$d" 2>/dev/null;; esac; done',
+  'shopt -s nullglob dotglob; for d in /mnt/data/*/; do case "$(basename "$d")" in etc|var|root|snapshots|backups|uploads|.docker|ai|.wb-restore|.wb-update|lost+found) continue;; *) du -sh "$d" 2>/dev/null;; esac; done; shopt -u dotglob',
   `echo ${SECTION}dpkg`,
   "dpkg --verify 2>/dev/null | grep -v -E '/usr/share/(doc|locale|man|lintian|gtk-doc|gnome|info|help)'",
   `echo ${SECTION}end`
