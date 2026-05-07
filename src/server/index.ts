@@ -16,7 +16,7 @@ import { openDb } from './db.ts'
 import { getTodos, formatTodos } from './todos.ts'
 import { listSkills, getLoadedSkills, seedSystemSkills } from './skills.ts'
 import { initAttachments, listSession as listAttachmentFiles, getAttachment, readAttachment, saveAttachment, deleteAttachment, clearSession as clearAttachmentSession, cleanupExpired } from './attachments.ts'
-import { getJobsForSession, updateJobState, removeJob } from './jobs.ts'
+import { getJobsForSession, removeJob, startJobTracker } from './jobs.ts'
 
 const PORT = Number(process.env['WB_HELPER_PORT'] ?? 17321)
 
@@ -110,6 +110,15 @@ settingsStore.onChange((s) => {
 })
 
 discovery.start(settings.discoveryInterval)
+
+// Background-poller, обновляющий состояние running-задач из памяти. UI
+// poll читает уже актуальный state без блокирующего SSH в http-обработчике.
+startJobTracker(async (job) => {
+  const ctrl = discovery.get(job.sn)
+  if (!ctrl) return null
+  const r = await ssh.jobStatus(ctrl, job.jobId)
+  return (r['state'] as 'running' | 'exited' | 'unknown') ?? null
+}, 5000)
 
 const sseClients = new Set<(payload: string) => void>()
 discovery.onChange((list) => broadcast('controllers', list))
@@ -310,27 +319,16 @@ app.delete('/api/chats/:id', (c) => {
   return c.json({ ok: true })
 })
 
-app.get('/api/chats/:id/jobs', async (c) => {
+app.get('/api/chats/:id/jobs', (c) => {
   const id = c.req.param('id')
-  const sessionJobs = getJobsForSession(id)
-  // Refresh state for running jobs via SSH
-  await Promise.all(
-    sessionJobs
-      .filter((j) => j.state === 'running')
-      .map(async (j) => {
-        const ctrl = discovery.get(j.sn)
-        if (!ctrl) return
-        try {
-          const result = await ssh.jobStatus(ctrl, j.jobId)
-          const state = result['state'] as 'running' | 'exited' | 'unknown'
-          if (state === 'exited' || state === 'running') {
-            updateJobState(j.jobId, state)
-            j.state = state
-          }
-        } catch {}
-      }),
-  )
-  return c.json({ jobs: sessionJobs })
+  // ВАЖНО: не дёргаем SSH из этого endpoint. Раньше на каждый polling
+  // (раз в 3 сек) делали `ssh.jobStatus(ctrl, jobId)` для всех running —
+  // и когда контроллер был недоступен (например, во время `apt upgrade`
+  // с обновлением ядра и reboot), SSH висел до handshake-таймаута,
+  // параллельные запросы с разных тиков пересекались, баннер мерцал/пропадал.
+  // Состояние job обновляется штатно — когда модель вызывает `job_status`
+  // как tool (см. tools.ts), это транзитом дёргает updateJobState.
+  return c.json({ jobs: getJobsForSession(id) })
 })
 
 app.post('/api/chats/:id/jobs/:jobId/cancel', async (c) => {
