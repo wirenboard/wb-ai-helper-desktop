@@ -131,7 +131,7 @@ export type Health = {
   discoveryInterval: number
 }
 
-export type LlmProvider = 'openai' | 'custom' | 'custom_proxy'
+export type LlmProvider = 'openai' | 'aitunnel' | 'custom' | 'custom_proxy'
 export type ApiFormat = 'openai'
 
 export interface ProviderInfo {
@@ -150,6 +150,19 @@ export const PROVIDER_INFO: Record<LlmProvider, ProviderInfo & { apiFormat: ApiF
     currency: 'USD',
     pricesEditable: true,
     signupUrl: 'https://platform.openai.com/api-keys',
+    apiFormat: 'openai',
+    baseURLEditable: false,
+    supportsCaCert: false,
+    apiFormatEditable: false,
+  },
+  aitunnel: {
+    label: 'AITunnel',
+    defaultBaseURL: 'https://api.aitunnel.ru/v1',
+    currency: 'RUB',
+    // aitunnel сам считает стоимость в каждом ответе (usage.cost_rub) —
+    // ручные цены не нужны.
+    pricesEditable: false,
+    signupUrl: 'https://aitunnel.ru/',
     apiFormat: 'openai',
     baseURLEditable: false,
     supportsCaCert: false,
@@ -260,6 +273,15 @@ export type ProviderConfigPublic = {
   priceOutput: number | null
   priceCached: number | null
   contextWindow: number | null
+  /** Опциональная (обычно более дешёвая) модель для сжатия контекста.
+   * Пустая строка → используется основная `model`. */
+  compactModel: string
+  /** Авто-сжатие при заполнении контекстного окна (per-provider). */
+  autoCompact: boolean
+  /** Порог заполнения контекстного окна (0..1) для автосжатия (per-provider). */
+  autoCompactThreshold: number
+  /** Sampling temperature override (per-provider). null = use provider default. */
+  temperature: number | null
   apiKeyConfigured: boolean
   llmProxyPasswordConfigured: boolean
 }
@@ -280,6 +302,10 @@ export type Settings = {
   priceOutput?: number | null
   priceCached?: number | null
   contextWindow?: number | null
+  compactModel?: string
+  autoCompact: boolean
+  autoCompactThreshold: number
+  temperature?: number | null
   // Shared (controller / UI):
   mqttUser: string
   sshUser: string
@@ -311,6 +337,10 @@ export type SettingsPatch = Partial<{
   priceOutput: number | null
   priceCached: number | null
   contextWindow: number | null
+  compactModel: string
+  autoCompact: boolean
+  autoCompactThreshold: number
+  temperature: number | null
 }>
 
 const json = async <T>(res: Response): Promise<T> => {
@@ -332,7 +362,8 @@ export const api = {
     }).then((r) => json<Settings>(r)),
   clearApiKey: () =>
     fetch('/api/settings/api-key', { method: 'DELETE' }).then((r) => json<Settings>(r)),
-  models: () => fetch('/api/models').then((r) => json<{ models: string[] }>(r)),
+  models: () => fetch('/api/models').then((r) => json<{ models: string[]; contextLengths?: Record<string, number> }>(r)),
+  aitunnelInfo: () => fetch('/api/aitunnel/info').then((r) => json<AitunnelInfo>(r)),
   controllers: () => fetch('/api/controllers').then((r) => json<{ controllers: Controller[] }>(r)),
   refresh: () =>
     fetch('/api/controllers/refresh', { method: 'POST' }).then((r) =>
@@ -377,17 +408,20 @@ export const api = {
     fetch(`/api/attachments/${encodeURIComponent(attachmentId)}?chatId=${encodeURIComponent(chatId)}`, { method: 'DELETE' })
       .then((r) => json<{ ok: true }>(r)),
 
-  /** Send a message and stream SSE events. */
+  /** Send a message and stream SSE events.
+   * `compact: true` сигнализирует backend использовать configured `compactModel`
+   * (если задан) для этого вызова — вместо основной модели. */
   sendMessage(
     id: string,
     text: string,
     onEvent: (event: string, data: any) => void,
     signal?: AbortSignal,
+    opts?: { compact?: boolean },
   ): Promise<void> {
     return fetch(`/api/chats/${id}/message`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, ...(opts?.compact ? { compact: true } : {}) }),
       signal,
     }).then(async (res) => {
       if (!res.ok) {
@@ -444,6 +478,22 @@ export const api = {
       es.close()
     }
   },
+}
+
+export type AitunnelInfo = {
+  balance: { balance: number; budget: number } | null
+  stats: {
+    today_spend: number
+    today_requests: number
+    month_spend: number
+    month_requests: number
+    avg_daily_spend: number
+    top_model_by_spend: string
+    top_model_by_spend_value: number
+    top_model_by_requests: string
+    top_model_by_requests_value: number
+  } | null
+  me: { email: string; id: number } | null
 }
 
 export type Cost = { value: number; currency: 'USD' | 'RUB' }

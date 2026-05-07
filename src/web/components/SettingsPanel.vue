@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { api, COPILOT_MULTIPLIERS, PROVIDER_INFO, type ApiFormat, type LlmProvider, type Settings } from '../api'
+import { api, COPILOT_MULTIPLIERS, PROVIDER_INFO, type AitunnelInfo, type ApiFormat, type LlmProvider, type Settings } from '../api'
 import ComboboxSearch from './ComboboxSearch.vue'
 
 const props = defineProps<{ settings: Settings | null; open: boolean; version?: string; fontSize?: number }>()
@@ -14,6 +14,7 @@ const provider = ref<LlmProvider>('openai')
 const apiKey = ref('')
 const baseURL = ref('')
 const model = ref('')
+const compactModel = ref('')
 const llmProxy = ref('')
 const llmProxyUser = ref('')
 const llmProxyPassword = ref('')
@@ -23,6 +24,13 @@ const apiFormat = ref<ApiFormat>('openai')
 const priceInput = ref<number | null>(null)
 const priceOutput = ref<number | null>(null)
 const priceCached = ref<number | null>(null)
+const contextWindow = ref<number | null>(null)
+const autoCompact = ref(true)
+const autoCompactThreshold = ref(0.85)
+const temperature = ref<number | null>(null)
+/** id → context length, заполняется после fetchModels(); используется как
+ * подсказка/auto-fill для contextWindow. */
+const contextLengths = ref<Record<string, number>>({})
 
 const providerInfo = computed(() => PROVIDER_INFO[provider.value])
 const showPriceFields = computed(() => providerInfo.value.pricesEditable)
@@ -43,6 +51,7 @@ function loadProviderFields(next: LlmProvider) {
   if (cfg) {
     baseURL.value = cfg.baseURL
     model.value = cfg.model
+    compactModel.value = cfg.compactModel ?? ''
     llmProxy.value = cfg.llmProxy
     llmProxyUser.value = cfg.llmProxyUser
     tlsInsecure.value = cfg.tlsInsecure
@@ -51,9 +60,14 @@ function loadProviderFields(next: LlmProvider) {
     priceInput.value = cfg.priceInput
     priceOutput.value = cfg.priceOutput
     priceCached.value = cfg.priceCached
+    contextWindow.value = cfg.contextWindow
+    autoCompact.value = cfg.autoCompact ?? true
+    autoCompactThreshold.value = cfg.autoCompactThreshold ?? 0.85
+    temperature.value = cfg.temperature
   } else {
     baseURL.value = info.defaultBaseURL
     model.value = ''
+    compactModel.value = ''
     llmProxy.value = ''
     llmProxyUser.value = ''
     tlsInsecure.value = false
@@ -62,6 +76,10 @@ function loadProviderFields(next: LlmProvider) {
     priceInput.value = null
     priceOutput.value = null
     priceCached.value = null
+    contextWindow.value = null
+    autoCompact.value = true
+    autoCompactThreshold.value = 0.85
+    temperature.value = null
   }
   // If the loaded baseURL is empty (user never customised), suggest provider's default
   if (!baseURL.value) baseURL.value = info.defaultBaseURL
@@ -71,7 +89,11 @@ function onProviderChange(next: LlmProvider) {
   provider.value = next
   loadProviderFields(next)
   models.value = []
+  contextLengths.value = {}
   modelsError.value = null
+  aitunnelInfo.value = null
+  aitunnelInfoError.value = null
+  void refreshAitunnelInfo()
 }
 const mqttUser = ref('')
 const mqttPassword = ref('')
@@ -86,6 +108,54 @@ const modelsError = ref<string | null>(null)
 const loadingModels = ref(false)
 const saving = ref(false)
 const saveError = ref<string | null>(null)
+
+// AITunnel-specific: баланс / статистика / email — выводим в шапку настроек
+// провайдера, чтобы юзер сразу видел сколько у него на счету.
+const aitunnelInfo = ref<AitunnelInfo | null>(null)
+const aitunnelInfoError = ref<string | null>(null)
+const loadingAitunnelInfo = ref(false)
+
+/** Сколько дней хватит баланса при текущем среднем расходе. Возвращает null
+ * если расход 0 (нет истории) или баланс отсутствует. */
+const aitunnelDaysLeft = computed<number | null>(() => {
+  const info = aitunnelInfo.value
+  if (!info?.balance || !info.stats) return null
+  const avg = info.stats.avg_daily_spend
+  if (!avg || avg <= 0) return null
+  return Math.floor(info.balance.balance / avg)
+})
+const aitunnelLowBalance = computed(() => aitunnelDaysLeft.value !== null && aitunnelDaysLeft.value < 3)
+
+async function refreshAitunnelInfo() {
+  if (provider.value !== 'aitunnel') return
+  if (!apiKeyConfiguredForProvider.value) return
+  loadingAitunnelInfo.value = true
+  aitunnelInfoError.value = null
+  try {
+    aitunnelInfo.value = await api.aitunnelInfo()
+  } catch (e: any) {
+    aitunnelInfoError.value = e?.message ?? String(e)
+  } finally {
+    loadingAitunnelInfo.value = false
+  }
+}
+
+/** Контекстное окно текущей модели по данным от провайдера (если он
+ * вернул их в /v1/models). Пусто = автоопределение недоступно. */
+const detectedContextWindow = computed<number | null>(() => {
+  const m = model.value
+  if (!m) return null
+  return contextLengths.value[m] ?? null
+})
+
+const contextWindowPlaceholder = computed(() => {
+  if (detectedContextWindow.value) return `авто: ${detectedContextWindow.value.toLocaleString('ru-RU')}`
+  return 'напр. 128000 (пусто = по умолчанию 128k)'
+})
+
+function applyDetectedContextWindow() {
+  if (detectedContextWindow.value) contextWindow.value = detectedContextWindow.value
+}
 
 const canFetchModels = computed(() => {
   // For Custom AI Proxy auth often comes from the proxy itself (CA cert + URL-embedded
@@ -160,7 +230,10 @@ watch(
       sshKeyPath.value = props.settings.sshKeyPath
       discoveryInterval.value = props.settings.discoveryInterval
       openBrowser.value = props.settings.openBrowser
-      if (apiKeyConfiguredForProvider.value) void fetchModels()
+      if (apiKeyConfiguredForProvider.value) {
+        void fetchModels()
+        void refreshAitunnelInfo()
+      }
     }
   },
   { immediate: true },
@@ -170,15 +243,18 @@ async function fetchModels() {
   loadingModels.value = true
   modelsError.value = null
   try {
-    // Always sync the current UI provider + the bits relevant to /api/models
-    // so the backend uses the right provider's key/baseURL for the lookup.
-    const patch: any = { provider: provider.value }
-    if (apiKey.value) patch.apiKey = apiKey.value
-    patch.baseURL = providerInfo.value.baseURLEditable ? baseURL.value : ''
-    await api.saveSettings(patch)
-    apiKey.value = ''
+    // Если юзер успел вставить ключ и сразу нажать кнопку до debounce —
+    // дописываем его в этот же запрос, чтобы запрос моделей точно увидел свежий ключ.
+    if (apiKey.value) {
+      const patch: any = { provider: provider.value, apiKey: apiKey.value }
+      if (providerInfo.value.baseURLEditable) patch.baseURL = baseURL.value
+      const next = await api.saveSettings(patch)
+      apiKey.value = ''
+      emit('saved', next)
+    }
     const r = await api.models()
     models.value = r.models
+    contextLengths.value = r.contextLengths ?? {}
     if (model.value && !r.models.includes(model.value)) {
       // keep custom value as-is
     } else if (!model.value && r.models.length) {
@@ -188,6 +264,43 @@ async function fetchModels() {
     modelsError.value = e?.message ?? String(e)
   } finally {
     loadingModels.value = false
+  }
+}
+
+/**
+ * Авто-сохранение API-ключа после ввода (debounce 600ms). Очищаем поле и
+ * показываем «(сохранён)» сразу — иначе юзер видит как поле опустошается
+ * после нажатия «обновить список» и думает что ключ потерян.
+ *
+ * Опустошение поля игнорируем — для удаления есть отдельная кнопка.
+ */
+let apiKeySaveTimer: ReturnType<typeof setTimeout> | null = null
+watch(apiKey, (v) => {
+  if (apiKeySaveTimer) {
+    clearTimeout(apiKeySaveTimer)
+    apiKeySaveTimer = null
+  }
+  if (!v) return
+  apiKeySaveTimer = setTimeout(() => {
+    apiKeySaveTimer = null
+    void autoSaveApiKey()
+  }, 600)
+})
+
+async function autoSaveApiKey() {
+  if (!apiKey.value) return
+  saveError.value = null
+  try {
+    const patch: any = { provider: provider.value, apiKey: apiKey.value }
+    if (providerInfo.value.baseURLEditable) patch.baseURL = baseURL.value
+    const next = await api.saveSettings(patch)
+    apiKey.value = ''
+    emit('saved', next)
+    // С новым ключом сразу подтягиваем модели и баланс (для AITunnel)
+    void fetchModels()
+    void refreshAitunnelInfo()
+  } catch (e: any) {
+    saveError.value = `Не удалось сохранить ключ: ${e?.message ?? String(e)}`
   }
 }
 
@@ -204,6 +317,7 @@ async function save() {
       provider: provider.value,
       baseURL: baseURLForSave,
       model: model.value,
+      compactModel: compactModel.value,
       llmProxy: llmProxy.value,
       llmProxyUser: proxyUserForSave,
       tlsInsecure: tlsInsecure.value,
@@ -214,9 +328,13 @@ async function save() {
       sshKeyPath: sshKeyPath.value,
       discoveryInterval: Number(discoveryInterval.value) || 15000,
       openBrowser: openBrowser.value,
+      autoCompact: autoCompact.value,
+      autoCompactThreshold: Number(autoCompactThreshold.value) || 0.85,
       priceInput: priceInput.value != null ? Number(priceInput.value) : null,
       priceOutput: priceOutput.value != null ? Number(priceOutput.value) : null,
       priceCached: priceCached.value != null ? Number(priceCached.value) : null,
+      contextWindow: contextWindow.value != null && contextWindow.value > 0 ? Number(contextWindow.value) : null,
+      temperature: temperature.value != null && Number.isFinite(Number(temperature.value)) ? Number(temperature.value) : null,
     }
     if (apiKey.value) patch.apiKey = apiKey.value
     if (provider.value === 'custom_proxy') {
@@ -270,6 +388,41 @@ async function removeKey() {
               </label>
             </div>
           </label>
+          <div v-if="provider === 'aitunnel' && apiKeyConfiguredForProvider" class="aitunnel-info" :class="{ 'aitunnel-low': aitunnelLowBalance }">
+            <div v-if="loadingAitunnelInfo" class="muted small">загрузка баланса…</div>
+            <div v-else-if="aitunnelInfoError" class="error small">Не удалось получить данные: {{ aitunnelInfoError }}</div>
+            <template v-else-if="aitunnelInfo">
+              <div class="aitunnel-row">
+                <span class="aitunnel-label">Баланс:</span>
+                <strong :class="{ 'aitunnel-low-text': aitunnelLowBalance }">
+                  {{ aitunnelInfo.balance ? aitunnelInfo.balance.balance.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) : '—' }} ₽
+                </strong>
+                <span v-if="aitunnelDaysLeft !== null" class="muted small">
+                  ≈ хватит на {{ aitunnelDaysLeft }} {{ aitunnelDaysLeft === 1 ? 'день' : (aitunnelDaysLeft >= 2 && aitunnelDaysLeft <= 4 ? 'дня' : 'дней') }}
+                </span>
+                <span v-if="aitunnelInfo.balance && aitunnelInfo.balance.budget !== aitunnelInfo.balance.balance" class="muted small">
+                  · бюджет ключа {{ aitunnelInfo.balance.budget.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} ₽
+                </span>
+                <span style="flex:1"></span>
+                <button type="button" class="ghost small" @click="refreshAitunnelInfo" title="Обновить">↻</button>
+              </div>
+              <div v-if="aitunnelInfo.stats" class="aitunnel-stats muted small">
+                <span>Сегодня: {{ aitunnelInfo.stats.today_spend.toFixed(2) }} ₽ ({{ aitunnelInfo.stats.today_requests }} запр.)</span>
+                <span>·</span>
+                <span>За месяц: {{ aitunnelInfo.stats.month_spend.toFixed(2) }} ₽ ({{ aitunnelInfo.stats.month_requests }} запр.)</span>
+                <span v-if="aitunnelInfo.stats.avg_daily_spend > 0">·</span>
+                <span v-if="aitunnelInfo.stats.avg_daily_spend > 0">
+                  В среднем {{ aitunnelInfo.stats.avg_daily_spend.toFixed(2) }} ₽/день
+                </span>
+                <span v-if="aitunnelInfo.stats.top_model_by_spend">·</span>
+                <span v-if="aitunnelInfo.stats.top_model_by_spend">
+                  Топ: <code>{{ aitunnelInfo.stats.top_model_by_spend }}</code>
+                </span>
+              </div>
+              <div v-if="aitunnelInfo.me?.email" class="muted small">{{ aitunnelInfo.me.email }}</div>
+            </template>
+          </div>
+
           <label class="field">
             <span>
               API-ключ {{ apiKeyConfiguredForProvider ? '(сохранён)' : '(не задан)' }}
@@ -374,6 +527,18 @@ async function removeKey() {
             <div v-if="modelsError" class="error small">{{ modelsError }}</div>
           </label>
 
+          <label class="field">
+            <span>Temperature <span class="muted small">(пусто = дефолт провайдера)</span></span>
+            <input
+              type="number"
+              min="0"
+              max="2"
+              step="0.1"
+              v-model.number="temperature"
+              placeholder="напр. 0.7 — оставь пустым чтобы использовать дефолт"
+            />
+          </label>
+
           <template v-if="showPriceFields">
             <div class="subsection-label">Стоимость</div>
             <label class="field">
@@ -387,6 +552,81 @@ async function removeKey() {
             <label class="field">
               <span>Цена кэшированных токенов ($/1M) <span class="muted small">(по умолчанию — как входные)</span></span>
               <input type="number" min="0" step="0.01" v-model.number="priceCached" placeholder="напр. 0.075" />
+            </label>
+          </template>
+
+          <div class="subsection-label">Контекст</div>
+
+          <div v-if="provider === 'aitunnel'" class="muted small" style="margin-bottom:6px; padding:6px 8px; border-left:2px solid var(--accent); background: color-mix(in srgb, var(--accent) 4%, var(--bg))">
+            AITunnel сжимает контекст автоматически на своей стороне
+            (<a href="https://docs.aitunnel.ru/features/message-transforms.html" target="_blank" rel="noopener noreferrer">message-transforms</a>).
+            Включи клиентское сжатие ниже, если хочешь явный <code>checkpoint</code> с summary в твоей истории чата.
+          </div>
+
+          <label class="field checkbox-field">
+            <input type="checkbox" v-model="autoCompact" />
+            <span>Клиентское авто-сжатие контекста (через инструмент checkpoint)</span>
+          </label>
+
+          <template v-if="autoCompact">
+            <label class="field">
+              <div class="spread">
+                <span>Размер контекстного окна (токенов)</span>
+                <button
+                  v-if="detectedContextWindow && contextWindow !== detectedContextWindow"
+                  type="button"
+                  class="small"
+                  @click="applyDetectedContextWindow"
+                  :title="`Подставить значение, полученное от провайдера: ${detectedContextWindow.toLocaleString('ru-RU')}`"
+                >подставить авто</button>
+              </div>
+              <input
+                type="number"
+                min="1024"
+                step="1024"
+                v-model.number="contextWindow"
+                :placeholder="contextWindowPlaceholder"
+              />
+              <div class="muted small" style="margin-top:4px">
+                Пусто — берётся либо значение от провайдера ({{ detectedContextWindow ? detectedContextWindow.toLocaleString('ru-RU') : 'нет' }}),
+                либо встроенная таблица известных моделей, либо 128 000 по умолчанию.
+              </div>
+            </label>
+
+            <label class="field">
+              <span>Модель для сжатия контекста <span class="muted small">(опционально, обычно дешевле основной)</span></span>
+              <ComboboxSearch
+                v-if="models.length"
+                :modelValue="compactModel"
+                :options="['', ...models]"
+                :badges="provider === 'custom_proxy' ? COPILOT_MULTIPLIERS : undefined"
+                placeholder="(использовать основную модель)"
+                @update:modelValue="compactModel = $event"
+              />
+              <input
+                v-else
+                v-model="compactModel"
+                placeholder="(использовать основную модель)"
+              />
+            </label>
+
+            <label class="field" style="margin-top:-4px">
+              <div class="spread">
+                <span>Порог автосжатия</span>
+                <span class="muted small">{{ Math.round(autoCompactThreshold * 100) }}%</span>
+              </div>
+              <input
+                type="range" min="0.5" max="0.95" step="0.05"
+                v-model.number="autoCompactThreshold"
+                style="width:100%; padding:0; background:transparent; border:none;"
+              />
+              <div class="muted small">
+                Когда заполнение превысит этот порог — будет автоматически отправлен запрос на checkpoint
+                (используется
+                <code v-if="compactModel">{{ compactModel }}</code>
+                <span v-else>основная модель</span>).
+                Сколько останется после сжатия — зависит от размера последнего раунда tool calls (обычно 5–20% от окна).
+              </div>
             </label>
           </template>
         </section>
@@ -530,4 +770,19 @@ code { background: var(--bg-mute); padding: 2px 4px; border-radius: 3px; font-si
   background: color-mix(in srgb, #22c55e 10%, var(--bg));
   font-size: 0.8rem;
 }
+.aitunnel-info {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg));
+  margin-bottom: 10px;
+  font-size: 0.85rem;
+}
+.aitunnel-info.aitunnel-low {
+  border-color: #ef4444;
+  background: color-mix(in srgb, #ef4444 8%, var(--bg));
+}
+.aitunnel-low-text { color: #ef4444; }
+.aitunnel-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.aitunnel-label { color: var(--text-mute); }
+.aitunnel-stats { display: flex; flex-wrap: wrap; gap: 6px; }
 </style>

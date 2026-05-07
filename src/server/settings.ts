@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 
-export type LlmProvider = 'openai' | 'custom' | 'custom_proxy'
+export type LlmProvider = 'openai' | 'aitunnel' | 'custom' | 'custom_proxy'
 /** Только OpenAI Chat Completions сейчас. Anthropic-формат вырезан, оставлено
  * поле для будущего — Responses API или ещё какие protocol-варианты. */
 export type ApiFormat = 'openai'
@@ -19,8 +19,20 @@ export interface ProviderConfig {
   tlsInsecure: boolean
   /** PEM-содержимое CA-сертификата для доступа через MITM-прокси (e.g. Claude proxy). */
   caCert: string
-  /** Override known model context window in tokens (manual). null = use static MODEL_CONTEXT. */
+  /** Override known model context window in tokens (manual). null = use static MODEL_CONTEXT
+   * fallback / auto-detected provider value. */
   contextWindow: number | null
+  /** Опциональная (обычно более дешёвая) модель для сжатия контекста через checkpoint.
+   * Пусто → используется основная `model`. */
+  compactModel: string
+  /** Автоматически вызывать checkpoint когда заполнение контекстного окна
+   * превышает порог (см. `autoCompactThreshold`). */
+  autoCompact: boolean
+  /** Порог заполнения контекстного окна (0..1) для автосжатия. */
+  autoCompactThreshold: number
+  /** Override модельной/провайдерской temperature (0..2). null = не передавать
+   * параметр, провайдер выберет дефолт сам. */
+  temperature: number | null
   /** Формат API: 'openai' (Chat Completions) или 'anthropic' (Messages). Только Custom AI Proxy. */
   apiFormat: ApiFormat
   priceInput: number | null
@@ -33,7 +45,9 @@ const EMPTY_PROVIDER: ProviderConfig = {
   llmProxy: '', llmProxyUser: '', llmProxyPassword: '',
   tlsInsecure: false, caCert: '', apiFormat: 'openai',
   priceInput: null, priceOutput: null, priceCached: null,
-  contextWindow: null,
+  contextWindow: null, compactModel: '',
+  autoCompact: true, autoCompactThreshold: 0.85,
+  temperature: null,
 }
 
 export type Settings = {
@@ -52,6 +66,7 @@ export type Settings = {
 
 export const PROVIDER_DEFAULTS: Record<LlmProvider, { baseURL: string; label: string; apiFormat: ApiFormat }> = {
   openai:       { baseURL: 'https://api.openai.com/v1', label: 'OpenAI',          apiFormat: 'openai' },
+  aitunnel:     { baseURL: 'https://api.aitunnel.ru/v1', label: 'AITunnel',       apiFormat: 'openai' },
   custom:       { baseURL: '',                          label: 'Custom',          apiFormat: 'openai' },
   custom_proxy: { baseURL: '',                          label: 'Custom AI Proxy', apiFormat: 'openai' },
 }
@@ -77,6 +92,10 @@ export type PublicSettings = {
   priceOutput: number | null
   priceCached: number | null
   contextWindow: number | null
+  compactModel: string
+  autoCompact: boolean
+  autoCompactThreshold: number
+  temperature: number | null
   apiKeyConfigured: boolean
   llmProxyPasswordConfigured: boolean
   // Shared (controller/UI):
@@ -94,6 +113,10 @@ const DEFAULTS: Settings = {
   provider: 'openai',
   providers: {
     openai:       { ...EMPTY_PROVIDER, apiFormat: 'openai' },
+    // AITunnel сам сжимает контекст на своей стороне (message-transforms),
+    // поэтому клиентское авто-сжатие по умолчанию выключено. Юзер может
+    // включить вручную если хочет явный checkpoint с summary в истории чата.
+    aitunnel:     { ...EMPTY_PROVIDER, apiFormat: 'openai', autoCompact: false },
     custom:       { ...EMPTY_PROVIDER, apiFormat: 'openai' },
     custom_proxy: { ...EMPTY_PROVIDER, apiFormat: 'openai' },
   },
@@ -148,6 +171,7 @@ export class SettingsStore {
     const cur = this.current()
     const providersPublic: Record<LlmProvider, ProviderConfigPublic> = {
       openai:       redactProvider(this.cache.providers.openai),
+      aitunnel:     redactProvider(this.cache.providers.aitunnel),
       custom:       redactProvider(this.cache.providers.custom),
       custom_proxy: redactProvider(this.cache.providers.custom_proxy),
     }
@@ -165,6 +189,10 @@ export class SettingsStore {
       priceOutput: cur.priceOutput,
       priceCached: cur.priceCached,
       contextWindow: cur.contextWindow,
+      compactModel: cur.compactModel,
+      autoCompact: cur.autoCompact,
+      autoCompactThreshold: cur.autoCompactThreshold,
+      temperature: cur.temperature,
       apiKeyConfigured: !!cur.apiKey,
       llmProxyPasswordConfigured: !!cur.llmProxyPassword,
       mqttUser: this.cache.mqttUser,
@@ -240,7 +268,9 @@ const PROVIDER_FIELDS = [
   'llmProxy', 'llmProxyUser', 'llmProxyPassword',
   'tlsInsecure', 'caCert', 'apiFormat',
   'priceInput', 'priceOutput', 'priceCached',
-  'contextWindow',
+  'contextWindow', 'compactModel',
+  'autoCompact', 'autoCompactThreshold',
+  'temperature',
 ] as const
 
 const SHARED_FIELDS = [
@@ -252,7 +282,7 @@ const SHARED_FIELDS = [
 function isLlmProvider(v: unknown): v is LlmProvider {
   // Anthropic dropped — старые конфиги мигрируем в OpenAI на загрузке
   if (v === 'anthropic') return false
-  return v === 'openai' || v === 'custom' || v === 'custom_proxy'
+  return v === 'openai' || v === 'aitunnel' || v === 'custom' || v === 'custom_proxy'
 }
 
 function redactProvider(p: ProviderConfig): ProviderConfigPublic {
@@ -268,6 +298,10 @@ function redactProvider(p: ProviderConfig): ProviderConfigPublic {
     priceOutput: p.priceOutput,
     priceCached: p.priceCached,
     contextWindow: p.contextWindow,
+    compactModel: p.compactModel,
+    autoCompact: p.autoCompact,
+    autoCompactThreshold: p.autoCompactThreshold,
+    temperature: p.temperature,
     apiKeyConfigured: !!p.apiKey,
     llmProxyPasswordConfigured: !!p.llmProxyPassword,
   }
@@ -289,6 +323,7 @@ function mergeWithMigration(defaults: Settings, env: Partial<Settings> & Partial
     provider,
     providers: {
       openai:       { ...defaults.providers.openai },
+      aitunnel:     { ...defaults.providers.aitunnel },
       custom:       { ...defaults.providers.custom },
       custom_proxy: { ...defaults.providers.custom_proxy },
     },
@@ -302,7 +337,7 @@ function mergeWithMigration(defaults: Settings, env: Partial<Settings> & Partial
   // New schema: providers map — copy directly
   if (disk['providers'] && typeof disk['providers'] === 'object') {
     const providersOnDisk = disk['providers'] as Record<string, Partial<ProviderConfig>>
-    for (const p of ['openai', 'custom', 'custom_proxy'] as const) {
+    for (const p of ['openai', 'aitunnel', 'custom', 'custom_proxy'] as const) {
       if (providersOnDisk[p]) {
         result.providers[p] = { ...EMPTY_PROVIDER, ...providersOnDisk[p] }
       }
@@ -361,11 +396,45 @@ function envOverrides(): Partial<Settings> & Partial<ProviderConfig> {
   return out
 }
 
+/** Лёгкий тип записи модели — id обязателен, contextLength опционален.
+ * Заполняется когда провайдер отдаёт расширенные поля в `/v1/models`
+ * (OpenRouter, LiteLLM, Ollama-compat). У aitunnel/OpenAI этих полей нет. */
+export interface ModelInfo {
+  id: string
+  contextLength?: number
+}
+
+/** Достаём context length из произвольного объекта модели в ответе /v1/models.
+ * Разные провайдеры называют поле по-разному: пытаемся все распространённые. */
+function pickContextLength(m: Record<string, unknown>): number | undefined {
+  const candidates = [
+    m['context_length'],
+    m['context_window'],
+    m['max_context_length'],
+    m['max_context_tokens'],
+    m['max_input_tokens'],
+    m['max_tokens'],
+    m['n_ctx'],
+    // OpenRouter — top_provider.context_length
+    (m['top_provider'] as Record<string, unknown> | undefined)?.['context_length'],
+    // Ollama-compat — details.context_length
+    (m['details'] as Record<string, unknown> | undefined)?.['context_length'],
+  ]
+  for (const v of candidates) {
+    if (typeof v === 'number' && v > 0 && Number.isFinite(v)) return Math.floor(v)
+    if (typeof v === 'string') {
+      const n = Number(v)
+      if (Number.isFinite(n) && n > 0) return Math.floor(n)
+    }
+  }
+  return undefined
+}
+
 export async function listModels(
   apiKey: string,
   baseURL?: string,
   opts: { proxy?: string; proxyUser?: string; proxyPassword?: string; tlsInsecure?: boolean; caCert?: string } = {},
-): Promise<string[]> {
+): Promise<ModelInfo[]> {
   const root = baseURL?.replace(/\/$/, '') ?? 'https://api.openai.com/v1'
   const url = root + '/models'
   const proxyUrl = opts.proxy ? buildProxyUrl(opts.proxy, opts.proxyUser, opts.proxyPassword) : undefined
@@ -390,16 +459,22 @@ export async function listModels(
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`)
       }
-      const data = (await res.json()) as { data?: { id: string }[] }
+      const data = (await res.json()) as { data?: Record<string, unknown>[] }
       if (!Array.isArray(data.data)) throw new Error('unexpected /v1/models response')
-      const ids = data.data.map((m) => m.id)
-      return ids.sort((a, b) => {
+      const items: ModelInfo[] = data.data
+        .filter((m): m is Record<string, unknown> & { id: string } => typeof m['id'] === 'string')
+        .map((m) => {
+          const ctx = pickContextLength(m)
+          return ctx ? { id: m.id, contextLength: ctx } : { id: m.id }
+        })
+      items.sort((a, b) => {
         const score = (s: string) =>
           /^(gpt|o\d|claude|llama|qwen|deepseek|mistral|mixtral)/i.test(s) ? 0 : 1
-        const sa = score(a)
-        const sb = score(b)
-        return sa !== sb ? sa - sb : a.localeCompare(b)
+        const sa = score(a.id)
+        const sb = score(b.id)
+        return sa !== sb ? sa - sb : a.id.localeCompare(b.id)
       })
+      return items
     } catch (e) {
       lastErr = e
       const msg = e instanceof Error ? e.message : String(e)
@@ -412,7 +487,7 @@ export async function listModels(
   // of available models in the error message when an unknown model is requested.
   try {
     const probed = await probeModelsViaError(root, apiKey, init)
-    if (probed.length) return probed
+    if (probed.length) return probed.map((id) => ({ id }))
   } catch { /* probing failed too — fall through and surface the original error */ }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
 }
