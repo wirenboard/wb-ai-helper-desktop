@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import { useAttachments } from '../composables/useAttachments'
 import { fmtSize, plural } from '../utils'
 
@@ -30,9 +30,34 @@ function setQuote(q: string) {
 }
 defineExpose({ setQuote })
 
+// Inline-уведомление под textarea — показываем мягкую подсказку когда юзер
+// нажал Enter во время стрима. Текстарея специально не блокируется:
+// можно набирать следующий вопрос пока модель отвечает.
+const streamingNotice = ref<string | null>(null)
+let noticeTimer: ReturnType<typeof setTimeout> | null = null
+
+function flashNotice(msg: string, ms = 5000) {
+  streamingNotice.value = msg
+  if (noticeTimer) clearTimeout(noticeTimer)
+  noticeTimer = setTimeout(() => { streamingNotice.value = null }, ms)
+}
+
+// Когда стрим закончился — подсказка больше не нужна, прячем сразу.
+watch(() => props.disabled, (now) => {
+  if (!now && streamingNotice.value) {
+    streamingNotice.value = null
+    if (noticeTimer) { clearTimeout(noticeTimer); noticeTimer = null }
+  }
+})
+
 function submit() {
   const v = text.value.trim()
-  if ((!v && !items.value.length) || props.disabled) return
+  if (!v && !items.value.length) return
+  if (props.disabled) {
+    // Модель отвечает — не теряем введённый текст, объясняем что делать.
+    flashNotice('Модель ещё отвечает. Дождись её ответа и нажми Enter ещё раз — или нажми «■ Прервать», и можно будет отправить сразу.')
+    return
+  }
   const msg = quote.value ? `> ${quote.value.replace(/\n/g, '\n> ')}\n\n${v}` : v || items.value.map(a => `📎 ${a.name}`).join(', ')
   emit('send', msg)
   text.value = ''
@@ -127,6 +152,9 @@ function onFileChange(e: Event) {
       @keydown="onKey"
       @paste="onPaste"
     />
+    <div v-if="streamingNotice" class="streaming-notice">
+      {{ streamingNotice }}
+    </div>
 
     <div class="buttons">
       <input ref="fileInputRef" type="file" multiple hidden @change="onFileChange" />
@@ -220,6 +248,15 @@ textarea:focus { border-color: var(--accent); }
 }
 .send:hover { filter: brightness(1.1); }
 .send:disabled { background: var(--border); cursor: not-allowed; }
+.streaming-notice {
+  font-size: 0.78rem;
+  color: var(--text-mute);
+  padding: 6px 8px;
+  border-left: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg));
+  border-radius: 3px;
+  margin-top: 4px;
+}
 .downloads-hint {
   font-size: 0.7rem; color: var(--text-mute); opacity: 0.65;
   margin-right: auto; margin-left: 6px; user-select: none;

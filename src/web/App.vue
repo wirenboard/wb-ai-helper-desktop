@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { api, calcCost, contextWindowOf, type Chat, type ChatTurn, type Controller, type Health, type Settings, type TokenStats, type TrackedJob } from './api'
 import { fmtCost, fmtTok } from './utils'
 import ChatList from './components/ChatList.vue'
@@ -383,6 +383,12 @@ async function sendMessage(text: string, opts?: { compact?: boolean }) {
     { role: 'user', content: text },
     { role: 'assistant', content: '' },
   ]
+  // Гарантируем, что Vue отрисует user-сообщение ДО того, как начнёт
+  // приходить первый text-delta стрима. Без этого — если модель отвечает
+  // мгновенно, оба обновления (user-msg + первый delta) попадают в один
+  // тик и юзер видит свой текст одновременно с ответом, а кажется — что
+  // сообщение появилось «после» ответа.
+  await nextTick()
   abortStream = new AbortController()
   try {
     await api.sendMessage(
@@ -395,15 +401,47 @@ async function sendMessage(text: string, opts?: { compact?: boolean }) {
   } catch (e: any) {
     if (e?.name !== 'AbortError') errorBanner.value = e.message
   } finally {
-    streaming.value = false
     abortStream = null
-    if (activeChatId.value === id) {
+    // Делаем in-place merge вместо полной замены activeChat — иначе
+    // Vue пересоздаёт массив turns, ChatMessageList перерендеривает
+    // markdown/highlight/mermaid → видимое «дёрганье» чата после стрима.
+    // Live-state уже валиден (бэкенд сохранил каждый turn по ходу), нам
+    // нужны только агрегированные counters + tokens на последнем assistant.
+    if (activeChatId.value === id && activeChat.value?.id === id) {
       const c = await api.getChat(id).catch(() => null)
       if (c) {
-        patchLocalChat(c)
-        delete liveTurns[id]  // persisted is now fresh, drop live
+        const cur = activeChat.value
+        cur.tokensPrompt = c.tokensPrompt
+        cur.tokensCompletion = c.tokensCompletion
+        cur.tokensCached = c.tokensCached
+        cur.totalCost = c.totalCost
+        cur.title = c.title
+        // Прокидываем tokens на последний assistant_text в liveTurns
+        const live = liveTurns[id]
+        if (live) {
+          for (let i = live.length - 1; i >= 0; i--) {
+            const lt = live[i]
+            if (lt?.role === 'assistant' && lt.content) {
+              const persisted = [...c.turns].reverse().find(
+                (t) => t.role === 'assistant' && t.content === lt.content,
+              )
+              if (persisted && persisted.role === 'assistant') {
+                lt.tokensPrompt = persisted.tokensPrompt
+                lt.tokensCompletion = persisted.tokensCompletion
+                lt.tokensCached = persisted.tokensCached
+                lt.tokensCost = persisted.tokensCost
+                lt.createdAt = persisted.createdAt
+              }
+              break
+            }
+          }
+        }
+        // НЕ делаем delete liveTurns[id] — оставляем live как источник
+        // правды. При перезагрузке страницы / переключении чата selectChat
+        // дёрнет api.getChat и наполнит persisted, тогда live можно сбросить.
       }
     }
+    streaming.value = false
     void api.stats().then((s) => { totalStats.value = s }).catch(() => {})
     // Start polling for background jobs after LLM response
     void refreshJobs().then(() => {
@@ -495,7 +533,13 @@ async function refreshJobs() {
     const prevRunning = new Set(runningJobs.value.map((j) => j.jobId))
     const nowRunning = r.jobs.filter((j) => j.state === 'running')
     const nowExited = r.jobs.filter((j) => j.state !== 'running' && prevRunning.has(j.jobId))
-    runningJobs.value = nowRunning
+    // Не пересоздавать массив на каждом тике, если состав не изменился —
+    // иначе Vue реактивность каждые 3 секунды дёргает компоненты с
+    // running-баннером (computed groupRunningJobs пересчитывается).
+    const same = nowRunning.length === runningJobs.value.length
+      && nowRunning.every((j, i) => runningJobs.value[i]?.jobId === j.jobId
+        && runningJobs.value[i]?.state === j.state)
+    if (!same) runningJobs.value = nowRunning
 
     for (const job of nowExited) {
       completedJobs.value = [...completedJobs.value, job]

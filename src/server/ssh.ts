@@ -22,6 +22,13 @@ export type ExecResult = {
 }
 
 const CONNECT_TIMEOUT = 4000
+/** SSH handshake (KEX + auth) — отдельный лимит. На свежезагруженном
+ * контроллере (factoryreset/reboot) handshake растягивается до 6-8 с
+ * из-за RSA-3072 init на armv7 + параллельной нагрузки от mDNS/NM.
+ * Дефолт 4с давал «Timed out while waiting for handshake». */
+const HANDSHAKE_TIMEOUT = 15000
+/** Backoff между попытками при handshake-таймауте. */
+const HANDSHAKE_RETRY_BACKOFF = [5000, 10000, 20000] as const
 const DEFAULT_EXEC_TIMEOUT = 10_000
 const MAX_EXEC_TIMEOUT = 120_000
 const MAX_BUFFER = 1_000_000  // 1 MB на stdout+stderr на один exec
@@ -447,19 +454,35 @@ export class SshPool {
     }
     // Каскад: ключ (если задан) → пароль. Если ключ есть, но не подошёл —
     // ssh2 кидает «All configured authentication methods failed». Пробуем пароль.
+    // На handshake-timeout (свежий контроллер, RSA init медленный) делаем
+    // retry с backoff — auth-ошибки НЕ ретраим, чтобы не блокировать UI.
     const attempts = this.authAttempts()
     let lastErr: unknown = new Error('no auth methods')
-    for (const cfg of attempts) {
-      try {
-        const conn = await this.tryConnect(controller, cfg)
-        this.conns.set(key, conn)
-        conn.client.on('close', () => this.conns.delete(key))
-        conn.client.on('error', () => this.conns.delete(key))
-        return conn
-      } catch (e) {
-        lastErr = e
-        if (!isAuthError(e)) throw e
+    for (let retry = 0; retry <= HANDSHAKE_RETRY_BACKOFF.length; retry++) {
+      let allHandshakeTimeouts = attempts.length > 0
+      for (const cfg of attempts) {
+        try {
+          const conn = await this.tryConnect(controller, cfg)
+          this.conns.set(key, conn)
+          conn.client.on('close', () => this.conns.delete(key))
+          conn.client.on('error', () => this.conns.delete(key))
+          return conn
+        } catch (e) {
+          lastErr = e
+          if (isAuthError(e)) {
+            allHandshakeTimeouts = false
+            // продолжим со следующим вариантом (key→password)
+          } else if (!isHandshakeTimeout(e)) {
+            // Другая жёсткая ошибка (host unreachable, refused) — не ретраим
+            throw e
+          }
+          // handshake timeout — продолжаем перебор, потом backoff
+        }
       }
+      const nextDelay = HANDSHAKE_RETRY_BACKOFF[retry]
+      if (!allHandshakeTimeouts || nextDelay === undefined) break
+      console.warn(`[ssh] handshake timeout to ${controller.sn}, retry in ${nextDelay}ms`)
+      await new Promise((r) => setTimeout(r, nextDelay))
     }
     throw lastErr
   }
@@ -492,7 +515,10 @@ export class SshPool {
     }
     const client = new Client()
     const ready = new Promise<void>((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error('ssh connect timeout')), CONNECT_TIMEOUT + 1000)
+      // outer guard на полный handshake (TCP-connect + KEX + auth);
+      // ssh2 использует readyTimeout внутри, но бывает что 'ready' и 'error'
+      // вообще не сработают (зависший сокет), поэтому подстраховываемся.
+      const t = setTimeout(() => reject(new Error('ssh handshake timeout')), HANDSHAKE_TIMEOUT + 2000)
       client.once('ready', () => {
         clearTimeout(t)
         resolve()
@@ -516,7 +542,7 @@ export class SshPool {
       host,
       port: 22,
       username: this.auth.user || 'root',
-      readyTimeout: CONNECT_TIMEOUT,
+      readyTimeout: HANDSHAKE_TIMEOUT,
       hostVerifier: () => true,
       algorithms: {
         kex: [
@@ -534,6 +560,11 @@ export class SshPool {
 type AuthVariant =
   | { kind: 'key'; privateKey: Buffer }
   | { kind: 'password'; password: string }
+
+function isHandshakeTimeout(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e)
+  return /handshake timeout|Timed out while waiting for handshake|ssh connect timeout/i.test(msg)
+}
 
 function isAuthError(e: unknown): boolean {
   const msg = e instanceof Error ? e.message : String(e)
