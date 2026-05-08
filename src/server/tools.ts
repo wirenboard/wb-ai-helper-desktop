@@ -19,6 +19,14 @@ import { extract as tarExtract } from 'tar-stream'
 import { Readable } from 'node:stream'
 import { gunzipSync } from 'node:zlib'
 import { renderHistoryChart } from './history-chart.ts'
+import {
+  readMarkedSection,
+  normalizeInterface,
+  pickDefaultRoute,
+  parseNmcliColons,
+  parsePingLossPct,
+  parseCloudMqttControls,
+} from './diagnostics-parsers.ts'
 
 export function toolSchemas(): ChatCompletionTool[] {
   return [
@@ -338,6 +346,37 @@ export function toolSchemas(): ChatCompletionTool[] {
             },
           },
           required: ['sn', 'unit'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'network_status',
+        description: 'Сетевая сводка контроллера в одном вызове: интерфейсы (ip -j addr) с IPv4-адресами и состоянием, default-маршрут (ip -j route), активные соединения NetworkManager (nmcli connection show / device) и опционально ping до целевого хоста. Типичный first-call для диагностики «нет интернета»/«не виден через VPN»/«отвалился uplink».',
+        parameters: {
+          type: 'object',
+          properties: {
+            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            pingTarget: { type: 'string', description: 'Если задан — `ping -c1 -W2 <target>` (например 8.8.8.8). Иначе пинг пропускается.' },
+          },
+          required: ['sn'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'cloud_status',
+        description: 'Состояние Wiren Board Cloud agent одним вызовом: активность сервиса wb-cloud-agent, наличие device-сертификата, список привязанных провайдеров, retained MQTT-контролы (status / activation_link / cloud_base_url) для каждого провайдера. По одному вызову видно, привязан ли контроллер к облаку и в каком статусе.',
+        parameters: {
+          type: 'object',
+          properties: {
+            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+          },
+          required: ['sn'],
           additionalProperties: false,
         },
       },
@@ -1303,6 +1342,73 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
       const code = m ? Number(m[1]) : -1
       const output = m ? r.stdout.slice(0, r.stdout.lastIndexOf('===CODE=')).trim() : r.stdout
       return JSON.stringify({ unit, action, exitCode: code, ok: code === 0, output }, null, 2)
+    }
+
+    case 'network_status': {
+      const c = resolve1(args['sn'], ctx)
+      // Whitelist hostname/IP-символы перед склейкой в shell. Защита поверх
+      // shellQuote: даже если кто-то по ошибке передаст `; rm -rf …` в
+      // pingTarget, regex обнулит всё лишнее. Допускаем точку, двоеточие
+      // (IPv6), дефис, подчёркивание (DNS) и буквы/цифры.
+      const rawTarget = typeof args['pingTarget'] === 'string' ? (args['pingTarget'] as string) : ''
+      const safeTarget = rawTarget.replace(/[^A-Za-z0-9.:_-]/g, '')
+      const sh = [
+        'echo ===IP===',
+        'ip -j -4 addr show 2>/dev/null',
+        'echo ===ROUTE===',
+        'ip -j -4 route show default 2>/dev/null',
+        'echo ===NM===',
+        "nmcli -t -f NAME,UUID,TYPE,DEVICE,STATE connection show 2>/dev/null",
+        'echo ===NM_DEV===',
+        "nmcli -t -f DEVICE,TYPE,STATE,CONNECTION device 2>/dev/null",
+        ...(safeTarget ? ['echo ===PING===', `ping -c1 -W2 '${safeTarget}' 2>&1 | tail -2`] : []),
+      ].join('; ')
+      const r = await ctx.ssh.exec(c, sh, 15000)
+      let interfacesRaw: unknown[] = []
+      try { interfacesRaw = JSON.parse(readMarkedSection(r.stdout, 'IP') || '[]') } catch {}
+      let routesRaw: unknown[] = []
+      try { routesRaw = JSON.parse(readMarkedSection(r.stdout, 'ROUTE') || '[]') } catch {}
+      const out: Record<string, unknown> = {
+        interfaces: interfacesRaw.map(normalizeInterface),
+        defaultRoute: pickDefaultRoute(routesRaw),
+        nmConnections: parseNmcliColons(readMarkedSection(r.stdout, 'NM'), ['name', 'uuid', 'type', 'device', 'state'] as const),
+        nmDevices: parseNmcliColons(readMarkedSection(r.stdout, 'NM_DEV'), ['device', 'type', 'state', 'connection'] as const),
+      }
+      if (safeTarget) {
+        const ping = readMarkedSection(r.stdout, 'PING')
+        const lossPct = parsePingLossPct(ping)
+        out['ping'] = { target: safeTarget, raw: ping, lossPct, reachable: lossPct === 0 }
+      }
+      return JSON.stringify(out, null, 2)
+    }
+
+    case 'cloud_status': {
+      const c = resolve1(args['sn'], ctx)
+      const sh = [
+        'echo ===SVC===',
+        'systemctl is-active wb-cloud-agent 2>/dev/null || true',
+        'echo ===CONF===',
+        'cat /etc/wb-cloud-agent.conf 2>/dev/null || true',
+        'echo ===CERT===',
+        'ls -1 /var/lib/wb-cloud-agent/device_bundle.crt.pem 2>/dev/null && echo cert-present || echo cert-missing',
+        'echo ===PROVIDERS===',
+        'ls /var/lib/wb-cloud-agent/providers/ 2>/dev/null || true',
+        'echo ===MQTT===',
+        // `system__wb-cloud-agent__+` невалидный wildcard для mosquitto (+ должен
+        // занимать целый level). Берём все /devices/+/controls/+ и фильтруем
+        // на стороне TS — иначе mosquitto_sub возвращает ошибку.
+        "timeout 3 mosquitto_sub -F '%t\\t%p' -t '/devices/+/controls/+' 2>/dev/null | grep '^/devices/system__wb-cloud-agent__' || true",
+      ].join('; ')
+      const r = await ctx.ssh.exec(c, sh, 15000)
+      let conf: Record<string, unknown> | null = null
+      try { conf = JSON.parse(readMarkedSection(r.stdout, 'CONF') || 'null') } catch {}
+      return JSON.stringify({
+        serviceActive: readMarkedSection(r.stdout, 'SVC').trim() === 'active',
+        certPresent: readMarkedSection(r.stdout, 'CERT').includes('cert-present'),
+        providers: readMarkedSection(r.stdout, 'PROVIDERS').split('\n').filter(Boolean),
+        conf,
+        mqtt: parseCloudMqttControls(readMarkedSection(r.stdout, 'MQTT')),
+      }, null, 2)
     }
 
     case 'write_file': {

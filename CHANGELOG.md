@@ -7,6 +7,28 @@
 
 ## [Unreleased]
 
+## [0.13.10] — 2026-05-08
+
+### Added
+- **`network_status`** — сетевая сводка контроллера в одном вызове:
+  интерфейсы (`ip -j addr`) с IPv4-адресами и состоянием, default-маршрут
+  (`ip -j route`), активные NetworkManager-соединения и устройства
+  (`nmcli -t -f …`), опционально ping до целевого хоста. Типичный first-call
+  для диагностики «нет интернета» / «отвалился uplink» / «не виден через
+  VPN». Закрывает 3-4 ssh_exec-вызова, которые модель раньше делала вручную.
+- **`cloud_status`** — состояние Wiren Board Cloud agent одним вызовом:
+  активность сервиса `wb-cloud-agent`, наличие device-сертификата, список
+  привязанных провайдеров, retained MQTT-контролы (status / activation_link
+  / cloud_base_url) для каждого. По одному вызову видно, привязан ли
+  контроллер к облаку и в каком статусе.
+
+### Tests
+- +23 unit-теста на чистые парсеры в `tests/diagnostics-parsers.test.ts`:
+  `readMarkedSection`, `parsePingLossPct`, `normalizeInterface`,
+  `pickDefaultRoute`, `parseNmcliColons`, `parseCloudMqttControls`. Сами
+  tool-handler'ы (которые дёргают ssh.exec) тестируются на живом контроллере;
+  парсеры покрывают всю интересную логику.
+
 ## [0.13.9] — 2026-05-08
 
 ### Changed
@@ -354,7 +376,8 @@
   CLI interface...`; для `apt list --upgradable` без свежего `apt-get
   update` подсказывает обновить кэш и подгрузить скилл `controller-update`.
 
-[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.9...HEAD
+[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.10...HEAD
+[0.13.10]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.9...v0.13.10
 [0.13.9]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.8...v0.13.9
 [0.13.8]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.7...v0.13.8
 [0.13.7]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.6...v0.13.7
