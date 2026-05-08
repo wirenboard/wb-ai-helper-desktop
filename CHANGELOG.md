@@ -7,6 +7,42 @@
 
 ## [Unreleased]
 
+## [0.13.18] — 2026-05-08
+
+### Changed
+- **Доработки существующих скиллов** (последний батч из бэклога):
+  - `controller-update.md` — добавлен **Сценарий D: factory reset / откат
+    пакетов** через `wb-release -p` (`--reset-packages`) и `-r`
+    (`--regenerate`). Описана разница: `-p` приводит wb-\* пакеты к версиям
+    текущего релиза (downgrade при необходимости, конфиги не трогает),
+    `-r` перегенерирует системные конфиги из шаблонов wb-configs (риск
+    перезаписать кастом → обязательный `controller-backup`). Явное
+    разграничение с аппаратным factory reset (FIT-прошивкой), который мы
+    не запускаем.
+  - `zigbee.md` — расширена секция про **Z2M в Docker**: типичный
+    `docker-compose.yml` с `network_mode: host`, проброс `/dev/ttyMODx`
+    в `devices:`, маунт `./data` для конфига. Адаптеры (`ezsp` для
+    WBE2R-R-ZIGBEE v.2). Грабли: без host network mosquitto не виден,
+    конфиг WB-конвертера ставится на хост (не в контейнер), `docker compose`
+    без дефиса.
+  - `wb-mqtt-serial.md` — добавлен блок про **error-флаги канала
+    (WB MQTT Conventions)**: `r` (read error), `w` (write error),
+    `p` (period miss). Ключевое: при `r` значение контрола — last-known-good,
+    не свежее → нельзя читать контрол без проверки `meta/error`. Сценарий
+    «проверь живой ли канал» через `mqtt_read` на `meta/error`. Связь
+    с `troubleshooting-serial` для диагностики физики шины при `r`/`rp`.
+
+  Бэкенд-изменений нет — только обновлённые fixtures, которые сидятся
+  в БД при старте через `embed-skills-manifest`.
+
+### Backlog status
+- ✅ Все 7 system-стек скиллов опубликованы (v0.13.15–v0.13.17).
+- ✅ Доработки существующих скиллов из бэклога (этот релиз).
+- `mqtt_list_topics` пагинация уже есть с предыдущих релизов.
+- `mqtt_write` обрабатывает ошибки через try/catch на mqtt-клиенте.
+
+Бэклог из `wb-ai-skills/wb-ai-helper-analysis.md` закрыт.
+
 ## [0.13.17] — 2026-05-08
 
 ### Added
