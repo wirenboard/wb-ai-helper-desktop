@@ -7,6 +7,37 @@
 
 ## [Unreleased]
 
+## [0.13.16] — 2026-05-08
+
+### Added
+- **3 новых скилла** в `src/server/fixtures/skills/` (продолжение разбора
+  бэклога из `wb-ai-skills/wb-ai-helper-analysis.md`, на русском):
+  - **`wb-notifications`** — Telegram/email/SMS из wb-rules через `Notify.*`
+    и централизованные тревоги через `alarms.conf`. Создание Telegram-бота
+    через `@BotFather`, получение `chat_id` (личный/группа/канал).
+    Локальный MTA через `msmtp-mta` для email (Gmail App Password). SMS
+    через ModemManager (`mmcli`). Декларативные тревоги с `interval`
+    для повторных уведомлений и `expectedValueParameter`/min/max для
+    порогов. Грабли: захардкоденный токен, кириллица в SMS (70 символов
+    на одно), Gmail без App Password.
+  - **`wb-scenarios`** — декларативный no-code движок поверх `wb-rules`:
+    4 типа сценариев (`devicesControl`, `lightControl`, `thermostat`,
+    `schedule`) описываются JSON в `/etc/wb-scenarios.conf`, под капотом
+    генерируются `.js` правила. Граница "сценарий vs wb-rules": сложные
+    условия / вычисления / счётчики → wb-rules. Сервис называется
+    `wb-scenarios-reloader` (НЕ `wb-scenarios.service`).
+  - **`wb-mqtt-broker`** — администрирование `mosquitto` на контроллере:
+    структура `/etc/mosquitto/conf.d/` (НЕ редактировать `mosquitto.conf`
+    напрямую), пароли (`mosquitto_passwd -c` грабли), ACL per-user, TLS
+    на 8883 (self-signed CA для дома, Let's Encrypt для прода), мосты
+    к чужим брокерам (HA, облако) с `cleansession false`. Принцип:
+    WB-сервисы через Unix-сокет (анонимно), внешние клиенты — 1883/8883
+    с аутентификацией. `per_listener_settings true` ключевой.
+
+  Все 3 скилла загружаются автоматически при сборке через
+  `embed-skills-manifest` и сидятся в БД на старте. Итого 23 системных
+  скилла (было 20 в v0.13.15).
+
 ## [0.13.15] — 2026-05-08
 
 ### Added
