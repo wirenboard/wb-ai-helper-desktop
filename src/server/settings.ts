@@ -50,7 +50,12 @@ const EMPTY_PROVIDER: ProviderConfig = {
   tlsInsecure: false, caCert: '', apiFormat: 'openai',
   priceInput: null, priceOutput: null, priceCached: null,
   contextWindow: null, compactModel: '',
-  autoCompact: true, autoCompactThreshold: 0.85,
+  // autoCompactThreshold снижен с 0.85 до 0.70 в v0.13.12 — 0.85 оставляло
+  // мало запаса до HARD-сжатия (0.9), модель часто не успевала вызвать
+  // checkpoint между soft-просьбой и принудительной обрезкой. 0.70 даёт
+  // 20pp запаса: пока ratio растёт с 0.70 до 0.90, есть время для пары
+  // итераций «попроси → подожди → попроси ещё раз».
+  autoCompact: true, autoCompactThreshold: 0.70,
   temperature: null,
   minRequestIntervalMs: null,
 }

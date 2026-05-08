@@ -270,32 +270,77 @@ const currentContextUsage = computed(() => {
   return { used: last, total: ctx, ratio: last / ctx }
 })
 
-function compactContext() {
-  // Просим модель сжать историю — вызвать tool `checkpoint`. Сама модель решит
-  // что положить в summary. Текст подсказывающий, остальное — её ответственность.
-  // `compact: true` — backend подменит модель на configured compactModel (если задан).
-  void sendMessage(
-    'Контекст приближается к лимиту. Вызови сейчас checkpoint(summary=...) с кратким итогом текущего этапа, чтобы освободить память.',
-    { compact: true },
-  )
+// Сжатие контекста — два уровня:
+//   1. SOFT (≥ autoCompactThreshold, default 0.85): просим модель саму вызвать
+//      checkpoint с summary. Промт жёсткий — явно говорим, что иначе будет
+//      принудительное сжатие и контекст потеряется. Это даёт модели один шанс
+//      сохранить важное в summary до hard-режима.
+//   2. HARD (≥ HARD_COMPACT_RATIO, 0.90): backend обрезает историю в DB
+//      без участия модели. Сохраняет system + последний user-assistant pair,
+//      на месте обрезанного — synthetic [Система] notice. Деструктивно для
+//      tool-results, но без него ratio растёт пока не вылетит за окно.
+const HARD_COMPACT_RATIO = 0.9
+
+function compactContext(softReason: 'soft' | 'hard-warning' = 'soft') {
+  // Просим модель сжать историю — вызвать tool `checkpoint`.
+  // `compact: true` — backend подменит модель на configured compactModel.
+  const msg =
+    softReason === 'hard-warning'
+      ? 'Контекст уже превысил 90% лимита окна. ' +
+        'Вызови СЕЙЧАС checkpoint(summary=...) с кратким итогом этапа — это твой последний шанс ' +
+        'сохранить важные детали (tool-results, наблюдения, план). ' +
+        'Если не вызовешь — на следующем сообщении мы принудительно обрежем историю, ' +
+        'и всё кроме system-promt и последнего обмена будет потеряно.'
+      : 'Контекст приближается к лимиту окна. ' +
+        'Вызови checkpoint(summary=...) сейчас, пока не поздно. ' +
+        'ВАЖНО: если не вызовешь сам, при достижении 90% мы обрежем историю принудительно — ' +
+        'tool-results и детали могут потеряться. Твой summary безопаснее автоматической обрезки.'
+  void sendMessage(msg, { compact: true })
 }
 
-// Авто-сжатие: следим за заполнением контекста и, при превышении порога,
-// автоматически отправляем тот же запрос на checkpoint. Дебаунсим, чтобы не
-// триггериться на каждом тике, и не запускаемся пока есть активный стрим.
+async function forceCompact(reason: string) {
+  if (!activeChat.value) return
+  const id = activeChat.value.id
+  try {
+    await api.forceCompact(id, reason)
+    // После force-compact перезагружаем чат — turns в DB изменились.
+    const fresh = await api.getChat(id)
+    activeChat.value = fresh
+    delete liveTurns[id]
+    resetAutoCompactGate()
+  } catch (e: any) {
+    errorBanner.value = `force-compact failed: ${e?.message ?? String(e)}`
+  }
+}
+
+// Состояние gate'а автосжатия — выставлено при `compactContext()`, сброшено
+// при следующем юзерском sendMessage или после force-compact'а. Используется:
+//   - чтобы не триггерить compactContext повторно на каждом тике watch'а
+//   - чтобы UI показал индикатор «ждём checkpoint от модели»
+const autoCompactPending = ref(false)
 let autoCompactTriggeredForRatio = 0
+function resetAutoCompactGate() {
+  autoCompactTriggeredForRatio = 0
+  autoCompactPending.value = false
+}
+
 watch(currentContextUsage, (u) => {
   if (!u || !settings.value?.autoCompact || streaming.value) return
-  const threshold = settings.value.autoCompactThreshold || 0.85
-  if (u.ratio < threshold) {
-    // ratio упал ниже порога (после сжатия) — сбрасываем гард
-    autoCompactTriggeredForRatio = 0
+  const softThreshold = settings.value.autoCompactThreshold || 0.85
+  if (u.ratio < softThreshold) {
+    resetAutoCompactGate()
     return
   }
-  // Уже триггерили на текущем "пике" — ждём пока ratio просядет ниже порога
+  // HARD: ratio ≥ 0.9 — принудительная обрезка через backend.
+  if (u.ratio >= HARD_COMPACT_RATIO) {
+    void forceCompact(`ratio=${u.ratio.toFixed(2)} превысил ${HARD_COMPACT_RATIO}`)
+    return
+  }
+  // SOFT: просим модель. Дважды на одном «пике» не дёргаем.
   if (autoCompactTriggeredForRatio > 0) return
   autoCompactTriggeredForRatio = u.ratio
-  compactContext()
+  autoCompactPending.value = true
+  compactContext('soft')
 })
 
 const currentChatCost = computed(() => {
@@ -512,6 +557,10 @@ async function sendMessage(text: string, opts?: { compact?: boolean }) {
   streaming.value = true
   errorBanner.value = null
   lastSentMessage.value = { text, ...(opts ? { opts } : {}) }
+  // Сбрасываем gate автосжатия — каждое юзерское сообщение даёт авто-сжатию
+  // свежий шанс попробовать. Не сбрасываем для opts.compact (это сам же
+  // компакт — gate уже выставлен, чтобы не было двойного триггера).
+  if (!opts?.compact) resetAutoCompactGate()
   const prevHistory = liveTurns[id] ?? activeChat.value.turns.filter((t) => t.role !== 'system')
   liveTurns[id] = [
     ...prevHistory,
@@ -899,11 +948,16 @@ const visibleTurns = computed<ChatTurn[]>(() => {
         >
           <span class="ctx-bar"><span class="ctx-fill" :style="{ width: Math.min(100, Math.round(currentContextUsage.ratio * 100)) + '%' }"/></span>
           {{ fmtTok(currentContextUsage.used) }} / {{ fmtTok(currentContextUsage.total) }}
+          <span
+            v-if="autoCompactPending"
+            class="ctx-pending"
+            title="Модель попрошена вызвать checkpoint(summary=…), ждём ответа. Если не вызовет — при 90% контекст будет обрезан принудительно (детали могут потеряться)."
+          >🗜 ждём checkpoint…</span>
           <button
             v-if="currentContextUsage.ratio >= 0.5 && !streaming"
             class="ctx-compact ghost small"
             title="Сжать историю — модель вызовет checkpoint и заменит старые tool-results кратким суммари"
-            @click="compactContext"
+            @click="() => compactContext('soft')"
           >📦 сжать</button>
         </div>
         <button class="ghost" :title="`Тема: ${themeLabel[theme]}`" @click="cycleTheme">{{ themeIcon[theme] }}</button>
@@ -1065,4 +1119,14 @@ const visibleTurns = computed<ChatTurn[]>(() => {
   cursor: pointer; font-family: inherit; font-size: 0.7rem;
 }
 .ctx-compact:hover { border-color: var(--accent); color: var(--accent); }
+.ctx-pending {
+  margin-left: 6px; padding: 1px 6px;
+  border-radius: 4px; background: var(--bg); border: 1px solid var(--border);
+  font-size: 0.7rem; opacity: 0.85; cursor: help;
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 0.55; }
+}
 </style>

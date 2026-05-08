@@ -80,6 +80,7 @@ function onSuggest(text: string) {
       :disabled="streaming"
       :llmConfigured="llmConfigured"
       :chatId="chatId"
+      :runningJobsCount="runningJobs?.length ?? 0"
       @send="emit('send', $event)"
       @abort="emit('stop')"
     />

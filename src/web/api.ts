@@ -447,6 +447,16 @@ export const api = {
     }).then((r) => json<Chat>(r)),
   deleteChat: (id: string) =>
     fetch(`/api/chats/${id}`, { method: 'DELETE' }).then((r) => json<{ ok: true }>(r)),
+  /** Принудительное сжатие истории чата (деструктивно). Сохраняет system-турн +
+   *  последний user-msg и всё после него; промежуточные turns заменяются одним
+   *  synthetic [Система] уведомлением. Возвращает количество удалённых turns
+   *  и обновлённый chat. Вызывается фронтом при ratio >= HARD_COMPACT_RATIO. */
+  forceCompact: (id: string, reason: string) =>
+    fetch(`/api/chats/${id}/force-compact`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    }).then((r) => json<{ removed: number; chat: Chat }>(r)),
 
   deleteAttachment: (chatId: string, attachmentId: string) =>
     fetch(`/api/attachments/${encodeURIComponent(attachmentId)}?chatId=${encodeURIComponent(chatId)}`, { method: 'DELETE' })

@@ -7,6 +7,49 @@
 
 ## [Unreleased]
 
+## [0.13.12] — 2026-05-08
+
+### Fixed
+- **Автосжатие копилось и не срабатывало**: `compactContext()` отправлял
+  модели мягкую просьбу «вызови checkpoint», и если модель её игнорировала
+  (отвечала текстом без tool-call'а), gate `autoCompactTriggeredForRatio`
+  залипал, ratio рос пока не вылетал за окно контекста — авто-сжатие
+  больше не пыталось. Теперь два уровня:
+  1. **SOFT (≥ autoCompactThreshold, default 0.85)** — модель просится
+     вызвать `checkpoint(summary=...)`. Промт переписан жёстче: явно
+     предупреждаем, что иначе при 90% мы обрежем историю принудительно
+     и tool-results могут потеряться — её summary безопаснее.
+  2. **HARD (≥ 0.9)** — backend сам обрезает историю в БД через новый
+     endpoint `POST /api/chats/:id/force-compact`: оставляет system-турн
+     и последний user-msg + всё после него; промежуточные turns
+     заменяются одним synthetic `[Система] 🗜 Принудительное сжатие…`
+     уведомлением со счётчиком выкинутого. Деструктивно для tool-results
+     — но без него ratio растёт без ограничений.
+  Gate сбрасывается на каждом юзерском `sendMessage` — каждый новый
+  запрос даёт автосжатию свежий шанс.
+- **Дефолт `autoCompactThreshold` снижен с 0.85 до 0.70** — 0.85 оставляло
+  только 5pp запаса до HARD-сжатия (0.9), модель часто не успевала вызвать
+  checkpoint между soft-просьбой и принудительной обрезкой. 0.70 даёт 20pp
+  для нескольких итераций «попроси → подожди → попроси ещё раз». Существующие
+  юзеры с сохранённым `0.85` (или другим значением) **остаются с прежним**
+  — поменять можно через ⚙ Настройки или вручную в `settings.json`.
+
+### Added
+- **UI-индикатор `🗜 ждём checkpoint…`** в шапке чата рядом с context-meter,
+  когда автосжатие отправило просьбу модели, но та ещё не вызвала checkpoint.
+  С анимацией pulse, чтобы было заметно. Tooltip объясняет, что при 90%
+  будет принудительное сжатие.
+- **Счётчик фоновых задач `⏳ N`** в строке `ChatInputArea` рядом с «Ctrl+J
+  — скачанные файлы». Показывается когда модель закончила, но ещё работают
+  `ssh_exec_async`/`wb_bus_scan`/`serial_debug_collect` на контроллере.
+  Tooltip предлагает узнать статус через `job_status`. 0 — индикатор скрыт.
+
+### Tests
+- +3 теста в `tests/db-chats.test.ts` на `ChatStore.forceCompact()`:
+  обрезка middle turns с synthetic notice; noop при отсутствии истории
+  для сжатия; сохранение последнего user-assistant pair при multi-iteration
+  стриме.
+
 ## [0.13.11] — 2026-05-08
 
 ### Added
@@ -406,7 +449,8 @@
   CLI interface...`; для `apt list --upgradable` без свежего `apt-get
   update` подсказывает обновить кэш и подгрузить скилл `controller-update`.
 
-[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.11...HEAD
+[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.12...HEAD
+[0.13.12]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.11...v0.13.12
 [0.13.11]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.10...v0.13.11
 [0.13.10]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.9...v0.13.10
 [0.13.9]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.8...v0.13.9

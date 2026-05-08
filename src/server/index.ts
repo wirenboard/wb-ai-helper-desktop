@@ -362,6 +362,20 @@ app.get('/api/chats/:id', (c) => {
   return chat ? c.json(chat) : c.json({ error: 'not found' }, 404)
 })
 
+// Принудительное сжатие истории чата — деструктивно. Сохраняет только
+// system-турн и последний user-msg + всё после него, на месте обрезанного
+// — synthetic [Система] уведомление. Используется фронтом когда автосжатие
+// уже попросило модель, та не сжала, а ratio переполз HARD_COMPACT_RATIO.
+app.post('/api/chats/:id/force-compact', async (c) => {
+  const id = c.req.param('id')
+  const body = await c.req.json().catch(() => ({}))
+  const reason = typeof body?.reason === 'string' && body.reason ? body.reason : 'manual'
+  const result = chats.forceCompact(id, reason)
+  const chat = chats.get(id)
+  if (!chat) return c.json({ error: 'not found' }, 404)
+  return c.json({ ...result, chat })
+})
+
 app.patch('/api/chats/:id', async (c) => {
   const body = await c.req.json().catch(() => ({}))
   const id = c.req.param('id')

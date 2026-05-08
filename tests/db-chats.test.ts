@@ -252,4 +252,81 @@ describe('ChatStore', () => {
     fetched = store.get(chat.id)!
     expect(fetched.title).toBe('привет')
   })
+
+  // Принудительное сжатие (v0.13.12). Стратегия — keep system + last K turns
+  // (default K=6), всё что между — synthetic [Система] уведомление. Это
+  // покрывает оба сценария:
+  //   а) много вопросов: остаётся последний user-msg и его ответ.
+  //   б) один длинный вопрос с цепочкой tool-iterations: остаются последние
+  //      несколько iter'ов которые показывают актуальное состояние.
+  test('forceCompact() drops middle, keeps system + last K turns + inserts synthetic', () => {
+    const chat = store.create('compact test')
+    // Длинная цепочка чтобы было что сжимать (1 system + 14 turns).
+    for (let i = 0; i < 7; i++) {
+      store.appendTurn(chat.id, { role: 'user', content: `user msg ${i}` })
+      store.appendTurn(chat.id, {
+        role: 'assistant',
+        content: `assistant ${i}`,
+        toolCalls: [{ id: `t${i}`, name: 'foo', arguments: '{}' }],
+      })
+    }
+    const before = store.get(chat.id)!
+    expect(before.turns.length).toBe(15) // 1 system + 14 turns
+
+    const result = store.forceCompact(chat.id, 'ratio=0.95', 6)
+    expect(result.removed).toBe(15 - 1 - 6) // = 8 (всё кроме system + last 6)
+
+    const after = store.get(chat.id)!
+    // system + synthetic notice + 6 хвостовых turns = 8
+    expect(after.turns.length).toBe(8)
+    expect(after.turns[0]?.role).toBe('system')
+    const notice = after.turns[1]
+    expect(notice?.role).toBe('user')
+    expect(notice?.content).toMatch(/^\[Система\] 🗜 Принудительное сжатие/)
+    expect(notice?.content).toContain('ratio=0.95')
+    // Хвост — последние 6 турнов (user msg 4..6 + assistants).
+    expect(after.turns.slice(2).map((t) => (t.role === 'user' ? t.content : `[a]${t.content}`))).toEqual([
+      'user msg 4',
+      '[a]assistant 4',
+      'user msg 5',
+      '[a]assistant 5',
+      'user msg 6',
+      '[a]assistant 6',
+    ])
+  })
+
+  test('forceCompact() summary notice describes what was dropped', () => {
+    const chat = store.create('summary test')
+    store.appendTurn(chat.id, { role: 'user', content: 'q1' })
+    store.appendTurn(chat.id, {
+      role: 'assistant',
+      content: 'a1',
+      toolCalls: [{ id: 't1', name: 'foo', arguments: '{}' }],
+    })
+    store.appendTurn(chat.id, { role: 'tool', toolCallId: 't1', content: 'res1' })
+    store.appendTurn(chat.id, { role: 'user', content: '[Система] welcome' })
+    // Final keepLast=2 кусок:
+    store.appendTurn(chat.id, { role: 'user', content: 'last user' })
+    store.appendTurn(chat.id, { role: 'assistant', content: 'last answer' })
+
+    store.forceCompact(chat.id, 'manual', 2)
+    const after = store.get(chat.id)!
+    const notice = after.turns[1]!
+    // Все типы выкинутого должны быть в сводке
+    expect(notice.content).toContain('1 реплик')
+    expect(notice.content).toContain('1 ответов модели')
+    expect(notice.content).toContain('1 tool-результатов')
+    expect(notice.content).toContain('1 system-уведомлений')
+  })
+
+  test('forceCompact() noop when chat has fewer than keepLast+1 turns', () => {
+    const chat = store.create('small')
+    store.appendTurn(chat.id, { role: 'user', content: 'q1' })
+    store.appendTurn(chat.id, { role: 'assistant', content: 'a1' })
+    // 1 system + 2 turns = 3 < 1 + 6 = 7 → no-op
+    const result = store.forceCompact(chat.id, 'manual')
+    expect(result.removed).toBe(0)
+    const after = store.get(chat.id)!
+    expect(after.turns.length).toBe(3)
+  })
 })
