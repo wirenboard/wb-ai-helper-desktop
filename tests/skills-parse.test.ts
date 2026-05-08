@@ -1,4 +1,6 @@
 import { describe, test, expect } from 'bun:test'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { extractDescription } from '../src/server/skills.ts'
 
 describe('extractDescription', () => {
@@ -43,4 +45,24 @@ describe('extractDescription', () => {
     expect(desc).toContain('Line two')
     expect(desc).not.toContain('\n')
   })
+})
+
+// Гард против ситуации, когда в fixtures/skills прилетает .md без валидного
+// первого абзаца — seedSystemSkills такой файл `пропустит` с warn'ом, и в БД
+// его не будет ни в dev, ни в release. Тест ловит это до коммита.
+describe('every shipped fixture skill has a valid description', () => {
+  const SKILLS_DIR = join(import.meta.dir, '..', 'src', 'server', 'fixtures', 'skills')
+  const files = readdirSync(SKILLS_DIR).filter((f) => f.endsWith('.md'))
+
+  test('there is at least one fixture skill', () => {
+    expect(files.length).toBeGreaterThan(0)
+  })
+
+  for (const file of files) {
+    test(file, () => {
+      const raw = readFileSync(join(SKILLS_DIR, file), 'utf8')
+      const desc = extractDescription(raw, file)
+      expect(desc.length).toBeGreaterThanOrEqual(20)
+    })
+  }
 })
