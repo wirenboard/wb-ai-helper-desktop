@@ -13,14 +13,19 @@
 
 ## Шаг 1 — найди нужные каналы (ОБЯЗАТЕЛЬНО перед любым запросом истории)
 
-**Никогда не угадывай имена каналов.** Сначала получи точные пары `[device_id, control_name]` из MQTT.
+**Никогда не угадывай имена каналов.** Примеры в этом скилле — иллюстративные, **не копируй их буквально**: `device_id` зависит от контроллера и собранной аппаратной конфигурации. Сначала получи точные пары `[device_id, control_name]` из MQTT именно этого SN.
 
-### Поиск по MQTT
+### Два обязательных вызова — оба, не один
 
 ```
-mqtt_list_topics(sn, prefix="/devices/+/meta/name")  // список всех устройств
-mqtt_list_topics(sn, prefix="/devices/<device_id>/controls/+")  // каналы конкретного устройства
+# 1. Список всех устройств — найди подходящий device_id
+mqtt_list_topics(sn, prefix="/devices/+/meta/name")
+
+# 2. Список каналов выбранного устройства — подтверди что control_name там есть
+mqtt_list_topics(sn, prefix="/devices/<device_id>/controls/+")
 ```
+
+**Не зови `get_history_chart` / `get_history` / `get_history_table` без обоих вызовов.** Тулзы делают pre-flight через MQTT и вернут ошибку с подсказкой если `device_id` или `control_name` не найдён — не трать круг на это, сделай валидацию сам и зови с правильными именами.
 
 Ищи по смыслу в полных именах. Имена каналов часто содержат пробелы — используй их ДОСЛОВНО.
 
@@ -62,7 +67,7 @@ mqtt_list_topics(sn, prefix="/devices/<device_id>/controls/+")  // каналы 
 
 ### Только данные (статистика):
 ```
-get_history(sn=SN, channels=[["wb-system", "CPU Temperature"]], period="24h")
+get_history(sn=SN, channels=[["hwmon", "CPU Temperature"]], period="24h")
 ```
 
 Ответ по каждому каналу: массив точек `{v, t}`, статистика `{min, max, avg}`, а также поля `units` и `precision` (если они опубликованы драйвером в `/meta`). **Всегда смотри `units` перед интерпретацией значений в таблице/сообщении пользователю.** Если `units` нет — не додумывай единицы (особенно «°C»); спроси пользователя или явно напиши «без единиц».
@@ -71,7 +76,7 @@ get_history(sn=SN, channels=[["wb-system", "CPU Temperature"]], period="24h")
 
 ### График PNG (когда пользователь просит «покажи», «пришли», «нарисуй»):
 ```
-get_history_chart(sn=SN, channels=[["wb-system", "CPU Temperature"]], period="24h",
+get_history_chart(sn=SN, channels=[["hwmon", "CPU Temperature"]], period="24h",
   title="CPU Temperature за сутки", ylabel="°C")
 ```
 
@@ -79,7 +84,7 @@ get_history_chart(sn=SN, channels=[["wb-system", "CPU Temperature"]], period="24
 
 ### CSV-таблица (когда пользователь просит «выгрузи», «сохрани», «скинь в Excel», «таблицу»):
 ```
-get_history_table(sn=SN, channels=[["wb-system", "CPU Temperature"], ["hwmon", "Board Temperature"]], period="7d")
+get_history_table(sn=SN, channels=[["hwmon", "CPU Temperature"], ["hwmon", "Board Temperature"]], period="7d")
 ```
 
 Вернёт CSV-вложение с колонками `timestamp_unix, timestamp_iso, <device/control> (<units>), ...`. По умолчанию — до 10 000 точек на канал без прореживания; для больших дампов можно поднять `limit` до 100 000 и задать `min_interval`. Модель получит только метаданные (кол-во точек, размер файла) — сами значения в контекст не попадают.
@@ -98,7 +103,7 @@ get_history_table(sn=SN, channels=[["wb-system", "CPU Temperature"], ["hwmon", "
 ```
 get_history_chart(sn=SN,
   channels=[
-    ["wb-system", "CPU Temperature"],
+    ["hwmon", "CPU Temperature"],
     ["wb-msw-v4_42", "Temperature 1"]
   ],
   period="7d",
