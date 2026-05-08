@@ -14,14 +14,14 @@ export type AssistantToolCall = { id: string; name: string; arguments: string }
 
 export type ChatTurn =
   | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string; createdAt?: number; toolCalls?: AssistantToolCall[]; tokensPrompt?: number; tokensCompletion?: number; tokensCached?: number; tokensCost?: number }
+  | { role: 'assistant'; content: string; createdAt?: number; toolCalls?: AssistantToolCall[]; tokensPrompt?: number; tokensCompletion?: number; tokensCached?: number; tokensCost?: number; provider?: LlmProvider; model?: string }
   | { role: 'tool'; toolCallId: string; content: string }
   | { role: 'system'; content: string }
 
 // ── Chat items (UI layer, derived from ChatTurn[]) ────────────────────────
 export type ChatItemUserAttachment = { id: string; name: string; isImage: boolean }
 export type ChatItemUser = { type: 'user'; text: string; attachments?: ChatItemUserAttachment[] }
-export type ChatItemAssistantText = { type: 'assistant_text'; text: string; createdAt?: number; tokensPrompt?: number; tokensCompletion?: number; tokensCached?: number; tokensCost?: number }
+export type ChatItemAssistantText = { type: 'assistant_text'; text: string; createdAt?: number; tokensPrompt?: number; tokensCompletion?: number; tokensCached?: number; tokensCost?: number; provider?: LlmProvider; model?: string; toolCallsCount?: number }
 export type ChatItemToolCall = { type: 'tool_call'; id: string; name: string; input: Record<string, unknown>; result?: { content: string; isError: boolean } }
 export type ChatItemAssistantFile = { type: 'assistant_file'; attachmentId: string; name: string; mime: string; size: number; url: string; sourceSn?: string; sourcePath?: string }
 export type ChatItemError = { type: 'error'; message: string }
@@ -58,7 +58,7 @@ export function turnsToItems(turns: ChatTurn[], chatId: string): ChatItem[] {
         items.push(item)
       }
       if (t.content) {
-        items.push({ type: 'assistant_text', text: t.content, createdAt: t.createdAt, tokensPrompt: t.tokensPrompt, tokensCompletion: t.tokensCompletion, tokensCached: t.tokensCached, tokensCost: t.tokensCost })
+        items.push({ type: 'assistant_text', text: t.content, createdAt: t.createdAt, tokensPrompt: t.tokensPrompt, tokensCompletion: t.tokensCompletion, tokensCached: t.tokensCached, tokensCost: t.tokensCost, provider: t.provider, model: t.model })
       }
     } else if (t.role === 'tool') {
       const callId = (t as { toolCallId?: string }).toolCallId
@@ -100,6 +100,23 @@ export function turnsToItems(turns: ChatTurn[], chatId: string): ChatItem[] {
     } catch {}
   }
   for (let i = inserts.length - 1; i >= 0; i--) items.splice(inserts[i]!.at, 0, inserts[i]!.item)
+
+  // Считаем tool_call'ы, накопленные между предыдущим user-сообщением (или
+  // assistant_text-ом) и каждым ассистент-сообщением. Это число рендерится в
+  // подвале сообщения рядом с токенами/стоимостью, чтобы было очевидно: $0.05
+  // включает не только генерацию финального текста, но и все промежуточные
+  // LLM-вызовы для tool-iterations этого стрима.
+  let toolsSince = 0
+  for (const it of items) {
+    if (it.type === 'tool_call') {
+      toolsSince++
+    } else if (it.type === 'user') {
+      toolsSince = 0
+    } else if (it.type === 'assistant_text') {
+      it.toolCallsCount = toolsSince
+      toolsSince = 0
+    }
+  }
 
   return items
 }

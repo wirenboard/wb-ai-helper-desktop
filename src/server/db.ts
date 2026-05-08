@@ -59,6 +59,14 @@ function migrate(db: Database) {
   try { db.exec(`ALTER TABLE turns ADD COLUMN tokens_cached INTEGER NOT NULL DEFAULT 0`) } catch {}
   try { db.exec(`ALTER TABLE turns ADD COLUMN total_cost REAL NOT NULL DEFAULT 0`) } catch {}
   try { db.exec(`ALTER TABLE skills ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'`) } catch {}
+  // Per-turn провайдер и модель — чтобы в подвале каждого ассистент-сообщения
+  // показывался тот провайдер/модель/валюта, кем оно было реально сгенерено.
+  // Раньше футер тянул эти поля из глобальных settings, и после переключения
+  // провайдера прошлые сообщения переименовывались (баг в скриншоте: AITunnel
+  // ₽ становились OpenAI $ после переезда). NULL разрешён — старые турны до
+  // миграции остаются без атрибуции.
+  try { db.exec(`ALTER TABLE turns ADD COLUMN provider TEXT`) } catch {}
+  try { db.exec(`ALTER TABLE turns ADD COLUMN model TEXT`) } catch {}
 }
 
 function defaultDbPath(): string {

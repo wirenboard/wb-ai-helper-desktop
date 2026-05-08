@@ -424,8 +424,17 @@ app.post('/api/chats/:id/message', async (c) => {
   const compactRequested = body && body.compact === true
   // Override the model only when the caller requested compaction AND a separate
   // compactModel is configured for this provider — otherwise stay on the main model.
-  const cur = settingsStore.current()
+  const settingsAtRequest = settingsStore.get()
+  const cur = settingsAtRequest.providers[settingsAtRequest.provider]
   const modelOverride = compactRequested && cur.compactModel ? cur.compactModel : undefined
+  // Атрибуция, которая прибивается к каждому сохраняемому assistant-turn'у:
+  // подвал в UI (ChatMessage.vue) теперь читает provider/model из самого
+  // turn'а, а не из текущих settings — иначе после переключения провайдера
+  // прошлые сообщения переименовывались (см. screenshot: AITunnel ₽ → OpenAI $).
+  const turnAttribution = {
+    provider: settingsAtRequest.provider,
+    model: modelOverride || activeLlm.model,
+  }
   const temperatureOverride =
     typeof cur.temperature === 'number' && Number.isFinite(cur.temperature)
       ? cur.temperature
@@ -520,7 +529,7 @@ app.post('/api/chats/:id/message', async (c) => {
               role: 'assistant',
               content: assistantText,
               toolCalls: [...pendingToolCalls],
-            })
+            }, undefined, turnAttribution)
             assistantText = ''
             pendingToolCalls.length = 0
           }
@@ -541,13 +550,14 @@ app.post('/api/chats/:id/message', async (c) => {
           toolCalls: pendingToolCalls.length ? [...pendingToolCalls] : undefined,
         },
         pendingUsage ?? undefined,
+        turnAttribution,
       )
     }
     // Если агент упёрся в max_turns без финального текста — пишем явное
     // системное сообщение, чтобы пользователь не сидел перед пустым чатом.
     if (finishReason === 'max_turns' && !assistantText) {
       const hint = 'Агент исчерпал бюджет шагов (20 итераций) и не успел подвести итог. Скажи «продолжай» — я продолжу с того места, или переформулируй задачу.'
-      chats.appendTurn(id, { role: 'assistant', content: hint })
+      chats.appendTurn(id, { role: 'assistant', content: hint }, undefined, turnAttribution)
       await send('text-delta', { text: hint })
     }
     await send('end', { chatId: id })

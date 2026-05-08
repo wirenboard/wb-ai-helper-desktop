@@ -7,6 +7,65 @@
 
 ## [Unreleased]
 
+## [0.13.8] — 2026-05-08
+
+### Fixed
+- **Footer ассистент-сообщений показывал не того провайдера/модель/валюту**:
+  поля `provider` / `model` тянулись из текущих глобальных settings, поэтому
+  после переключения провайдера (например AITunnel ₽ → OpenAI $) прошлые
+  сообщения «переезжали» — RUB-сумма становилась USD, имя бренда менялось.
+  Теперь у таблицы `turns` две новые колонки `provider`/`model`, которые
+  пишутся вместе с usage'ом на самом ассистент-турне; `ChatMessage.vue` берёт
+  их оттуда, на легаси-записи без атрибуции остаётся fallback на текущие
+  settings (как было).
+- **`audit.ts`** — section-маркеры через `printf "\n…\n"` вместо `echo`. Файлы,
+  cat'нутые без trailing `\n` (`/usr/lib/wb-release` оканчивается на
+  `REPO_PREFIX=…`), склеивали следующий маркер с последней строкой и
+  `splitSections` молча терял секцию (`manualPackages` в audit'е приходил
+  пустым). Теперь маркер всегда на своей строке.
+- **`serial_debug_collect`** — переписан по trap-protected паттерну:
+  `python3` вместо хрупкого sed (идемпотентен после краша),
+  `trap restore_off EXIT INT TERM` (debug:true не остаётся жить вечно при
+  падении journalctl/systemctl), `START_TS=$(date -u)` до `sleep` (окно
+  больше не сдвигается ретроактивно), без `-n 500` (раньше молча обрезало
+  длинные капчи на нагруженной шине).
+- **`mqtt_write`** — у `writeTopic()` и tool-схемы появились опциональные
+  параметры `qos` (0/1/2) и `retain`. Раньше зашитые `{qos: 1, retain: false}`
+  не давали публиковать retained-конфиги. Дефолты не изменились.
+- **Раздутая live-сумма токенов в шапке чата** — `currentChatTokens` суммирует
+  `tokensPrompt` по всем assistant-турнам в `liveTurns`, а каждый `tool-call`
+  во время agent-loop'а пушит в `liveTurns` новый empty-assistant. На каждый
+  такой пустой ассистент потом писался cumulative-снимок `usage` события, и
+  на промежуточных оставались стейл cumulative-значения от прошлых итераций
+  (одни и те же токены засчитывались по нескольку раз). В итоге шапка чата
+  показывала, например, `$0.29` против `$0.08` в sidebar и per-message подвалах
+  — реальный billing $0.08, а шапка обманывала. Теперь `usage`-handler знает
+  границу текущего стрима (`streamStartIdx`) и обнуляет токены на промежуточных
+  ассистентах стрима, оставляя cumulative только на самом последнем — сумма
+  совпадает с DB.
+
+### Added
+- **В подвале каждого ассистент-сообщения — счётчик 🔧 N**, сколько LLM-вызовов
+  с tool-call'ами было между предыдущим ответом/пользовательским сообщением и
+  этим ответом. По tooltip'у объяснение: «в стоимость рядом входит N
+  LLM-вызовов с инструментами в этом ответе — каждый итерационный вызов
+  биллится отдельно». Юзер видит, что $0.05 на финальном тексте включает не
+  только генерацию текста, но и весь chain tool-iterations стрима, и не задаёт
+  вопросов «а где стоимость инструментов».
+- **Два новых tool'а в категории «Системная диагностика»**:
+  - `failed_units` — `systemctl --failed --no-pager`. Первый шаг диагностики
+    «что-то сломалось» — заменяет 2-3 ssh_exec'а, которые модель делала
+    раньше, чтобы понять *что* упало.
+  - `systemd_unit { unit, action }` — один tool вместо ститчинга `is-active`
+    / `show` / `status` / `cat` / `list-dependencies`. `action="status"`
+    (default) отдаёт структурированный объект `{active, sub, load,
+    unitFileState, exitCode, mainPid, since, statusTail}`. `cat` /
+    `list-deps` read-only. `start`/`stop`/`restart`/`reload`/`enable`/
+    `disable`/`mask`/`unmask` — state-changing с тем же HITL-предупреждением,
+    что у `mqtt_write`/`write_file`. Имя юнита через whitelist-regex до
+    шелла; covers сервисы, templated units (`getty@tty1.service`), таймеры,
+    слайсы и пути.
+
 ## [0.13.7] — 2026-05-08
 
 ### Fixed
@@ -286,7 +345,8 @@
   CLI interface...`; для `apt list --upgradable` без свежего `apt-get
   update` подсказывает обновить кэш и подгрузить скилл `controller-update`.
 
-[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.7...HEAD
+[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.8...HEAD
+[0.13.8]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.7...v0.13.8
 [0.13.7]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.6...v0.13.7
 [0.13.6]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.5...v0.13.6
 [0.13.5]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.4...v0.13.5

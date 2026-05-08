@@ -92,6 +92,8 @@ type TurnRow = {
   tokens_cached: number
   total_cost: number
   created_at: number
+  provider: string | null
+  model: string | null
 }
 
 export class ChatStore {
@@ -177,6 +179,7 @@ export class ChatStore {
     id: string,
     turn: ChatTurn,
     usage?: { promptTokens?: number; completionTokens?: number; cachedTokens?: number; totalCost?: number },
+    attribution?: { provider?: string; model?: string },
   ): Chat | undefined {
     const now = Date.now()
     const ord = this.nextOrd(id)
@@ -187,12 +190,16 @@ export class ChatStore {
     const tokensCompletion = usage?.completionTokens ?? 0
     const tokensCached = usage?.cachedTokens ?? 0
     const totalCost = usage?.totalCost ?? 0
+    // Атрибуцию имеет смысл хранить только на assistant-турнах — это то, что
+    // рендерится в подвале сообщения. На user/tool/system она ни к чему.
+    const provider = turn.role === 'assistant' ? (attribution?.provider ?? null) : null
+    const model = turn.role === 'assistant' ? (attribution?.model ?? null) : null
     this.db
       .query(
-        `INSERT INTO turns (chat_id, ord, role, content, tool_call_id, tool_calls, tokens_prompt, tokens_completion, tokens_cached, total_cost, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO turns (chat_id, ord, role, content, tool_call_id, tool_calls, tokens_prompt, tokens_completion, tokens_cached, total_cost, created_at, provider, model)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, ord, turn.role, turn.content, toolCallId, toolCalls, tokensPrompt, tokensCompletion, tokensCached, totalCost, now)
+      .run(id, ord, turn.role, turn.content, toolCallId, toolCalls, tokensPrompt, tokensCompletion, tokensCached, totalCost, now, provider, model)
     this.db.query(`UPDATE chats SET updated_at = ? WHERE id = ?`).run(now, id)
     if (turn.role === 'user') this.maybeAutoTitle(id, turn.content)
     return this.get(id)
@@ -217,7 +224,7 @@ export class ChatStore {
   private loadTurns(chatId: string): ChatTurn[] {
     const rows = this.db
       .query<TurnRow, [string]>(
-        `SELECT role, content, tool_call_id, tool_calls, tokens_prompt, tokens_completion, tokens_cached, total_cost, created_at
+        `SELECT role, content, tool_call_id, tool_calls, tokens_prompt, tokens_completion, tokens_cached, total_cost, created_at, provider, model
            FROM turns WHERE chat_id = ? ORDER BY ord ASC`,
       )
       .all(chatId)
@@ -289,7 +296,11 @@ function rowToTurn(row: TurnRow): ChatTurn {
           tokensCost: row.total_cost,
         }
       : undefined
-    return { role: 'assistant', content: row.content, createdAt: row.created_at, ...(toolCalls?.length ? { toolCalls } : {}), ...tokens }
+    const attribution = {
+      ...(row.provider ? { provider: row.provider } : {}),
+      ...(row.model ? { model: row.model } : {}),
+    }
+    return { role: 'assistant', content: row.content, createdAt: row.created_at, ...(toolCalls?.length ? { toolCalls } : {}), ...tokens, ...attribution }
   }
   if (row.role === 'system') return { role: 'system', content: row.content }
   return { role: 'user', content: row.content }

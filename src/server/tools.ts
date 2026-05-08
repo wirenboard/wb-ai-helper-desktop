@@ -102,7 +102,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       function: {
         name: 'mqtt_write',
         description:
-          'Опубликовать значение в MQTT-топик на контроллере (mosquitto_pub). Для управления используй суффикс /on (например /devices/wb-gpio/controls/A1_OUT/on). HITL: перед вызовом объясни пользователю что делаешь и дождись подтверждения.',
+          'Опубликовать значение в MQTT-топик на контроллере (mosquitto_pub). Для управления используй суффикс /on (например /devices/wb-gpio/controls/A1_OUT/on). По умолчанию qos=1, retain=false — это нужно для команд `/on`. Для записи retained-конфига (например в системные топики или meta-настройки) укажи retain=true. HITL: перед вызовом объясни пользователю что делаешь и дождись подтверждения.',
         parameters: {
           type: 'object',
           properties: {
@@ -114,6 +114,8 @@ export function toolSchemas(): ChatCompletionTool[] {
             },
             topic: { type: 'string' },
             payload: { type: 'string' },
+            qos: { type: 'integer', enum: [0, 1, 2], description: 'MQTT QoS, по умолчанию 1.' },
+            retain: { type: 'boolean', description: 'Опубликовать как retained, по умолчанию false.' },
           },
           required: ['sn', 'topic', 'payload'],
           additionalProperties: false,
@@ -302,6 +304,40 @@ export function toolSchemas(): ChatCompletionTool[] {
           type: 'object',
           properties: { sn: { type: 'string', description: 'Серийный номер контроллера.' } },
           required: ['sn'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'failed_units',
+        description: 'Список упавших systemd-юнитов на контроллере (`systemctl --failed`). Один из первых шагов диагностики «что-то сломалось» — быстрее, чем читать journalctl целиком.',
+        parameters: {
+          type: 'object',
+          properties: { sn: { type: 'string', description: 'Серийный номер контроллера.' } },
+          required: ['sn'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'systemd_unit',
+        description: 'Управление systemd-юнитом и его инспекция. Действие `status` (по умолчанию) возвращает структурированный объект {active, sub, load, unitFileState, exitCode, mainPid, since, statusTail} — для большинства диагностических вопросов этого достаточно. `cat` (юнит со всеми drop-ins) и `list-deps` тоже read-only. Действия, изменяющие состояние, — `start`/`stop`/`restart`/`reload`/`enable`/`disable`/`mask`/`unmask`: HITL — перед вызовом объясни пользователю что делаешь и дождись подтверждения. Имя юнита допускает суффикс или нет (`wb-mqtt-serial` ≡ `wb-mqtt-serial.service`).',
+        parameters: {
+          type: 'object',
+          properties: {
+            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            unit: { type: 'string', description: 'Имя юнита (wb-mqtt-serial.service, fstrim.timer, mosquitto). Суффикс .service можно опустить.' },
+            action: {
+              type: 'string',
+              enum: ['status', 'start', 'stop', 'restart', 'reload', 'enable', 'disable', 'mask', 'unmask', 'cat', 'list-deps'],
+              description: 'Действие. По умолчанию status.',
+            },
+          },
+          required: ['sn', 'unit'],
           additionalProperties: false,
         },
       },
@@ -1009,11 +1045,15 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
       const targets = resolveTargets(args['sn'], ctx)
       const topic = String(args['topic'] ?? '')
       const payload = String(args['payload'] ?? '')
+      const rawQos = args['qos']
+      const qos: 0 | 1 | 2 | undefined =
+        rawQos === 0 || rawQos === 1 || rawQos === 2 ? (rawQos as 0 | 1 | 2) : undefined
+      const retain = typeof args['retain'] === 'boolean' ? (args['retain'] as boolean) : undefined
       const out: Record<string, string> = {}
       await Promise.all(
         targets.map(async (c) => {
           try {
-            await ctx.mqtt.writeTopic(c, topic, payload)
+            await ctx.mqtt.writeTopic(c, topic, payload, { qos, retain })
             out[c.sn] = 'ok'
           } catch (e: any) {
             out[c.sn] = `error: ${e?.message ?? String(e)}`
@@ -1208,6 +1248,63 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
       return JSON.stringify(await ctx.ssh.getMetrics(c), null, 2)
     }
 
+    case 'failed_units': {
+      const c = resolve1(args['sn'], ctx)
+      const r = await ctx.ssh.exec(c, 'systemctl --failed --no-pager', 10000)
+      return JSON.stringify({ output: r.stdout.trim() }, null, 2)
+    }
+
+    case 'systemd_unit': {
+      const c = resolve1(args['sn'], ctx)
+      const unit = String(args['unit'] ?? '')
+      const action = (args['action'] ?? 'status') as string
+      // Whitelist allowed unit-name characters before passing to systemctl.
+      // Covers normal services (wb-mqtt-serial.service), templated units
+      // (getty@tty1.service), timers, slices and paths.
+      if (!/^[A-Za-z0-9@._:\-]+$/.test(unit)) {
+        return JSON.stringify({ error: `Invalid unit name "${unit}". Allowed: A-Za-z0-9, @, ., _, :, -.` }, null, 2)
+      }
+      if (action === 'status') {
+        const sh = `systemctl is-active '${unit}' 2>/dev/null || true; echo ===WB-SD===; systemctl show '${unit}' -p ActiveState,LoadState,SubState,UnitFileState,Result,ExecMainStatus,ExecMainExitTimestamp,ExecMainPID,ActiveEnterTimestamp --no-pager 2>/dev/null || true; echo ===WB-SD===; systemctl status '${unit}' --no-pager -n 5 2>&1 || true`
+        const r = await ctx.ssh.exec(c, sh, 10000)
+        const parts = r.stdout.split('===WB-SD===')
+        const active = (parts[0] ?? '').trim()
+        const props: Record<string, string> = {}
+        for (const line of (parts[1] ?? '').split('\n')) {
+          const eq = line.indexOf('=')
+          if (eq > 0) props[line.slice(0, eq).trim()] = line.slice(eq + 1).trim()
+        }
+        const tail = (parts[2] ?? '').trim()
+        return JSON.stringify({
+          unit,
+          active,
+          loadState: props['LoadState'],
+          subState: props['SubState'],
+          unitFileState: props['UnitFileState'],
+          result: props['Result'],
+          exitCode: props['ExecMainStatus'] ? Number(props['ExecMainStatus']) : undefined,
+          mainPid: props['ExecMainPID'] && props['ExecMainPID'] !== '0' ? Number(props['ExecMainPID']) : undefined,
+          activeSince: props['ActiveEnterTimestamp'],
+          exitedAt: props['ExecMainExitTimestamp'],
+          statusTail: tail,
+        }, null, 2)
+      }
+      if (action === 'cat') {
+        const r = await ctx.ssh.exec(c, `systemctl cat '${unit}' 2>&1`, 10000)
+        return JSON.stringify({ unit, content: r.stdout, ok: r.code === 0 }, null, 2)
+      }
+      if (action === 'list-deps') {
+        const r = await ctx.ssh.exec(c, `systemctl list-dependencies '${unit}' --no-pager 2>&1`, 10000)
+        return JSON.stringify({ unit, dependencies: r.stdout, ok: r.code === 0 }, null, 2)
+      }
+      // start/stop/restart/reload/enable/disable/mask/unmask
+      const r = await ctx.ssh.exec(c, `systemctl ${action} '${unit}' 2>&1; echo ===CODE=$?`, 30000)
+      const m = r.stdout.match(/===CODE=(\d+)/)
+      const code = m ? Number(m[1]) : -1
+      const output = m ? r.stdout.slice(0, r.stdout.lastIndexOf('===CODE=')).trim() : r.stdout
+      return JSON.stringify({ unit, action, exitCode: code, ok: code === 0, output }, null, 2)
+    }
+
     case 'write_file': {
       const c = resolve1(args['sn'], ctx)
       const path = String(args['path'] ?? '')
@@ -1393,17 +1490,33 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
       const c = resolve1(args['sn'], ctx)
       const duration = typeof args['durationSec'] === 'number' ? Math.min(300, Math.max(10, args['durationSec'])) : 30
       const logPath = '/mnt/data/ai/wb-ai-helper/diag/debug-serial.log'
-      const cmd = [
-        `mkdir -p /mnt/data/ai/wb-ai-helper/diag`,
-        `sed -i 's/"debug" *: *false/"debug": true/' /etc/wb-mqtt-serial.conf`,
-        `systemctl restart wb-mqtt-serial`,
+      // Important properties of this script (each one was a real bug in the previous && chain):
+      //   - JSON edit via python3, not `sed`: stays correct if the file already has
+      //     "debug": true (e.g. previous run crashed before restore) and preserves layout.
+      //   - `trap restore_off EXIT INT TERM`: even if journalctl/systemctl fails halfway,
+      //     debug is forced back to false. Otherwise debug:true would survive forever
+      //     and flood the disk on a busy bus.
+      //   - $START_TS captured BEFORE sleep, used as `journalctl --since "$START_TS"`:
+      //     the previous `--since '$((duration+5)) seconds ago'` evaluated retroactively
+      //     after sleep, so the window slipped if the system was busy.
+      //   - No `-n 500`: at debug:true the driver writes ~25 lines/sec, so a 60-sec capture
+      //     produces ~1500 lines — `-n 500` silently truncated to the last 500.
+      const script = [
+        'CONF=/etc/wb-mqtt-serial.conf',
+        `LOGFILE=${logPath}`,
+        'mkdir -p /mnt/data/ai/wb-ai-helper/diag',
+        'restore_off() { python3 -c "import json; c=json.load(open(\\"$CONF\\")); c[\\"debug\\"]=False; json.dump(c,open(\\"$CONF\\",\\"w\\"),indent=2)" 2>/dev/null || true; systemctl restart wb-mqtt-serial >/dev/null 2>&1 || true; echo "[serial_debug_collect] restored debug:false"; }',
+        'trap restore_off EXIT INT TERM',
+        `python3 -c "import json; c=json.load(open('$CONF')); c['debug']=True; json.dump(c,open('$CONF','w'),indent=2)"`,
+        'systemctl restart wb-mqtt-serial',
+        'sleep 1',
+        'START_TS=$(date -u +%Y-%m-%dT%H:%M:%S)',
+        `echo "[serial_debug_collect] collecting ${duration}s from $START_TS"`,
         `sleep ${duration}`,
-        `journalctl -u wb-mqtt-serial --since '${duration + 5} seconds ago' -n 500 --no-pager > ${logPath}`,
-        `sed -i 's/"debug" *: *true/"debug": false/' /etc/wb-mqtt-serial.conf`,
-        `systemctl restart wb-mqtt-serial`,
-        `echo "debug collected: ${duration}s, $(wc -l < ${logPath}) lines, path: ${logPath}"`,
-      ].join(' && ')
-      const r = await ctx.ssh.jobStart(c, cmd, `debug serial ${duration}s`)
+        'journalctl -u wb-mqtt-serial --since "$START_TS" --no-pager > "$LOGFILE"',
+        'echo "[serial_debug_collect] saved $(wc -l < "$LOGFILE") lines to $LOGFILE"',
+      ].join('; ')
+      const r = await ctx.ssh.jobStart(c, script, `debug serial ${duration}s`)
       if (r.jobId) {
         trackJob(ctx.sessionId, r.jobId, c.sn, `debug serial ${duration}s`)
       }

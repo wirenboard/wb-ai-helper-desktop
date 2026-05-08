@@ -14,7 +14,7 @@ import yaml from 'highlight.js/lib/languages/yaml'
 import ini from 'highlight.js/lib/languages/ini'
 import type { ChatItem, ChatItemToolCall, Settings } from '../api'
 import { api, calcCost, PROVIDER_INFO } from '../api'
-import { fmtCost, fmtSize, fmtTime } from '../utils'
+import { fmtCost, fmtSize, fmtTime, plural } from '../utils'
 
 hljs.registerLanguage('bash', bash); hljs.registerLanguage('sh', bash)
 hljs.registerLanguage('json', json)
@@ -50,22 +50,39 @@ function renderMd(text: string): string {
 
 const props = defineProps<{ item: ChatItem; chatId: string; settings?: Settings | null }>()
 
-const providerLabel = computed(() => props.settings?.provider ? PROVIDER_INFO[props.settings.provider].label : '')
+// Provider/model в подвале — приоритет данные сохранённые на сам turn
+// (`item.provider`/`item.model`). Падаем на текущие settings только для
+// легаси-турнов, у которых атрибуции в БД ещё нет (миграция v0.13.8 заводит
+// колонки provider/model, но старые записи остаются с NULL). Без этого после
+// переключения провайдера прошлые сообщения переезжали на новый ярлык/валюту.
+const turnProvider = computed(() =>
+  (props.item.type === 'assistant_text' && props.item.provider)
+    ? props.item.provider
+    : (props.settings?.provider ?? null),
+)
+const turnModel = computed(() =>
+  (props.item.type === 'assistant_text' && props.item.model)
+    ? props.item.model
+    : (props.settings?.model ?? ''),
+)
+const providerLabel = computed(() => turnProvider.value ? PROVIDER_INFO[turnProvider.value].label : '')
 
 const messageCost = computed(() => {
   if (props.item.type !== 'assistant_text') return null
-  if (!props.settings) return null
   const i = props.item
   const p = i.tokensPrompt ?? 0
   const c = i.tokensCompletion ?? 0
   const k = i.tokensCached ?? 0
   if (!p && !c && !i.tokensCost) return null
+  // Цена и валюта тоже идут от turn-провайдера, иначе RUB-историю мы бы
+  // отрендерили в долларах (или наоборот) после смены активного провайдера.
+  const provider = turnProvider.value ?? undefined
   return calcCost(p, c, k, {
-    provider: props.settings.provider,
+    provider,
     tokensCost: i.tokensCost,
-    priceInput: props.settings.priceInput,
-    priceOutput: props.settings.priceOutput,
-    priceCached: props.settings.priceCached,
+    priceInput: props.settings?.priceInput,
+    priceOutput: props.settings?.priceOutput,
+    priceCached: props.settings?.priceCached,
   })
 })
 
@@ -208,13 +225,16 @@ async function downloadViaFetch(url: string, name: string) {
         @click="copyText"
       >{{ copied ? '✓' : '⎘' }}</button>
       <div ref="bubbleEl" v-html="assistantHtml" />
-      <div v-if="item.tokensPrompt || item.tokensCompletion || item.tokensCost || item.createdAt || settings?.model" class="msg-footer">
-        <span v-if="settings?.provider || settings?.model" class="footer-provider">
-          <template v-if="settings?.provider">{{ providerLabel }}</template><template v-if="settings?.model"> · {{ settings.model }}</template>
+      <div v-if="item.tokensPrompt || item.tokensCompletion || item.tokensCost || item.createdAt || turnModel" class="msg-footer">
+        <span v-if="turnProvider || turnModel" class="footer-provider">
+          <template v-if="turnProvider">{{ providerLabel }}</template><template v-if="turnModel"> · {{ turnModel }}</template>
         </span>
-        <span class="footer-tokens" v-if="item.tokensPrompt || item.tokensCompletion || messageCost">
-          ↑{{ item.tokensPrompt ?? 0 }} ↓{{ item.tokensCompletion ?? 0 }}<template v-if="item.tokensCached"> ⊙{{ item.tokensCached }}</template><template v-if="messageCost"> · {{ fmtCost(messageCost) }}</template>
-        </span>
+        <span
+          class="footer-tokens"
+          v-if="item.tokensPrompt || item.tokensCompletion || messageCost || item.toolCallsCount"
+        ><template v-if="item.toolCallsCount"
+          ><span :title="`В стоимость рядом входит ${item.toolCallsCount} ${plural(item.toolCallsCount, ['LLM-вызов с инструментом', 'LLM-вызова с инструментами', 'LLM-вызовов с инструментами'])} в этом ответе — каждый итерационный вызов биллится отдельно.`">🔧 {{ item.toolCallsCount }}</span> · </template
+        >↑{{ item.tokensPrompt ?? 0 }} ↓{{ item.tokensCompletion ?? 0 }}<template v-if="item.tokensCached"> ⊙{{ item.tokensCached }}</template><template v-if="messageCost"> · {{ fmtCost(messageCost) }}</template></span>
         <span v-if="item.createdAt" class="footer-time">{{ fmtTime(item.createdAt) }}</span>
       </div>
     </div>

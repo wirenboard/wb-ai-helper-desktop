@@ -2,36 +2,41 @@ import type { SshPool } from './ssh.ts'
 import type { Controller } from './discovery.ts'
 
 const SECTION = '===WB-AUDIT==='
+// Marker is emitted via `printf "\n…\n"` (not `echo`) so it always lands on its own
+// line. Some sections cat files without a trailing newline (e.g. /usr/lib/wb-release):
+// with `echo` the next marker would glue onto the previous content as
+// `REPO_PREFIX====WB-AUDIT===next` and splitSections would silently drop the section.
+const M = (name: string) => `printf "\\n${SECTION}${name}\\n"`
 const COLLECT_SCRIPT = [
-  `echo ${SECTION}fw`,
+  M('fw'),
   'cat /etc/wb-fw-version 2>/dev/null || true',
-  `echo ${SECTION}release`,
+  M('release'),
   'cat /usr/lib/wb-release 2>/dev/null || true',
-  `echo ${SECTION}manual`,
+  M('manual'),
   'apt-mark showmanual 2>/dev/null | sort',
-  `echo ${SECTION}installed`,
+  M('installed'),
   "dpkg-query -W -f='${Package}\\n' 2>/dev/null | sort",
-  `echo ${SECTION}enabled`,
+  M('enabled'),
   "systemctl list-unit-files --state=enabled --no-legend 2>/dev/null | awk '{print $1}' | sort",
-  `echo ${SECTION}units`,
+  M('units'),
   "find /etc/systemd/system -maxdepth 2 -name '*.service' -type f 2>/dev/null | sort",
-  `echo ${SECTION}cron`,
+  M('cron'),
   "for d in /etc/cron.d /etc/cron.hourly /etc/cron.daily /etc/cron.weekly /var/spool/cron/crontabs; do " +
     "ls -A \"$d\" 2>/dev/null | grep -v '^\\.placeholder$' | sed \"s|^|$d/|\"; done",
-  `echo ${SECTION}opt`,
+  M('opt'),
   'ls -A /opt 2>/dev/null',
-  `echo ${SECTION}localbin`,
+  M('localbin'),
   'ls -A /usr/local/bin 2>/dev/null',
-  `echo ${SECTION}localsbin`,
+  M('localsbin'),
   'ls -A /usr/local/sbin 2>/dev/null',
-  `echo ${SECTION}symlinks`,
+  M('symlinks'),
   'for p in /etc/wb-rules /etc/wb-rules-modules /etc/wb-mqtt-serial.conf /etc/wb-mqtt-serial.conf.d; do ' +
     'echo "$p|$(readlink -f $p 2>/dev/null)"; done',
-  `echo ${SECTION}mntdata`,
+  M('mntdata'),
   'shopt -s nullglob dotglob; for d in /mnt/data/*/; do case "$(basename "$d")" in etc|var|root|snapshots|backups|uploads|.docker|ai|.wb-restore|.wb-update|lost+found) continue;; *) du -sh "$d" 2>/dev/null;; esac; done; shopt -u dotglob',
-  `echo ${SECTION}dpkg`,
+  M('dpkg'),
   "dpkg --verify 2>/dev/null | grep -v -E '/usr/share/(doc|locale|man|lintian|gtk-doc|gnome|info|help)'",
-  `echo ${SECTION}end`
+  M('end')
 ].join('; ')
 
 export function splitSections(stdout: string): Record<string, string[]> {
