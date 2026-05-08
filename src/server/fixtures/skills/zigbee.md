@@ -55,6 +55,54 @@ Zigbee-адаптер — модуль расширения **WBE2R-R-ZIGBEE** (
 
 Для wb-mqtt-zigbee (testing): `mqtt_list_topics(sn, prefix="/devices/zigbee_")`.
 
+## Z2M в Docker
+
+Альтернатива пакету `zigbee2mqtt` — официальный образ `koenkk/zigbee2mqtt`. Полезно когда нужна свежая версия Z2M раньше, чем подъедет в репозиторий, или если хочется изоляции.
+
+Типичный `/mnt/data/root/zigbee2mqtt/docker-compose.yml`:
+
+```yaml
+services:
+  zigbee2mqtt:
+    image: koenkk/zigbee2mqtt:latest
+    container_name: zigbee2mqtt
+    restart: unless-stopped
+    network_mode: host             # чтобы видеть mosquitto на localhost:1883
+    volumes:
+      - ./data:/app/data
+      - /run/udev:/run/udev:ro
+    devices:
+      - /dev/ttyMOD1:/dev/ttyMOD1  # порт зависит от слота WBE2R
+    environment:
+      - TZ=Europe/Moscow
+```
+
+Старт: `docker compose up -d` (НЕ `docker-compose` — `docker compose` без дефиса; сервер блокирует устаревший syntax).
+
+Конфиг внутри контейнера маунтится из `./data/configuration.yaml`:
+
+```yaml
+mqtt:
+  base_topic: zigbee2mqtt
+  server: mqtt://localhost:1883
+serial:
+  port: /dev/ttyMOD1
+  adapter: ezsp                   # для WBE2R-R-ZIGBEE v.2; zstack/deconz для других
+permit_join: false
+homeassistant: false
+frontend:
+  port: 8080
+```
+
+Логи: `docker logs -f zigbee2mqtt | tail -100`. Перезапуск конфига: `docker compose restart`.
+
+**Грабли Docker-варианта:**
+- Без `network_mode: host` mosquitto на `localhost:1883` не виден — сделай host или укажи внешний IP контроллера.
+- Без проброса `/dev/ttyMODx` в `devices:` контейнер не видит USB-стик/модуль.
+- Конфиг WB-конвертера (`wb-mqtt-zigbee` / `wb-zigbee2mqtt`) ставится **на хост**, не в контейнер — он подписывается на топики `zigbee2mqtt/...` через тот же mosquitto.
+- При апгрейде образа (`docker compose pull && docker compose up -d`) — конфиг и база устройств в `./data/` сохраняются.
+- `docker ps` без sudo на контроллере работает, но ты входишь как root через SSH.
+
 ## Спаривание
 
 Через веб-интерфейс контроллера: вкладка Devices → карточка Zigbee2mqtt → включить «Permit join» → зажать кнопку pair на устройстве → дождаться подтверждения → выключить Permit join.
