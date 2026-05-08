@@ -7,6 +7,24 @@
 
 ## [Unreleased]
 
+## [0.13.17] — 2026-05-08
+
+### Added
+- **`wb-serial-templates`** — последний из 7 system-стек скиллов из бэклога
+  `wb-ai-skills/wb-ai-helper-analysis.md`. Создание собственных Modbus-
+  шаблонов для `wb-mqtt-serial`: где живут шаблоны (`/usr/share/...` пакетные
+  vs `/etc/wb-mqtt-serial.conf.d/templates/` пользовательские, переживают
+  апгрейд), полный набор полей канала (`reg_type`, `format`, `scale`,
+  `word_order`, `condition`, `error_value`, `unsupported_value` и т.п.),
+  `parameters` для firmware-настроек, `groups` для UI-иерархии, `translations`
+  для i18n. Workflow от чтения мануала до бэкапа в `/wb-controller-backup`.
+  Готовый пример 1-фазного счётчика электроэнергии. Грабли:
+  endianness (множитель 65535 при ошибке `word_order`), 0-based vs 1-based
+  адреса, кириллица в `device.id`, дублирующий `device_type`.
+
+  Итого 24 системных скилла (было 23 в v0.13.16). Все 7 скиллов из
+  бэклога опубликованы.
+
 ## [0.13.16] — 2026-05-08
 
 ### Added
