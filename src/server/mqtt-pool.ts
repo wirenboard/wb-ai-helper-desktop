@@ -75,10 +75,17 @@ export class MqttPool {
     })
   }
 
-  async writeTopic(c: Controller, topic: string, payload: string): Promise<void> {
+  async writeTopic(
+    c: Controller,
+    topic: string,
+    payload: string,
+    opts: { qos?: 0 | 1 | 2; retain?: boolean } = {},
+  ): Promise<void> {
+    const qos = opts.qos ?? 1
+    const retain = opts.retain ?? false
     const conn = await this.connect(c)
     await new Promise<void>((resolve, reject) => {
-      conn.client.publish(topic, payload, { qos: 1, retain: false }, (err) =>
+      conn.client.publish(topic, payload, { qos, retain }, (err) =>
         err ? reject(err) : resolve(),
       )
     })
