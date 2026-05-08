@@ -119,8 +119,10 @@ onBeforeUnmount(() => ro?.disconnect())
 
 <template>
   <div ref="scrollEl" class="msg-list">
-    <!-- Empty state -->
-    <div v-if="!items.length && !streaming" class="empty-state">
+    <!-- Empty state. Welcome ⚙ system_event (model/tools/skills) и баннеры
+         retry-wait тоже попадают в items, но это не «настоящие» сообщения —
+         если в чате только они, считаем чат пустым и показываем suggestion'ы. -->
+    <div v-if="!items.some((i) => i.type !== 'system_event') && !streaming" class="empty-state">
       <div v-for="group in SUGGESTIONS" :key="group.label" class="suggestion-group">
         <div class="suggestion-label">{{ group.label }}</div>
         <div class="suggestions">

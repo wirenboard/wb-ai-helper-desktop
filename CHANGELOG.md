@@ -7,6 +7,21 @@
 
 ## [Unreleased]
 
+## [0.13.7] — 2026-05-08
+
+### Fixed
+- Регрессия v0.13.6: welcome system_event при создании чата ломал две вещи.
+  (1) Заголовок чата автогенерировался из первого user-турна, и им оказывался
+  `[Система] OpenAI · gpt-5.4-mini · …` — в сайдбаре чатов и в шапке. Теперь
+  `maybeAutoTitle` пропускает турны с префиксом `[Система]`: счётчик и сам
+  title считаются по «настоящим» пользовательским сообщениям. (2) В пустом
+  чате пропадали suggestion-кнопки (Обзор / Диагностика / Данные), потому
+  что welcome-турн делал `items.length` ненулевым; ChatMessageList теперь
+  считает чат пустым, если нет ни одного **не-`system_event`** items.
+
+### Note
+- v0.13.6 был снят с публикации из-за этих регрессий — пользуйтесь v0.13.7.
+
 ## [0.13.6] — 2026-05-08
 
 ### Fixed
@@ -271,7 +286,8 @@
   CLI interface...`; для `apt list --upgradable` без свежего `apt-get
   update` подсказывает обновить кэш и подгрузить скилл `controller-update`.
 
-[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.6...HEAD
+[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.7...HEAD
+[0.13.7]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.6...v0.13.7
 [0.13.6]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.5...v0.13.6
 [0.13.5]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.4...v0.13.5
 [0.13.4]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.3...v0.13.4

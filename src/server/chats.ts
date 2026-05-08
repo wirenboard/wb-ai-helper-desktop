@@ -234,9 +234,15 @@ export class ChatStore {
   }
 
   private maybeAutoTitle(chatId: string, content: string) {
+    // Турны с префиксом «[Система]» — это ⚙ system_event'ы (welcome line,
+    // 429-retry-баннеры, уведомления о завершении джобы), а не настоящие
+    // пользовательские сообщения. Не считаем их за обычный user-turn ни
+    // в условии срабатывания, ни как источник заголовка — иначе чат уезжает
+    // с заголовком вида «[Система] OpenAI · gpt-5.4-mini · …».
+    if (content.startsWith('[Система]')) return
     const r = this.db
       .query<{ n: number }, [string]>(
-        `SELECT COUNT(*) AS n FROM turns WHERE chat_id = ? AND role = 'user'`,
+        `SELECT COUNT(*) AS n FROM turns WHERE chat_id = ? AND role = 'user' AND content NOT LIKE '[Система]%'`,
       )
       .get(chatId)
     if ((r?.n ?? 0) === 1) {
