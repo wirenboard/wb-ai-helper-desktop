@@ -159,4 +159,97 @@ describe('ChatStore', () => {
     expect(prompt).toContain('SN1')
     expect(prompt).toContain('SN2')
   })
+
+  // Per-turn provider/model attribution (v0.13.8). Цель — чтобы подвал
+  // ассистент-сообщения показывал того провайдера/модель/валюту, кем оно
+  // было реально сгенерено, а не текущие глобальные settings. После
+  // переключения провайдера прошлые сообщения должны остаться без изменений.
+  test('appendTurn() persists provider/model attribution on assistant turn', () => {
+    const chat = store.create('Attribution test')
+    store.appendTurn(
+      chat.id,
+      { role: 'assistant', content: 'reply A' },
+      { promptTokens: 100, completionTokens: 50 },
+      { provider: 'aitunnel', model: 'gpt-4.1-mini' },
+    )
+    const fetched = store.get(chat.id)!
+    const asst = fetched.turns.find((t) => t.role === 'assistant')
+    expect(asst).toBeDefined()
+    if (asst?.role === 'assistant') {
+      expect(asst.provider).toBe('aitunnel')
+      expect(asst.model).toBe('gpt-4.1-mini')
+    }
+  })
+
+  test('appendTurn() does NOT persist attribution on user/tool/system turns', () => {
+    const chat = store.create('Attribution scope')
+    store.appendTurn(
+      chat.id,
+      { role: 'user', content: 'hi' },
+      undefined,
+      { provider: 'openai', model: 'gpt-4o' },
+    )
+    store.appendTurn(
+      chat.id,
+      { role: 'tool', toolCallId: 't1', content: 'ok' },
+      undefined,
+      { provider: 'openai', model: 'gpt-4o' },
+    )
+    const fetched = store.get(chat.id)!
+    const user = fetched.turns.find((t) => t.role === 'user')
+    const tool = fetched.turns.find((t) => t.role === 'tool')
+    // Attribution имеет смысл только на assistant-турнах, в подвале которых
+    // она и рендерится. На user/tool — лишние данные, не пишем.
+    expect((user as any)?.provider).toBeUndefined()
+    expect((tool as any)?.provider).toBeUndefined()
+  })
+
+  test('appendTurn() works without attribution (legacy / pre-migration turns)', () => {
+    const chat = store.create('No attribution')
+    store.appendTurn(
+      chat.id,
+      { role: 'assistant', content: 'reply' },
+      { promptTokens: 10, completionTokens: 5 },
+      // attribution не передаётся — должно работать как до v0.13.8
+    )
+    const fetched = store.get(chat.id)!
+    const asst = fetched.turns.find((t) => t.role === 'assistant')
+    if (asst?.role === 'assistant') {
+      expect(asst.provider).toBeUndefined()
+      expect(asst.model).toBeUndefined()
+    }
+  })
+
+  // Auto-title (v0.13.7): welcome system_event и retry-баннеры приходят как
+  // user-турны с префиксом «[Система]» — в качестве заголовка чата они не
+  // годятся, его должна давать первая «настоящая» реплика юзера.
+  test('auto-title skips [Система] user-turns', () => {
+    const chat = store.create()
+    expect(chat.title).toBe('Новый чат')
+    // Welcome system_event при создании чата — не должен становиться заголовком.
+    store.appendTurn(chat.id, {
+      role: 'user',
+      content: '[Система] OpenAI · gpt-5.4-mini · инструменты: 50 · скиллы: 17',
+    })
+    let fetched = store.get(chat.id)!
+    expect(fetched.title).toBe('Новый чат')
+    // Real user message — должна выставить title.
+    store.appendTurn(chat.id, { role: 'user', content: 'Какая версия прошивки?' })
+    fetched = store.get(chat.id)!
+    expect(fetched.title).toBe('Какая версия прошивки?')
+  })
+
+  test('auto-title triggers on FIRST real user message even if [Система] turns precede it', () => {
+    const chat = store.create()
+    // Несколько подряд welcome/retry баннеров — title должен оставаться дефолтным.
+    store.appendTurn(chat.id, { role: 'user', content: '[Система] welcome line' })
+    store.appendTurn(chat.id, { role: 'user', content: '[Система] ⏳ retry-wait 10s' })
+    store.appendTurn(chat.id, { role: 'user', content: '[Система] ещё одно уведомление' })
+    let fetched = store.get(chat.id)!
+    expect(fetched.title).toBe('Новый чат')
+    // Первая реальная реплика юзера — title апдейтится.
+    store.appendTurn(chat.id, { role: 'user', content: 'привет' })
+    fetched = store.get(chat.id)!
+    expect(fetched.title).toBe('привет')
+  })
 })

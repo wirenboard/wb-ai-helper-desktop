@@ -125,3 +125,71 @@ describe('turnsToItems: system turns', () => {
     expect(items[0]).toMatchObject({ type: 'user' })
   })
 })
+
+// 🔧 N в подвале ассистент-сообщения. Цель — показать юзеру, что в стоимость
+// рядом входят ВСЕ tool-итерации стрима, а не только финальный LLM-вызов с
+// текстом. Счётчик перезагружается на каждом user-сообщении и каждом
+// assistant_text — чтобы соседние стримы не сложились в один счётчик.
+describe('turnsToItems: toolCallsCount on assistant_text', () => {
+  test('zero when no tools precede the assistant_text', () => {
+    const items = turns([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'hello back' },
+    ])
+    const at = items.find((i) => i.type === 'assistant_text') as any
+    expect(at.toolCallsCount).toBe(0)
+  })
+
+  test('counts tools called between user and assistant_text', () => {
+    const items = turns([
+      { role: 'user', content: 'find controllers' },
+      { role: 'assistant', content: '', toolCalls: [
+        { id: 'c1', name: 'list_controllers', arguments: '{}' },
+        { id: 'c2', name: 'probe_controller', arguments: '{"sn":"X"}' },
+      ] },
+      { role: 'tool', toolCallId: 'c1', content: '[]' },
+      { role: 'tool', toolCallId: 'c2', content: 'ok' },
+      { role: 'assistant', content: 'Found 1 controller.' },
+    ])
+    const finalText = items.find((i) => i.type === 'assistant_text') as any
+    expect(finalText.toolCallsCount).toBe(2)
+  })
+
+  test('resets counter on each assistant_text', () => {
+    const items = turns([
+      { role: 'user', content: 'do many things' },
+      { role: 'assistant', content: 'first', toolCalls: [
+        { id: 'c1', name: 'a', arguments: '{}' },
+        { id: 'c2', name: 'b', arguments: '{}' },
+      ] },
+      { role: 'tool', toolCallId: 'c1', content: 'r1' },
+      { role: 'tool', toolCallId: 'c2', content: 'r2' },
+      { role: 'assistant', content: 'final', toolCalls: [
+        { id: 'c3', name: 'c', arguments: '{}' },
+      ] },
+      { role: 'tool', toolCallId: 'c3', content: 'r3' },
+    ])
+    const texts = items.filter((i) => i.type === 'assistant_text') as any[]
+    expect(texts).toHaveLength(2)
+    // "first" — 2 tool_call'а перед ним (c1, c2 в том же turn'е, но они уходят
+    // в items раньше assistant_text согласно flow turnsToItems)
+    expect(texts[0].toolCallsCount).toBe(2)
+    // "final" — 1 tool_call между "first" и "final" (c3)
+    expect(texts[1].toolCallsCount).toBe(1)
+  })
+
+  test('resets counter on user message — tools from previous stream do not leak', () => {
+    const items = turns([
+      { role: 'user', content: 'q1' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'a', arguments: '{}' }] },
+      { role: 'tool', toolCallId: 'c1', content: 'r' },
+      { role: 'assistant', content: 'answer 1' },
+      { role: 'user', content: 'q2' },
+      { role: 'assistant', content: 'answer 2' },
+    ])
+    const texts = items.filter((i) => i.type === 'assistant_text') as any[]
+    expect(texts).toHaveLength(2)
+    expect(texts[0].toolCallsCount).toBe(1) // 1 инструмент перед "answer 1"
+    expect(texts[1].toolCallsCount).toBe(0) // user q2 сбросил счётчик
+  })
+})
