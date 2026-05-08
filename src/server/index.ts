@@ -74,6 +74,10 @@ function resolveBaseUrl(s: Settings): string | undefined {
   return def || undefined
 }
 
+// Возврат seedSystemSkills используется в POST /api/chats: при создании чата
+// юзеру в первой строке (system_event) показывается «Модель: X · инструменты:
+// N · скиллы: M», а если M=0 — рядом ⚠ предупреждение о баге сборки. Так
+// проблема видна в UI без копания в логах сервера.
 seedSystemSkills(db)
 
 const discovery = new Discovery(db)
@@ -335,7 +339,20 @@ app.get('/api/chats', (c) => c.json({ chats: chats.list() }))
 app.post('/api/chats', async (c) => {
   const body = await c.req.json().catch(() => ({}))
   const chat = chats.create(body.title, Array.isArray(body.contextSns) ? body.contextSns : [])
-  return c.json(chat)
+  // Приветственный system_event с тем, что юзер должен видеть до первого
+  // сообщения: что за модель, сколько инструментов и скиллов сейчас заряжено.
+  // Тот же канал, что у уведомлений «джоба завершилась» (user-turn с префиксом
+  // «[Система]» рендерится фронтом как ⚙ system_event). Если скиллов 0 —
+  // сразу пишем предупреждение в этой же строке: иначе про багу сборки никто
+  // не узнает (console.error на сервере в Electron-приложении не виден).
+  const systemSkills = listSkills(db).filter((s) => s.origin === 'system').length
+  const toolsCount = toolSchemas().length
+  const modelLine = llm?.model
+    ? `Модель: ${llm.model} · инструменты: ${toolsCount} · скиллы: ${systemSkills}`
+    : `Модель: не настроена · инструменты: ${toolsCount} · скиллы: ${systemSkills}`
+  const warning = systemSkills === 0 ? ' ⚠ системные скиллы не загружены (бага сборки)' : ''
+  chats.appendTurn(chat.id, { role: 'user', content: `[Система] ${modelLine}${warning}` })
+  return c.json(chats.get(chat.id))
 })
 
 app.get('/api/chats/:id', (c) => {

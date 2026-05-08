@@ -111,7 +111,7 @@ function pruneSystemSkillsNotIn(db: DbHandle, names: string[]): void {
   db.exec(`DELETE FROM skills WHERE origin = 'system' AND name NOT IN (${list})`)
 }
 
-/** Seed system skills into the DB. Called at startup.
+/** Seed system skills into the DB. Called at startup. Returns the loaded count.
  *
  *  Источник может быть один из двух:
  *    - SKILL_FILES (из embed-skills-manifest.ts) — заполняется на сборке скриптом
@@ -121,9 +121,14 @@ function pruneSystemSkillsNotIn(db: DbHandle, names: string[]): void {
  *      правки .md (рестарт сервера → re-seed).
  *
  *  ENOENT в dev-режиме раньше глотался молча, и БД оставалась пустой без признаков
- *  ошибки. Теперь обязательно логируется, чтобы регрессия билда не уехала в релиз.
+ *  ошибки. Теперь:
+ *    - на сервере — `console.error`;
+ *    - возвращаемый count позволяет вызывающему (index.ts) выкинуть warning в чат
+ *      через SSE `error` event — пользователь увидит «⚠ …» прямо при первом
+ *      запросе, а не будет ловить ENOENT в логах сервера, в которые никто не
+ *      заглядывает.
  */
-export function seedSystemSkills(db: DbHandle): void {
+export function seedSystemSkills(db: DbHandle): number {
   const embedded = Object.keys(SKILL_FILES).length > 0
   let entries: Array<[string, string]>
   if (embedded) {
@@ -139,7 +144,7 @@ export function seedSystemSkills(db: DbHandle): void {
           `В dev-режиме fixtures/skills должен лежать рядом со skills.ts; ` +
           `в скомпилированном бинаре embed-skills-manifest.ts должен быть заполнен.`,
       )
-      return
+      return 0
     }
   }
   const names: string[] = []
@@ -155,6 +160,7 @@ export function seedSystemSkills(db: DbHandle): void {
   }
   pruneSystemSkillsNotIn(db, names)
   console.log(`[skills] загружено ${names.length} системных скиллов (${embedded ? 'embedded' : 'disk'})`)
+  return names.length
 }
 
 export function extractDescription(raw: string, label = 'skill'): string {
