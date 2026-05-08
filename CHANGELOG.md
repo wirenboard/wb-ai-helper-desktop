@@ -7,6 +7,31 @@
 
 ## [Unreleased]
 
+## [0.13.15] — 2026-05-08
+
+### Added
+- **3 новых system-стек скилла** в `src/server/fixtures/skills/` — компактные
+  (по ~100 строк) версии под стиль существующих fixtures, на русском:
+  - **`wb-services`** — управление systemd-юнитами, override-конфиги
+    (drop-in для пакетных), создание своих сервисов и таймеров. Шпаргалка
+    по `systemd_unit` tool'у + правильный паттерн override (с `ExecStart=`
+    сбросом перед перепереопределением). Пример fix `fstrim.service`
+    с `--quiet-unsupported`. Сравнение wb-rules cron vs systemd timer.
+  - **`wb-network`** — NetworkManager + wb-connection-manager: подключение
+    к WiFi, точка доступа, статический IP, 4G/sim1/sim2, OpenVPN-клиент,
+    DNS, диагностика «нет интернета». Указывает использовать `network_status`
+    как first-call. Описание архитектуры (NM делает соединения, WCM
+    приоретизирует/failover'ит).
+  - **`wb-cloud`** — wb-cloud-agent: активация (привязка к аккаунту),
+    отвязка/сброс, свой бэкенд через `CLOUD_BASE_URL`, диагностика
+    «не подключается к облаку». Указывает использовать `cloud_status`
+    tool. Архитектурный блок про ATECCx08 и MQTT-публикацию состояния.
+
+  Скиллы загружаются автоматически при сборке (через `scripts/build.ts`
+  embed-skills-manifest, см. v0.13.6) и сидятся в БД на старте приложения.
+  Параметрический тест `tests/skills-parse.test.ts` валидирует каждый
+  shipping-`.md` через `extractDescription` — все 3 проходят.
+
 ## [0.13.14] — 2026-05-08
 
 ### Added
@@ -533,7 +558,8 @@
   CLI interface...`; для `apt list --upgradable` без свежего `apt-get
   update` подсказывает обновить кэш и подгрузить скилл `controller-update`.
 
-[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.14...HEAD
+[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.15...HEAD
+[0.13.15]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.14...v0.13.15
 [0.13.14]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.13...v0.13.14
 [0.13.13]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.12...v0.13.13
 [0.13.12]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.11...v0.13.12
