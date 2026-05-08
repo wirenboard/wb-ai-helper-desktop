@@ -9,7 +9,7 @@
 **ssh_exec vs ssh_exec_async — простое правило:**
 - Моментальные команды (локальный кеш, без сети): `ssh_exec` — `wb-release`, `dpkg -l`, `apt list`, `apt policy`, `df`, `uptime`, `systemctl status`.
 - Сетевые или долгие: `ssh_exec_async` — `apt update` (тянет индексы из сети), `apt install/upgrade/remove` (скачивает + ставит), `wb-release -t` (меняет repos + update + upgrade).
-Сервер принудительно заблокирует сетевые apt-команды через `ssh_exec` и автоматически добавит `DEBIAN_FRONTEND=noninteractive` в `ssh_exec_async`. После `ssh_exec_async` — жди результата, сервер подтолкнёт тебя автоматически.
+Сервер принудительно заблокирует сетевые apt-команды через `ssh_exec` и автоматически добавит `DEBIAN_FRONTEND=noninteractive` + `-y` (для install/upgrade/dist-upgrade/remove/purge) в `ssh_exec_async`. То есть `apt-get install pkg` через `ssh_exec_async` де-факто выполнится как `DEBIAN_FRONTEND=noninteractive apt-get install -y pkg`. **Не нужно писать `-y` руками** — но если случайно прописал, сервер не дублирует. Исторический кейс: модель запускала `apt-get install` без `-y`, dpkg ждал ответа Y/N, default был N, пакет не обновлялся (реально воспроизведено на A25NDEMJ — wb-mqtt-serial 2.146 vs 2.224 в репе). После `ssh_exec_async` — жди результата, сервер подтолкнёт тебя автоматически.
 
 ## Что есть что
 

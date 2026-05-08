@@ -7,6 +7,57 @@
 
 ## [Unreleased]
 
+## [0.13.14] — 2026-05-08
+
+### Added
+- **`modbus_device_info`** — прошивочные параметры конкретного Modbus-устройства:
+  fw, model, текущие значения parameters (debounce, modes, mappings и т.п.).
+  RPC `wb-mqtt-serial/device/LoadConfig`. Это **не** список каналов — для
+  него `modbus_template`. Два режима: (1) по `device_id` (имя в MQTT
+  типа `wb-mr6c_138`) — wb-mqtt-serial сам резолвит остальное; (2) по
+  явным `path + slave_id` (+ опционально device_type/baud_rate/parity/
+  data_bits/stop_bits) — для устройств не в конфиге.
+- **`modbus_probe`** — точечный ping одного Modbus slave-id на указанном
+  порту через `wb-mqtt-serial/device/Probe`. Не меняет конфиг, не
+  перезапускает драйвер. Полезно когда `wb_bus_scan` пропустил
+  устройство (известный кейс с WB-MAP6S — сканер не всегда видит,
+  Probe видит).
+- **`modbus_ports`** — параметры всех настроенных RS-485 портов
+  (path, baud_rate, parity, data_bits, stop_bits, timeouts, enabled).
+  RPC `wb-mqtt-serial/ports/Load`. Возвращает только активные порты
+  из конфига, не все физически существующие `/dev/ttyRS485-*`.
+
+### Diagnostics
+- При таймауте `wb-mqtt-serial/device/LoadConfig` или `device/Probe`
+  ошибка теперь обогащается hint'ом: «возможно версия драйвера < 2.180,
+  проверь `dpkg -l wb-mqtt-serial`, обнови через `apt install`». Это не
+  костыль — реальный кейс обнаружен на A25NDEMJ (wb7) с устаревшим
+  `wb-mqtt-serial 2.146.0`: эти RPC endpoint'ы не отвечают, в репе stable
+  лежит 2.224.0+ но pending update не применён. На свежей версии (2.180+
+  на wb8) работает out of the box. Hint выдаётся только при таймауте,
+  обычные RPC-ошибки (Port is not defined / bad params) проходят как есть.
+
+### Fixed
+- **`ssh_exec_async` теперь добавляет `-y` к apt-командам install/upgrade/
+  dist-upgrade/remove/purge** (если не задан `-y`/`--yes`/`--assume-yes`).
+  Раньше сервер добавлял только `DEBIAN_FRONTEND=noninteractive`, и
+  модель забыв `-y` запускала, например, `apt-get install pkg` —
+  dpkg ждал Y/N, default был N, пакет не ставился. Реально воспроизведено
+  при попытке обновить wb-mqtt-serial на A25NDEMJ — пакет завис на
+  2.146.0 и `device/LoadConfig` продолжал не отвечать. Логика
+  нормализации вынесена в `src/server/apt-defaults.ts` (с +19 unit-тестов
+  на edge cases: `-y` уже есть в коротком/длинном виде, имена пакетов
+  с `-y` в названии типа `python3-yaml`, chained команды и т.п.).
+  Скилл `controller-update.md` обновлён с новым правилом.
+
+### Tests
+- +7 unit-тестов на `buildLoadConfigParams` (`device_id` приоритет,
+  fallback на `path+slave_id`, валидация null, прокидывание опциональных
+  полей, корректная обработка `slave_id=0`).
+- +4 unit-теста на `enrichSerialRpcError` (таймаут на ru/en распознаётся,
+  hint про 2.180 добавлен; не-таймаут проходит без изменений; обработка
+  не-Error значений).
+
 ## [0.13.13] — 2026-05-08
 
 ### Added
@@ -482,7 +533,8 @@
   CLI interface...`; для `apt list --upgradable` без свежего `apt-get
   update` подсказывает обновить кэш и подгрузить скилл `controller-update`.
 
-[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.13...HEAD
+[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.14...HEAD
+[0.13.14]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.13...v0.13.14
 [0.13.13]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.12...v0.13.13
 [0.13.12]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.11...v0.13.12
 [0.13.11]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.10...v0.13.11

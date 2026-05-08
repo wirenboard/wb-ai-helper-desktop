@@ -28,11 +28,14 @@ import {
   parseCloudMqttControls,
 } from './diagnostics-parsers.ts'
 import { buildInventory } from './mqtt-inventory.ts'
+import { normalizeAptCommand } from './apt-defaults.ts'
 import {
   parseTemplatesList,
   filterTemplates,
   summarizeByGroup,
   renderTemplate,
+  buildLoadConfigParams,
+  enrichSerialRpcError,
 } from './modbus-templates.ts'
 
 export function toolSchemas(): ChatCompletionTool[] {
@@ -637,6 +640,65 @@ export function toolSchemas(): ChatCompletionTool[] {
           properties: {
             sn: { type: 'string', description: 'Серийный номер контроллера.' },
             filter: { type: 'string', description: 'Подстрока для фильтрации (например "wb-mr6c", "dimmer", "MAI"). Регистронезависимо.' },
+          },
+          required: ['sn'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'modbus_device_info',
+        description: 'Прошивочные параметры конкретного Modbus-устройства: версия fw, model-строка, текущие значения всех parameters (debounce, modes, mappings и т.п.). RPC `wb-mqtt-serial/device/LoadConfig`. Это НЕ список каналов — для каналов и шаблона используй `modbus_template`. Два режима: (1) по `device_id` (имя в MQTT, например "wb-mr6c_138") — самый простой; (2) по явным `path` + `slave_id` (опционально с device_type/baud_rate/parity/data_bits/stop_bits) — для устройств не в конфиге.',
+        parameters: {
+          type: 'object',
+          properties: {
+            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            device_id: { type: 'string', description: 'Имя устройства в MQTT (wb-mr6c_138). Альтернатива path+slave_id.' },
+            path: { type: 'string', description: 'Порт (/dev/ttyRS485-1) — если без device_id.' },
+            slave_id: { type: 'number', description: 'Modbus slave-id — если без device_id.' },
+            device_type: { type: 'string', description: 'Опционально: тип устройства из шаблонов (для устройств не в конфиге).' },
+            baud_rate: { type: 'number' },
+            parity: { type: 'string' },
+            data_bits: { type: 'number' },
+            stop_bits: { type: 'number' },
+          },
+          required: ['sn'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'modbus_probe',
+        description: 'Быстрый ping одного Modbus-устройства по slave_id на указанном порту. Не трогает конфиг wb-mqtt-serial — точечная проверка «оно вообще отвечает?». RPC `wb-mqtt-serial/device/Probe`. Полезно когда `wb_bus_scan` пропустил устройство (известный кейс с WB-MAP6S — сканер видит не всех, Probe видит).',
+        parameters: {
+          type: 'object',
+          properties: {
+            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            path: { type: 'string', description: 'Порт (/dev/ttyRS485-1).' },
+            slave_id: { type: 'number', description: 'Modbus slave-id.' },
+            baud_rate: { type: 'number', description: 'Baud, по умолчанию 9600.' },
+            parity: { type: 'string', description: 'Parity, по умолчанию "N".' },
+            data_bits: { type: 'number', description: 'Data bits, по умолчанию 8.' },
+            stop_bits: { type: 'number', description: 'Stop bits, по умолчанию 2.' },
+          },
+          required: ['sn', 'path', 'slave_id'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'modbus_ports',
+        description: 'Параметры всех настроенных RS-485 портов wb-mqtt-serial: путь, baud_rate, parity, stop_bits, data_bits, тайм-ауты, enabled-флаг. RPC `wb-mqtt-serial/ports/Load`. Возвращает только АКТИВНЫЕ порты из конфига (не все `/dev/ttyRS485-*` существующие физически).',
+        parameters: {
+          type: 'object',
+          properties: {
+            sn: { type: 'string', description: 'Серийный номер контроллера.' },
           },
           required: ['sn'],
           additionalProperties: false,
@@ -1637,10 +1699,9 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
       if (running) {
         return JSON.stringify({ error: `На контроллере ${c.sn} уже выполняется фоновая задача: "${running.label}" (jobId=${running.jobId}). Дождись её завершения или отмени через job_cancel (с подтверждением пользователя — прерывание apt/wb-release может сломать систему).` })
       }
-      // Auto-prepend DEBIAN_FRONTEND=noninteractive for apt commands
-      if (/\bapt(-get)?\s/.test(command) && !command.includes('DEBIAN_FRONTEND')) {
-        command = `DEBIAN_FRONTEND=noninteractive ${command}`
-      }
+      // Auto-нормализация apt: DEBIAN_FRONTEND=noninteractive + -y. Подробности
+      // и причина — в src/server/apt-defaults.ts.
+      command = normalizeAptCommand(command)
       const r = await ctx.ssh.jobStart(c, command, label)
       console.log(`[ssh_exec_async] jobId=${r.jobId}, sn=${c.sn}, session=${ctx.sessionId}`)
       if (r.jobId) {
@@ -2006,6 +2067,59 @@ import json as j; print(j.dumps(m))
       }
 
       return JSON.stringify({ added, skipped, errors: setupErrors, message: `Добавлено ${added.length} устройств. wb-mqtt-serial перезапущен.` }, null, 2)
+    }
+
+    case 'modbus_device_info': {
+      const c = resolve1(args['sn'], ctx)
+      const params = buildLoadConfigParams({
+        device_id: typeof args['device_id'] === 'string' ? (args['device_id'] as string) : undefined,
+        path: typeof args['path'] === 'string' ? (args['path'] as string) : undefined,
+        slave_id: typeof args['slave_id'] === 'number' ? (args['slave_id'] as number) : undefined,
+        device_type: typeof args['device_type'] === 'string' ? (args['device_type'] as string) : undefined,
+        baud_rate: typeof args['baud_rate'] === 'number' ? (args['baud_rate'] as number) : undefined,
+        parity: typeof args['parity'] === 'string' ? (args['parity'] as string) : undefined,
+        data_bits: typeof args['data_bits'] === 'number' ? (args['data_bits'] as number) : undefined,
+        stop_bits: typeof args['stop_bits'] === 'number' ? (args['stop_bits'] as number) : undefined,
+      })
+      if (!params) {
+        return JSON.stringify({ error: 'Нужен либо device_id (имя в MQTT, например wb-mr6c_138), либо явные path + slave_id.' })
+      }
+      try {
+        const r = await ctx.ssh.mqttRpc(c, 'wb-mqtt-serial', 'device', 'LoadConfig', params, 10)
+        return JSON.stringify(r, null, 2)
+      } catch (e: unknown) {
+        return JSON.stringify({ error: enrichSerialRpcError(e, 'LoadConfig') })
+      }
+    }
+
+    case 'modbus_probe': {
+      const c = resolve1(args['sn'], ctx)
+      const path = typeof args['path'] === 'string' ? (args['path'] as string) : ''
+      const slave_id = typeof args['slave_id'] === 'number' ? (args['slave_id'] as number) : NaN
+      if (!path || Number.isNaN(slave_id)) {
+        return JSON.stringify({ error: 'path и slave_id обязательны.' })
+      }
+      const params: Record<string, unknown> = {
+        path,
+        slave_id,
+        baud_rate: typeof args['baud_rate'] === 'number' ? args['baud_rate'] : 9600,
+        parity: typeof args['parity'] === 'string' ? args['parity'] : 'N',
+        data_bits: typeof args['data_bits'] === 'number' ? args['data_bits'] : 8,
+        stop_bits: typeof args['stop_bits'] === 'number' ? args['stop_bits'] : 2,
+        total_timeout: 10000,
+      }
+      try {
+        const r = await ctx.ssh.mqttRpc(c, 'wb-mqtt-serial', 'device', 'Probe', params, 15)
+        return JSON.stringify(r, null, 2)
+      } catch (e: unknown) {
+        return JSON.stringify({ error: enrichSerialRpcError(e, 'Probe') })
+      }
+    }
+
+    case 'modbus_ports': {
+      const c = resolve1(args['sn'], ctx)
+      const r = await ctx.ssh.mqttRpc(c, 'wb-mqtt-serial', 'ports', 'Load', {}, 5)
+      return JSON.stringify(r, null, 2)
     }
 
     case 'modbus_templates_list': {

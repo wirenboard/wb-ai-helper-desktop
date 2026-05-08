@@ -8,6 +8,8 @@ import {
   summarizeByGroup,
   filterChannels,
   renderTemplate,
+  buildLoadConfigParams,
+  enrichSerialRpcError,
 } from '../src/server/modbus-templates.ts'
 
 describe('parseTemplatesList', () => {
@@ -239,5 +241,109 @@ describe('renderTemplate', () => {
     expect(out['device_type']).toBe('X')
     expect(out['channelCount']).toBe(0)
     expect(out['channels']).toEqual([])
+  })
+})
+
+describe('buildLoadConfigParams', () => {
+  test('device_id задан → возвращает {device_id} и игнорирует прочее', () => {
+    expect(
+      buildLoadConfigParams({ device_id: 'wb-mr6c_138', path: '/dev/x', slave_id: 5 }),
+    ).toEqual({ device_id: 'wb-mr6c_138' })
+  })
+
+  test('без device_id, есть path + slave_id → возвращает с modbus-дефолтами 8/N/2/9600', () => {
+    expect(
+      buildLoadConfigParams({ path: '/dev/ttyRS485-1', slave_id: 138 }),
+    ).toEqual({
+      path: '/dev/ttyRS485-1',
+      slave_id: 138,
+      baud_rate: 9600,
+      parity: 'N',
+      data_bits: 8,
+      stop_bits: 2,
+    })
+  })
+
+  test('без device_id, без path → null', () => {
+    expect(buildLoadConfigParams({ slave_id: 138 })).toBeNull()
+  })
+
+  test('без device_id, без slave_id → null', () => {
+    expect(buildLoadConfigParams({ path: '/dev/x' })).toBeNull()
+  })
+
+  test('явные serial-параметры перебивают дефолты', () => {
+    const out = buildLoadConfigParams({
+      path: '/dev/ttyRS485-1',
+      slave_id: 138,
+      device_type: 'WB-MR6C',
+      baud_rate: 115200,
+      parity: 'E',
+      data_bits: 7,
+      stop_bits: 1,
+    })
+    expect(out).toEqual({
+      path: '/dev/ttyRS485-1',
+      slave_id: 138,
+      device_type: 'WB-MR6C',
+      baud_rate: 115200,
+      parity: 'E',
+      data_bits: 7,
+      stop_bits: 1,
+    })
+  })
+
+  test('пустая parity ИЛИ пустой device_type не подставляется (default остаётся N для parity, device_type не попадает)', () => {
+    const out = buildLoadConfigParams({
+      path: '/dev/x',
+      slave_id: 1,
+      device_type: '',
+      parity: '',
+    })
+    expect(out).toEqual({
+      path: '/dev/x',
+      slave_id: 1,
+      baud_rate: 9600,
+      parity: 'N',
+      data_bits: 8,
+      stop_bits: 2,
+    })
+  })
+
+  test('slave_id=0 валиден', () => {
+    expect(buildLoadConfigParams({ path: '/dev/x', slave_id: 0 })).toEqual({
+      path: '/dev/x',
+      slave_id: 0,
+      baud_rate: 9600,
+      parity: 'N',
+      data_bits: 8,
+      stop_bits: 2,
+    })
+  })
+})
+
+describe('enrichSerialRpcError', () => {
+  test('таймаут → добавляет hint про устаревший wb-mqtt-serial', () => {
+    const out = enrichSerialRpcError(new Error('RPC wb-mqtt-serial/device/LoadConfig — нет ответа (таймаут 10с)'), 'LoadConfig')
+    expect(out).toContain('таймаут')
+    expect(out).toContain('wb-mqtt-serial')
+    expect(out).toContain('2.180')
+    expect(out).toContain('apt install wb-mqtt-serial')
+  })
+
+  test('таймаут (англ) тоже распознаётся', () => {
+    const out = enrichSerialRpcError(new Error('mqtt rpc wb-mqtt-serial/device/Probe: timeout (no reply in 15s)'), 'Probe')
+    expect(out).toContain('2.180')
+  })
+
+  test('не-таймаут оставляет ошибку как есть', () => {
+    const out = enrichSerialRpcError(new Error('Port is not defined'), 'LoadConfig')
+    expect(out).toBe('Port is not defined')
+    expect(out).not.toContain('2.180')
+  })
+
+  test('обрабатывает строку и не-Error', () => {
+    expect(enrichSerialRpcError('something', 'LoadConfig')).toBe('something')
+    expect(enrichSerialRpcError(null, 'LoadConfig')).toBe('null')
   })
 })
