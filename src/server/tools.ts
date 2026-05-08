@@ -309,6 +309,40 @@ export function toolSchemas(): ChatCompletionTool[] {
     {
       type: 'function',
       function: {
+        name: 'failed_units',
+        description: 'Список упавших systemd-юнитов на контроллере (`systemctl --failed`). Один из первых шагов диагностики «что-то сломалось» — быстрее, чем читать journalctl целиком.',
+        parameters: {
+          type: 'object',
+          properties: { sn: { type: 'string', description: 'Серийный номер контроллера.' } },
+          required: ['sn'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'systemd_unit',
+        description: 'Управление systemd-юнитом и его инспекция. Действие `status` (по умолчанию) возвращает структурированный объект {active, sub, load, unitFileState, exitCode, mainPid, since, statusTail} — для большинства диагностических вопросов этого достаточно. `cat` (юнит со всеми drop-ins) и `list-deps` тоже read-only. Действия, изменяющие состояние, — `start`/`stop`/`restart`/`reload`/`enable`/`disable`/`mask`/`unmask`: HITL — перед вызовом объясни пользователю что делаешь и дождись подтверждения. Имя юнита допускает суффикс или нет (`wb-mqtt-serial` ≡ `wb-mqtt-serial.service`).',
+        parameters: {
+          type: 'object',
+          properties: {
+            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            unit: { type: 'string', description: 'Имя юнита (wb-mqtt-serial.service, fstrim.timer, mosquitto). Суффикс .service можно опустить.' },
+            action: {
+              type: 'string',
+              enum: ['status', 'start', 'stop', 'restart', 'reload', 'enable', 'disable', 'mask', 'unmask', 'cat', 'list-deps'],
+              description: 'Действие. По умолчанию status.',
+            },
+          },
+          required: ['sn', 'unit'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'write_file',
         description: 'Записать содержимое в файл на контроллере (через SFTP). HITL: перед вызовом покажи пользователю diff или содержимое и дождись подтверждения.',
         parameters: {
@@ -1206,6 +1240,63 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     case 'get_metrics': {
       const c = resolve1(args['sn'], ctx)
       return JSON.stringify(await ctx.ssh.getMetrics(c), null, 2)
+    }
+
+    case 'failed_units': {
+      const c = resolve1(args['sn'], ctx)
+      const r = await ctx.ssh.exec(c, 'systemctl --failed --no-pager', 10000)
+      return JSON.stringify({ output: r.stdout.trim() }, null, 2)
+    }
+
+    case 'systemd_unit': {
+      const c = resolve1(args['sn'], ctx)
+      const unit = String(args['unit'] ?? '')
+      const action = (args['action'] ?? 'status') as string
+      // Whitelist allowed unit-name characters before passing to systemctl.
+      // Covers normal services (wb-mqtt-serial.service), templated units
+      // (getty@tty1.service), timers, slices and paths.
+      if (!/^[A-Za-z0-9@._:\-]+$/.test(unit)) {
+        return JSON.stringify({ error: `Invalid unit name "${unit}". Allowed: A-Za-z0-9, @, ., _, :, -.` }, null, 2)
+      }
+      if (action === 'status') {
+        const sh = `systemctl is-active '${unit}' 2>/dev/null || true; echo ===WB-SD===; systemctl show '${unit}' -p ActiveState,LoadState,SubState,UnitFileState,Result,ExecMainStatus,ExecMainExitTimestamp,ExecMainPID,ActiveEnterTimestamp --no-pager 2>/dev/null || true; echo ===WB-SD===; systemctl status '${unit}' --no-pager -n 5 2>&1 || true`
+        const r = await ctx.ssh.exec(c, sh, 10000)
+        const parts = r.stdout.split('===WB-SD===')
+        const active = (parts[0] ?? '').trim()
+        const props: Record<string, string> = {}
+        for (const line of (parts[1] ?? '').split('\n')) {
+          const eq = line.indexOf('=')
+          if (eq > 0) props[line.slice(0, eq).trim()] = line.slice(eq + 1).trim()
+        }
+        const tail = (parts[2] ?? '').trim()
+        return JSON.stringify({
+          unit,
+          active,
+          loadState: props['LoadState'],
+          subState: props['SubState'],
+          unitFileState: props['UnitFileState'],
+          result: props['Result'],
+          exitCode: props['ExecMainStatus'] ? Number(props['ExecMainStatus']) : undefined,
+          mainPid: props['ExecMainPID'] && props['ExecMainPID'] !== '0' ? Number(props['ExecMainPID']) : undefined,
+          activeSince: props['ActiveEnterTimestamp'],
+          exitedAt: props['ExecMainExitTimestamp'],
+          statusTail: tail,
+        }, null, 2)
+      }
+      if (action === 'cat') {
+        const r = await ctx.ssh.exec(c, `systemctl cat '${unit}' 2>&1`, 10000)
+        return JSON.stringify({ unit, content: r.stdout, ok: r.code === 0 }, null, 2)
+      }
+      if (action === 'list-deps') {
+        const r = await ctx.ssh.exec(c, `systemctl list-dependencies '${unit}' --no-pager 2>&1`, 10000)
+        return JSON.stringify({ unit, dependencies: r.stdout, ok: r.code === 0 }, null, 2)
+      }
+      // start/stop/restart/reload/enable/disable/mask/unmask
+      const r = await ctx.ssh.exec(c, `systemctl ${action} '${unit}' 2>&1; echo ===CODE=$?`, 30000)
+      const m = r.stdout.match(/===CODE=(\d+)/)
+      const code = m ? Number(m[1]) : -1
+      const output = m ? r.stdout.slice(0, r.stdout.lastIndexOf('===CODE=')).trim() : r.stdout
+      return JSON.stringify({ unit, action, exitCode: code, ok: code === 0, output }, null, 2)
     }
 
     case 'write_file': {
