@@ -91,6 +91,21 @@ export class MqttPool {
     })
   }
 
+  /** Subscribe to a wildcard pattern for `windowMs` ms and return ALL retained
+   *  topics seen during the window. Public version of `collect` — used by
+   *  `mqtt_inventory` to slurp `/devices/#` in one go and by other tools that
+   *  need a full retained-snapshot under a wildcard.
+   *
+   *  Returns Map<topic, payload>. Order is insertion-order, which corresponds
+   *  to the order of incoming MQTT messages. */
+  async listTopics(
+    c: Controller,
+    pattern: string,
+    windowMs: number,
+  ): Promise<Map<string, string>> {
+    return this.collect(c, pattern, windowMs)
+  }
+
   /** Subscribe to a wildcard pattern for `windowMs` and return all retains seen. */
   private async collect(
     c: Controller,

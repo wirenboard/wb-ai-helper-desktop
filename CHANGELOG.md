@@ -7,6 +7,36 @@
 
 ## [Unreleased]
 
+## [0.13.11] — 2026-05-08
+
+### Added
+- **`mqtt_inventory`** — объединённый снимок MQTT-устройств одним вызовом:
+  для каждого `/devices/<id>/`: id, name, driver, error + список контролов
+  с распакованным `meta` (value, type, units, readonly, order, min/max,
+  precision, error). Заменяет связку `list_devices` + N×`list_controls`.
+  Поле `error` парсится по [WB MQTT Conventions](https://github.com/wirenboard/conventions):
+  флаги `r` (read), `w` (write), `p` (period miss) и комбинации. **При
+  `error.read=true` значение в value-топике — это last-known-good (последний
+  успешно прочитанный), а не текущий live-readout** — без этого знания
+  модель часто делает неверный диагноз. Опции: `device` (фильтр по подстроке),
+  `timeout` (1-15 с), `includeEmpty`, `includeMeta` (raw meta-объект).
+- **`disable_rule`** — отключить правило wb-rules через RPC
+  `wbrules/Editor/ChangeState` (под капотом — переименование
+  `<name>.js` → `<name>.js.disabled`). В отличие от `delete_rule` обратимо.
+  На стабильных прошивках обратный `enabled:true` через тот же RPC возвращает
+  `result:false` (ограничение wb-rules engine) — для включения обратно
+  нужно вручную убрать суффикс `.disabled` и сделать reload.
+
+### Tests
+- +19 unit-тестов в `tests/mqtt-inventory.test.ts` на чистые `parseErrorFlags`
+  и `buildInventory` — error-flags комбинации (r/w/p/rwp + unknown), сортировка
+  контролов по `order`, фильтр по device-подстроке, `includeMeta`/`includeEmpty`,
+  имена с пробелами (типа `Input 0 counter`), error → last-known-good в
+  errors-сводке, malformed topics не ломают парсер.
+- Парсер inventory вынесен в отдельный модуль `src/server/mqtt-inventory.ts` —
+  чтобы тестировать без mock-MQTT. Сам tool-handler дёргает
+  `MqttPool.listTopics`.
+
 ## [0.13.10] — 2026-05-08
 
 ### Added
@@ -376,7 +406,8 @@
   CLI interface...`; для `apt list --upgradable` без свежего `apt-get
   update` подсказывает обновить кэш и подгрузить скилл `controller-update`.
 
-[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.10...HEAD
+[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.11...HEAD
+[0.13.11]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.10...v0.13.11
 [0.13.10]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.9...v0.13.10
 [0.13.9]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.8...v0.13.9
 [0.13.8]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.7...v0.13.8

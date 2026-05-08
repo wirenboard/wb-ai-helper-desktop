@@ -27,6 +27,7 @@ import {
   parsePingLossPct,
   parseCloudMqttControls,
 } from './diagnostics-parsers.ts'
+import { buildInventory } from './mqtt-inventory.ts'
 
 export function toolSchemas(): ChatCompletionTool[] {
   return [
@@ -85,6 +86,25 @@ export function toolSchemas(): ChatCompletionTool[] {
             device: { type: 'string', description: 'ID устройства, например `wb-mr6c_45`' },
           },
           required: ['sn', 'device'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'mqtt_inventory',
+        description: 'Объединённый снимок MQTT-устройств одним вызовом: id, name, driver, error + список контролов с распакованным meta (value, type, units, readonly, order, min/max, precision, error). Заменяет связку `list_devices` + N×`list_controls`. Поле `error` парсится по [WB MQTT Conventions](https://github.com/wirenboard/conventions): `r` (read), `w` (write), `p` (period miss) и комбинации. **При `error.read=true` значение в value-топике — last-known-good (последний успешно прочитанный), а не текущий live-readout** — без этого знания модель часто делает неверный диагноз вида «датчик показывает 23°C, но устройство в офлайне». Дополнительно возвращает массив `errors` со сводкой всех проблем по контроллеру. По умолчанию `includeEmpty=false` (устройства без контролов скрыты).',
+        parameters: {
+          type: 'object',
+          properties: {
+            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            device: { type: 'string', description: 'Фильтр по device_id (подстрока, регистронезависимо). Пусто — все устройства.' },
+            timeout: { type: 'number', description: 'Окно сбора в секундах. По умолчанию 3.' },
+            includeEmpty: { type: 'boolean', description: 'Включать устройства без контролов (только с meta). По умолчанию false.' },
+            includeMeta: { type: 'boolean', description: 'Класть полный raw meta-объект в каждый control. По умолчанию false (только распакованные поля).' },
+          },
+          required: ['sn'],
           additionalProperties: false,
         },
       },
@@ -894,6 +914,22 @@ export function toolSchemas(): ChatCompletionTool[] {
     {
       type: 'function',
       function: {
+        name: 'disable_rule',
+        description: 'Отключить правило wb-rules через RPC `wbrules/Editor/ChangeState` (под капотом — переименование `<name>.js` → `<name>.js.disabled`). В отличие от `delete_rule` обратимо: чтобы включить обратно, удали суффикс `.disabled` (через write_file/ssh_exec) и вызови reload. На стабильных прошивках обратный `enabled:true` через тот же RPC возвращает `result:false` — это ограничение wb-rules engine, не нашей обёртки. Менее агрессивный путь, чем delete: подходит, чтобы временно вырубить правило для отладки. HITL: уточни у пользователя, действительно ли надо выключить.',
+        parameters: {
+          type: 'object',
+          properties: {
+            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            name: { type: 'string', description: 'Имя файла правила без расширения.' },
+          },
+          required: ['sn', 'name'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'read_attachment',
         description: 'Прочитать содержимое файла, прикреплённого к сессии (до ~200KB). fileId — из list_attachments или системного сообщения про файлы. encoding="utf8" для текстовых (конфиги, логи, json); "base64" для бинарных (архивы, картинки — если нужно передать дальше).',
         parameters: {
@@ -1069,6 +1105,17 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
       if (!c) return notFound(sn)
       const controls = await ctx.mqtt.listControls(c, device)
       return JSON.stringify(controls, null, 2)
+    }
+
+    case 'mqtt_inventory': {
+      const c = resolve1(args['sn'], ctx)
+      const filter = typeof args['device'] === 'string' ? (args['device'] as string) : undefined
+      const timeoutSec = typeof args['timeout'] === 'number' ? Math.max(1, Math.min(15, args['timeout'] as number)) : 3
+      const includeEmpty = args['includeEmpty'] === true
+      const includeMeta = args['includeMeta'] === true
+      const topics = await ctx.mqtt.listTopics(c, '/devices/#', timeoutSec * 1000)
+      const inv = buildInventory(topics.entries(), { filter, includeEmpty, includeMeta })
+      return JSON.stringify(inv, null, 2)
     }
 
     case 'mqtt_read': {
@@ -2129,6 +2176,36 @@ import json as j; print(j.dumps(m))
           return JSON.stringify({ error: `rm fallback failed: ${r.stderr.trim() || `exit ${r.code}`}` })
         }
         return JSON.stringify({ error: msg })
+      }
+    }
+
+    case 'disable_rule': {
+      const c = resolve1(args['sn'], ctx)
+      const name = ruleNameToPath(args['name'])
+      if (!name) return JSON.stringify({ error: 'name обязателен' })
+      try {
+        const r = await ctx.ssh.mqttRpc(
+          c,
+          'wbrules',
+          'Editor',
+          'ChangeState',
+          { path: name, enabled: false },
+          10,
+        )
+        return JSON.stringify(
+          {
+            ok: true,
+            via: 'wbrules.Editor.ChangeState',
+            name,
+            disabledFile: `${name}.disabled`,
+            note: 'Файл переименован в <name>.js.disabled. Чтобы включить обратно — на стабильных прошивках обратный enabled:true через тот же RPC возвращает result:false; убери суффикс .disabled через write_file/ssh_exec и сделай reload-or-restart wb-rules.',
+            ...((r && typeof r === 'object') ? r : {}),
+          },
+          null,
+          2,
+        )
+      } catch (e: unknown) {
+        return JSON.stringify({ error: e instanceof Error ? e.message : String(e) })
       }
     }
 
