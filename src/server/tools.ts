@@ -2184,6 +2184,8 @@ import json as j; print(j.dumps(m))
       if (!Array.isArray(channels) || channels.length === 0) return JSON.stringify({ error: 'channels обязателен' })
       const { from, to } = resolveTimeRange(args)
       if (!from) return JSON.stringify({ error: 'укажи period (например: 2h, 6h, 24h, 7d) или from (unix timestamp)' })
+      const validationErr = await validateHistoryChannels(ctx, c, channels)
+      if (validationErr) return JSON.stringify({ error: validationErr })
       const result = await fetchHistory(ctx, c, channels, from, to)
       return JSON.stringify(result, null, 2)
     }
@@ -2194,6 +2196,8 @@ import json as j; print(j.dumps(m))
       if (!Array.isArray(channels) || channels.length === 0) return JSON.stringify({ error: 'channels обязателен' })
       const { from, to } = resolveTimeRange(args)
       if (!from) return JSON.stringify({ error: 'укажи period (например: 2h, 6h, 24h, 7d) или from (unix timestamp)' })
+      const validationErr = await validateHistoryChannels(ctx, c, channels)
+      if (validationErr) return JSON.stringify({ error: validationErr })
       const title = typeof args['title'] === 'string' ? args['title'] : ''
       const ylabel = typeof args['ylabel'] === 'string' ? args['ylabel'] : ''
       const allowedTypes = new Set(['line', 'bar', 'area', 'point', 'histogram', 'heatmap', 'boxplot'])
@@ -2229,6 +2233,8 @@ import json as j; print(j.dumps(m))
       if (!Array.isArray(channels) || channels.length === 0) return JSON.stringify({ error: 'channels обязателен' })
       const { from, to } = resolveTimeRange(args)
       if (!from) return JSON.stringify({ error: 'укажи period (например: 2h, 6h, 24h, 7d) или from (unix timestamp)' })
+      const validationErr = await validateHistoryChannels(ctx, c, channels)
+      if (validationErr) return JSON.stringify({ error: validationErr })
       const limitOverride = typeof args['limit'] === 'number' ? Math.max(1, Math.min(100000, Number(args['limit']))) : 10000
       const minIntervalOverride = typeof args['min_interval'] === 'number' ? Math.max(0, Number(args['min_interval'])) : 0
       const histData = await fetchHistory(ctx, c, channels, from, to, { limitOverride, minIntervalOverride })
@@ -2687,6 +2693,64 @@ function historyParams(durationSec: number): { min_interval: number; limit: numb
   if (durationSec <= 3600)   return { min_interval: 0,   limit: 200  }
   if (durationSec <= 86400)  return { min_interval: 60,  limit: 500  }
   return                            { min_interval: 600, limit: 1000 }
+}
+
+/** Pure helper: build error message about missing devices/channels.
+ * `requested` — what the caller asked for; `available` — what MQTT showed
+ * (Map<device_id, control_names[]>). Empty/missing entries in `available`
+ * mean the device has no controls under `/devices/<dev>/controls/+`,
+ * which we treat as «device not found».
+ * Returns null if all requested channels are valid, otherwise a concise
+ * error string suitable for the model. Lists available controls only for
+ * the *failing* device (bounded), never lists devices.
+ */
+export function diagnoseHistoryChannels(
+  requested: [string, string][],
+  available: Map<string, string[]>
+): string | null {
+  const byDevice = new Map<string, string[]>()
+  for (const [d, ch] of requested) {
+    const arr = byDevice.get(d) ?? []
+    if (!arr.includes(ch)) arr.push(ch)
+    byDevice.set(d, arr)
+  }
+  const errs: string[] = []
+  for (const [device, requestedCtrls] of byDevice) {
+    const avail = available.get(device) ?? []
+    if (avail.length === 0) {
+      errs.push(`device_id "${device}" не найден на контроллере. Проверь через mqtt_list_topics(prefix="/devices/+/meta/name") и повтори.`)
+      continue
+    }
+    const availSet = new Set(avail)
+    const missing = requestedCtrls.filter(ch => !availSet.has(ch))
+    if (missing.length) {
+      errs.push(`канал(ы) у "${device}" не найден(ы): [${missing.join(', ')}]. Доступные у этого устройства: [${avail.join(', ')}]`)
+    }
+  }
+  return errs.length ? errs.join(' | ') : null
+}
+
+/** Pre-flight validate that requested [device_id, control_name] pairs exist
+ *  on the controller. One parallel mqtt_list_topics per unique device.
+ *  Returns error string for the model, or null if all good.
+ */
+async function validateHistoryChannels(
+  ctx: Ctx,
+  c: Controller,
+  channels: [string, string][]
+): Promise<string | null> {
+  const devices = [...new Set(channels.map(([d]) => d))]
+  const lists = await Promise.all(
+    devices.map(async (device) => {
+      const prefix = `/devices/${device}/controls/`
+      const topics = await ctx.ssh.mqttListTopics(c, `${prefix}+`, 2)
+      const ctrls = topics
+        .map(t => t.startsWith(prefix) ? t.slice(prefix.length) : '')
+        .filter(s => s.length > 0)
+      return [device, ctrls] as const
+    })
+  )
+  return diagnoseHistoryChannels(channels, new Map(lists))
 }
 
 async function fetchHistory(
