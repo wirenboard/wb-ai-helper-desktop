@@ -7,6 +7,39 @@
 
 ## [Unreleased]
 
+## [0.13.13] — 2026-05-08
+
+### Added
+- **`modbus_templates_list`** — список Modbus-шаблонов через RPC
+  `wb-mqtt-serial/config/Load.types`. Без `filter` возвращает сводку по
+  группам (на типичной прошивке 250+ шаблонов, плоский список переполнил
+  бы контекст). С `filter` (case-insensitive подстрока по type/mqtt-id/name)
+  — flat list matched. Шаблоны с `deprecated: true` помечаются и считаются
+  отдельно.
+- **`modbus_template`** — содержимое одного шаблона по `device_type`
+  (резолв через Load.types → mqtt-id) или прямо по `mqtt_id`. Читает
+  `/usr/share/wb-mqtt-serial/templates/config-<mqtt-id>.json`. Views:
+  `summary` (default — компактный список каналов с reg_type/address/format/
+  type/units), `full` (весь шаблон), `channels-only`, `meta-only`.
+  Опционально фильтрует каналы (`enabledOnly`, `channelFilter`).
+
+### Fixed
+- **MQTT `connack timeout` на холодном коннекте**: лимит `CONNECT_TIMEOUT`
+  в `MqttPool` поднят с 4 сек до 8 сек. На медленных сетях / с mDNS-резолвом
+  4 сек не хватало для TCP+MQTT handshake'а до контроллера на первом вызове
+  `mqtt_inventory`/`list_devices`/etc.; со второго раза работало (соединение
+  в кэше). 8 сек даёт запас, существующее кэширование сохраняет следующие
+  вызовы быстрыми.
+
+### Tests
+- +25 unit-тестов в `tests/modbus-templates.test.ts` на парсеры/форматтеры:
+  `parseTemplatesList` (flatten групп, deprecated, mqtt-id fallback,
+  пустые), `filterTemplates` (substring case-insensitive по
+  type/mqttId/name), `summarizeByGroup` (count/deprecated counts),
+  `filterChannels` (enabledOnly + channelFilter), `renderTemplate`
+  (4 views с фильтрами, не мутирует исходник, gracefully handles
+  missing device).
+
 ## [0.13.12] — 2026-05-08
 
 ### Fixed
@@ -449,7 +482,8 @@
   CLI interface...`; для `apt list --upgradable` без свежего `apt-get
   update` подсказывает обновить кэш и подгрузить скилл `controller-update`.
 
-[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.12...HEAD
+[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.13...HEAD
+[0.13.13]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.12...v0.13.13
 [0.13.12]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.11...v0.13.12
 [0.13.11]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.10...v0.13.11
 [0.13.10]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.9...v0.13.10

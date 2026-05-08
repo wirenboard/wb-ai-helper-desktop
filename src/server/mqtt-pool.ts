@@ -7,7 +7,12 @@ type Conn = {
   ready: Promise<void>
 }
 
-const CONNECT_TIMEOUT = 4000
+// 4 сек оказались тесноватыми на холодном коннекте — `mqtt_inventory`
+// первый вызов на чате-сессии регулярно падал с «connack timeout»,
+// пока mqtt.js устанавливал TCP+MQTT handshake к контроллеру через mDNS.
+// Со второго раза работало (соединение в `conns` уже активно). 8 сек
+// даёт запас на медленные сети и резолв wirenboard-XXX.local.
+const CONNECT_TIMEOUT = 8000
 const READ_TIMEOUT = 1500
 
 export class MqttPool {

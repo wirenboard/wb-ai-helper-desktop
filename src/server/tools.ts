@@ -28,6 +28,12 @@ import {
   parseCloudMqttControls,
 } from './diagnostics-parsers.ts'
 import { buildInventory } from './mqtt-inventory.ts'
+import {
+  parseTemplatesList,
+  filterTemplates,
+  summarizeByGroup,
+  renderTemplate,
+} from './modbus-templates.ts'
 
 export function toolSchemas(): ChatCompletionTool[] {
   return [
@@ -615,6 +621,42 @@ export function toolSchemas(): ChatCompletionTool[] {
           type: 'object',
           properties: {
             sn: { type: 'string', description: 'Серийный номер контроллера.' },
+          },
+          required: ['sn'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'modbus_templates_list',
+        description: 'Список доступных Modbus-шаблонов wb-mqtt-serial через RPC `wb-mqtt-serial/config/Load.types`. Без `filter` — сводка по группам {group: {count, deprecated}}, чтобы не переполнить контекст (на типичной прошивке 250+ шаблонов). С `filter` (подстрока, case-insensitive по type/mqtt-id/name) — плоский список matched.',
+        parameters: {
+          type: 'object',
+          properties: {
+            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            filter: { type: 'string', description: 'Подстрока для фильтрации (например "wb-mr6c", "dimmer", "MAI"). Регистронезависимо.' },
+          },
+          required: ['sn'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'modbus_template',
+        description: 'Содержимое одного Modbus-шаблона: каналы, параметры, группы. Резолвит `device_type` (например "WB-MR6C") в `mqtt-id` через RPC config/Load.types и читает `/usr/share/wb-mqtt-serial/templates/config-<mqtt-id>.json`. Views: `summary` (default — компактный список каналов с reg_type/address/format/type/units), `full` (весь шаблон), `channels-only` (только каналы), `meta-only` (без каналов и параметров — только заголовки). Опционально фильтрует каналы (`enabledOnly`, `channelFilter`).',
+        parameters: {
+          type: 'object',
+          properties: {
+            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            device_type: { type: 'string', description: 'Тип устройства как в Load.types[].types[].type (например "WB-MR6C"). Альтернатива — mqtt_id.' },
+            mqtt_id: { type: 'string', description: 'mqtt-id шаблона (например "wb-mr6c"). Если задан — резолв пропускается, читается файл config-<mqtt_id>.json напрямую.' },
+            view: { type: 'string', enum: ['summary', 'full', 'channels-only', 'meta-only'], description: 'Представление. По умолчанию summary.' },
+            enabledOnly: { type: 'boolean', description: 'Только enabled-каналы (default false).' },
+            channelFilter: { type: 'string', description: 'Подстрока в имени канала (case-insensitive).' },
           },
           required: ['sn'],
           additionalProperties: false,
@@ -1964,6 +2006,62 @@ import json as j; print(j.dumps(m))
       }
 
       return JSON.stringify({ added, skipped, errors: setupErrors, message: `Добавлено ${added.length} устройств. wb-mqtt-serial перезапущен.` }, null, 2)
+    }
+
+    case 'modbus_templates_list': {
+      const c = resolve1(args['sn'], ctx)
+      const filter = typeof args['filter'] === 'string' ? (args['filter'] as string) : ''
+      const result = await ctx.ssh.mqttRpc(c, 'wb-mqtt-serial', 'config', 'Load', {}, 10) as { types?: unknown }
+      const list = parseTemplatesList({ types: (result.types as any) ?? [] })
+      if (filter.trim()) {
+        const matched = filterTemplates(list, filter)
+        return JSON.stringify({ filter, count: matched.length, templates: matched }, null, 2)
+      }
+      const groups = summarizeByGroup(list)
+      return JSON.stringify({ totalCount: list.length, groups, hint: 'Без filter возвращается сводка по группам. Передай filter (подстрока) чтобы получить плоский список matched.' }, null, 2)
+    }
+
+    case 'modbus_template': {
+      const c = resolve1(args['sn'], ctx)
+      const deviceType = typeof args['device_type'] === 'string' ? (args['device_type'] as string).trim() : ''
+      let mqttId = typeof args['mqtt_id'] === 'string' ? (args['mqtt_id'] as string).trim() : ''
+      if (!deviceType && !mqttId) {
+        return JSON.stringify({ error: 'Нужен device_type или mqtt_id.' })
+      }
+      // Резолв device_type → mqtt-id через Load.types если mqtt_id не задан.
+      if (!mqttId) {
+        const result = await ctx.ssh.mqttRpc(c, 'wb-mqtt-serial', 'config', 'Load', {}, 10) as { types?: unknown }
+        const list = parseTemplatesList({ types: (result.types as any) ?? [] })
+        const target = deviceType.toLowerCase()
+        const match = list.find((t) => t.type.toLowerCase() === target || t.mqttId.toLowerCase() === target)
+        if (!match) {
+          // Подсказка с близкими: substring-фильтр
+          const close = filterTemplates(list, deviceType).slice(0, 5).map((t) => t.type)
+          return JSON.stringify({ error: `Шаблон не найден: ${deviceType}`, hint: close.length ? `Возможно вы имели в виду: ${close.join(', ')}` : 'Получи полный список через modbus_templates_list.' })
+        }
+        mqttId = match.mqttId
+      }
+      // Чтение файла шаблона. Стандартный путь wb-mqtt-serial.
+      const filePath = `/usr/share/wb-mqtt-serial/templates/config-${mqttId}.json`
+      let raw: string
+      try {
+        // 1 МБ — некоторые шаблоны (WB-MR6C, WB-MAP6S, WB-MCM8) больше 256КБ
+        // из-за translations + многоканальной meta. Вычитаем заведомо больше,
+        // чтобы не упереться в truncate'нутый JSON.
+        raw = (await ctx.ssh.readFile(c, filePath, 1024 * 1024)).content
+      } catch (e: unknown) {
+        return JSON.stringify({ error: `Не удалось прочитать ${filePath}: ${e instanceof Error ? e.message : String(e)}. Возможно для этого устройства файл шаблона устаревшей структуры или с другим mqtt-id — посмотри modbus_templates_list.` })
+      }
+      let tmpl: Record<string, unknown>
+      try {
+        tmpl = JSON.parse(raw)
+      } catch (e: unknown) {
+        return JSON.stringify({ error: `Шаблон ${filePath} не парсится как JSON: ${e instanceof Error ? e.message : String(e)}` })
+      }
+      const view = (typeof args['view'] === 'string' ? args['view'] : 'summary') as 'summary' | 'full' | 'channels-only' | 'meta-only'
+      const enabledOnly = args['enabledOnly'] === true
+      const channelFilter = typeof args['channelFilter'] === 'string' ? (args['channelFilter'] as string) : undefined
+      return JSON.stringify(renderTemplate(tmpl as any, { view, enabledOnly, channelFilter }), null, 2)
     }
 
     case 'get_history': {
