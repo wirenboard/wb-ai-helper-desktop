@@ -3,7 +3,16 @@ import { ref, computed, nextTick, watch } from 'vue'
 import { useAttachments } from '../composables/useAttachments'
 import { fmtSize, plural } from '../utils'
 
-const props = defineProps<{ disabled: boolean; llmConfigured: boolean; chatId: string }>()
+const props = defineProps<{
+  disabled: boolean
+  llmConfigured: boolean
+  chatId: string
+  /** Количество фоновых задач этого чата (running ssh_exec_async / wb_bus_scan
+   *  / serial_debug_collect и т.п.). Рендерится мелким индикатором рядом с
+   *  «Ctrl+J — скачанные файлы», чтобы юзер видел: «модель свободна, но
+   *  что-то ещё крутится в фоне на контроллере». 0 — индикатор скрыт. */
+  runningJobsCount?: number
+}>()
 const emit = defineEmits<{ send: [text: string]; abort: [] }>()
 
 const COLLAPSE_AT = 3
@@ -166,6 +175,11 @@ function onFileChange(e: Event) {
     <div class="buttons">
       <input ref="fileInputRef" type="file" multiple hidden @change="onFileChange" />
       <button type="button" class="attach" :disabled="uploading" :title="uploading ? 'Загрузка…' : 'Прикрепить файл'" @click="fileInputRef?.click()">📎</button>
+      <span
+        v-if="runningJobsCount && runningJobsCount > 0"
+        class="bg-jobs-indicator"
+        :title="`${runningJobsCount} ${plural(runningJobsCount, ['фоновая задача', 'фоновые задачи', 'фоновых задач'])} продолжают выполняться на контроллере. Модель закончила, но ssh_exec_async/wb_bus_scan/serial_debug_collect ещё работают — спроси через job_status или дождись.`"
+      >⏳ {{ runningJobsCount }}</span>
       <span class="downloads-hint" title="В Chrome Ctrl+J открывает список скачанных файлов с пунктом «Показать в папке»"><kbd>Ctrl+J</kbd> — скачанные файлы</span>
       <button v-if="disabled" type="button" class="abort" @click="emit('abort')">■ Прервать</button>
       <button type="submit" class="send" :disabled="disabled || !llmConfigured || (!text.trim() && !items.length)">Отправить</button>
@@ -267,6 +281,13 @@ textarea:focus { border-color: var(--accent); }
 .downloads-hint {
   font-size: 0.7rem; color: var(--text-mute); opacity: 0.65;
   margin-right: auto; margin-left: 6px; user-select: none;
+}
+.bg-jobs-indicator {
+  font-size: 0.72rem; color: var(--text-mute); opacity: 0.85;
+  padding: 1px 6px; margin-left: 6px;
+  border-radius: 8px; background: var(--bg);
+  border: 1px solid var(--border);
+  cursor: help; user-select: none;
 }
 .downloads-hint kbd {
   font-family: 'JetBrains Mono', monospace; font-size: 0.68rem;

@@ -205,6 +205,75 @@ export class ChatStore {
     return this.get(id)
   }
 
+  /** Принудительно обрезать историю чата: оставить system-турн + последние
+   *  `keepLast` турн'ов (по умолчанию 6 — обычно хватает чтобы остался
+   *  последний user-msg, его tool-iterations и финальный assistant-ответ).
+   *  Всё что между — заменить одним synthetic `[Система]` уведомлением.
+   *
+   *  Используется когда `currentContextUsage.ratio >= HARD_COMPACT_RATIO` (0.9)
+   *  — модель была попрошена вызвать checkpoint, не вняла, контекст растёт.
+   *  Деструктивно для tool-results; модель должна была сохранить важное в
+   *  summary через checkpoint раньше.
+   *
+   *  Возвращает `{ removed }` — сколько turns удалено. Если в чате ≤ 1+keepLast
+   *  turn'ов — сжимать нечего, возвращает 0.
+   */
+  forceCompact(chatId: string, reason: string, keepLast = 6): { removed: number } {
+    type Row = { id: number; ord: number; role: string; content: string }
+    const rows = this.db
+      .query<Row, [string]>(
+        `SELECT id, ord, role, content FROM turns WHERE chat_id = ? ORDER BY ord ASC`,
+      )
+      .all(chatId)
+    if (rows.length === 0) return { removed: 0 }
+    if (rows.length <= 1 + keepLast) return { removed: 0 }
+    // OpenAI требует, чтобы каждое сообщение с role=tool шло после
+    // assistant-турна с tool_calls. Если просто отрезать «последние K турнов»,
+    // первым сохранённым легко окажется orphan-tool → API возвращает 400.
+    // Поэтому ищем «безопасную границу» — позицию user или assistant турна
+    // (они не зависят от предыдущих сообщений). Tool-турны всегда идут
+    // сразу за своим assistant'ом, поэтому сохраняя assistant мы автоматически
+    // получим следующие за ним tool-результаты.
+    let dropEndIdx = -1
+    for (let i = rows.length - keepLast; i >= 1; i--) {
+      const r = rows[i]!
+      if (r.role === 'user' || r.role === 'assistant') {
+        dropEndIdx = i
+        break
+      }
+    }
+    if (dropEndIdx <= 1) return { removed: 0 }
+    const middle = rows.slice(1, dropEndIdx)
+    if (middle.length === 0) return { removed: 0 }
+    const droppedAssistants = middle.filter((r) => r.role === 'assistant').length
+    const droppedTools = middle.filter((r) => r.role === 'tool').length
+    const droppedUserReal = middle.filter((r) => r.role === 'user' && !r.content.startsWith('[Система]')).length
+    const droppedUserSystem = middle.filter((r) => r.role === 'user' && r.content.startsWith('[Система]')).length
+    // Bulk DELETE через IN(...) — bun:sqlite не поддерживает массивы напрямую.
+    const placeholders = middle.map(() => '?').join(',')
+    this.db
+      .query(`DELETE FROM turns WHERE id IN (${placeholders})`)
+      .run(...middle.map((r) => r.id))
+    // Synthetic notice вставляем в освобождённый ord-слот ровно перед
+    // первым из сохранённого хвоста.
+    const firstKeptOrd = rows[dropEndIdx]!.ord
+    const syntheticOrd = firstKeptOrd - 1
+    const parts = []
+    if (droppedUserReal) parts.push(`${droppedUserReal} реплик пользователя`)
+    if (droppedAssistants) parts.push(`${droppedAssistants} ответов модели`)
+    if (droppedTools) parts.push(`${droppedTools} tool-результатов`)
+    if (droppedUserSystem) parts.push(`${droppedUserSystem} system-уведомлений`)
+    const synthetic = `[Система] 🗜 Принудительное сжатие истории (${reason}). Выкинуто: ${parts.join(', ')}. Если нужны детали из выкинутого — спроси заново или прочитай актуальное состояние с контроллера.`
+    this.db
+      .query(
+        `INSERT INTO turns (chat_id, ord, role, content, tool_call_id, tool_calls, tokens_prompt, tokens_completion, tokens_cached, total_cost, created_at, provider, model)
+         VALUES (?, ?, 'user', ?, NULL, NULL, 0, 0, 0, 0, ?, NULL, NULL)`,
+      )
+      .run(chatId, syntheticOrd, synthetic, Date.now())
+    this.db.query(`UPDATE chats SET updated_at = ? WHERE id = ?`).run(Date.now(), chatId)
+    return { removed: middle.length }
+  }
+
   globalStats(): { totalPromptTokens: number; totalCompletionTokens: number; totalCachedTokens: number; totalCost: number } {
     const r = this.db
       .query<{ p: number; c: number; k: number; cost: number }, []>(
