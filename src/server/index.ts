@@ -347,11 +347,13 @@ app.post('/api/chats', async (c) => {
   // не узнает (console.error на сервере в Electron-приложении не виден).
   const systemSkills = listSkills(db).filter((s) => s.origin === 'system').length
   const toolsCount = toolSchemas().length
-  const modelLine = llm?.model
-    ? `Модель: ${llm.model} · инструменты: ${toolsCount} · скиллы: ${systemSkills}`
-    : `Модель: не настроена · инструменты: ${toolsCount} · скиллы: ${systemSkills}`
+  const settings = settingsStore.get()
+  const providerLabel = PROVIDER_DEFAULTS[settings.provider]?.label ?? settings.provider
+  const head = llm?.model
+    ? `${providerLabel} · ${llm.model} · инструменты: ${toolsCount} · скиллы: ${systemSkills}`
+    : `${providerLabel} (не настроен) · инструменты: ${toolsCount} · скиллы: ${systemSkills}`
   const warning = systemSkills === 0 ? ' ⚠ системные скиллы не загружены (бага сборки)' : ''
-  chats.appendTurn(chat.id, { role: 'user', content: `[Система] ${modelLine}${warning}` })
+  chats.appendTurn(chat.id, { role: 'user', content: `[Система] ${head}${warning}` })
   return c.json(chats.get(chat.id))
 })
 
