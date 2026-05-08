@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { DbHandle } from './db.ts'
+import { SKILL_FILES } from './embed-skills-manifest.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const SKILLS_DIR = join(__dirname, 'fixtures', 'skills')
@@ -110,17 +111,44 @@ function pruneSystemSkillsNotIn(db: DbHandle, names: string[]): void {
   db.exec(`DELETE FROM skills WHERE origin = 'system' AND name NOT IN (${list})`)
 }
 
-/** Seed system skills from fixtures/skills/*.md into the DB. Called at startup. */
-export function seedSystemSkills(db: DbHandle): void {
-  let files: string[] = []
-  try {
-    files = readdirSync(SKILLS_DIR).filter((f) => f.endsWith('.md'))
-  } catch {
-    return
+/** Seed system skills into the DB. Called at startup. Returns the loaded count.
+ *
+ *  Источник может быть один из двух:
+ *    - SKILL_FILES (из embed-skills-manifest.ts) — заполняется на сборке скриптом
+ *      build.ts через `import … with { type: 'text' }`, и `bun --compile` встраивает
+ *      содержимое как строки. Это путь скомпилированного бинаря и AppImage.
+ *    - readdirSync(SKILLS_DIR) — dev-режим, когда manifest пуст. Удобно для горячей
+ *      правки .md (рестарт сервера → re-seed).
+ *
+ *  ENOENT в dev-режиме раньше глотался молча, и БД оставалась пустой без признаков
+ *  ошибки. Теперь:
+ *    - на сервере — `console.error`;
+ *    - возвращаемый count позволяет вызывающему (index.ts) выкинуть warning в чат
+ *      через SSE `error` event — пользователь увидит «⚠ …» прямо при первом
+ *      запросе, а не будет ловить ENOENT в логах сервера, в которые никто не
+ *      заглядывает.
+ */
+export function seedSystemSkills(db: DbHandle): number {
+  const embedded = Object.keys(SKILL_FILES).length > 0
+  let entries: Array<[string, string]>
+  if (embedded) {
+    entries = Object.entries(SKILL_FILES)
+  } else {
+    try {
+      entries = readdirSync(SKILLS_DIR)
+        .filter((f) => f.endsWith('.md'))
+        .map((f) => [f, readFileSync(join(SKILLS_DIR, f), 'utf8')] as [string, string])
+    } catch (e) {
+      console.error(
+        `[skills] не удалось прочитать ${SKILLS_DIR}: ${e}. ` +
+          `В dev-режиме fixtures/skills должен лежать рядом со skills.ts; ` +
+          `в скомпилированном бинаре embed-skills-manifest.ts должен быть заполнен.`,
+      )
+      return 0
+    }
   }
   const names: string[] = []
-  for (const file of files) {
-    const raw = readFileSync(join(SKILLS_DIR, file), 'utf8')
+  for (const [file, raw] of entries) {
     const name = basename(file, '.md')
     try {
       const description = extractDescription(raw, file)
@@ -131,7 +159,8 @@ export function seedSystemSkills(db: DbHandle): void {
     }
   }
   pruneSystemSkillsNotIn(db, names)
-  if (names.length) console.log(`[skills] загружено ${names.length} системных скиллов`)
+  console.log(`[skills] загружено ${names.length} системных скиллов (${embedded ? 'embedded' : 'disk'})`)
+  return names.length
 }
 
 export function extractDescription(raw: string, label = 'skill'): string {
