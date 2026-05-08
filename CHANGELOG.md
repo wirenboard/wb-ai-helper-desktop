@@ -7,6 +7,22 @@
 
 ## [Unreleased]
 
+## [0.13.6] — 2026-05-08
+
+### Fixed
+- В скомпилированном бинаре (linux-x64, windows-x64, AppImage) фикстуры
+  системных скиллов не попадали внутрь и `seedSystemSkills` молча выходил
+  по ENOENT — таблица `skills` оставалась пустой, ни один системный скилл
+  нельзя было загрузить через `load_skill`. Теперь `scripts/build.ts`
+  отдельным шагом генерирует `embed-skills-manifest.ts` со статическими
+  `import s0 from './fixtures/skills/X.md' with { type: 'text' }`, и Bun
+  встраивает содержимое в бинарь как строки. В dev-режиме `seedSystemSkills`
+  по-прежнему читает с диска. Молчаливый ENOENT-return заменён на
+  `console.error` — такая регрессия больше не уйдёт незаметно. Параметрический
+  тест `tests/skills-parse.test.ts` теперь прогоняет `extractDescription` на
+  каждом шиппинговом `.md` и ловит скилл с невалидным первым абзацем до
+  коммита.
+
 ## [0.13.5] — 2026-05-08
 
 ### Fixed
@@ -248,7 +264,8 @@
   CLI interface...`; для `apt list --upgradable` без свежего `apt-get
   update` подсказывает обновить кэш и подгрузить скилл `controller-update`.
 
-[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.5...HEAD
+[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.6...HEAD
+[0.13.6]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.5...v0.13.6
 [0.13.5]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.4...v0.13.5
 [0.13.4]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.3...v0.13.4
 [0.13.3]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.2...v0.13.3
