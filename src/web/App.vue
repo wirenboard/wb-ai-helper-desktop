@@ -90,6 +90,14 @@ const chats = ref<Chat[]>([])
 const activeChatId = ref<string | null>(null)
 const activeChat = ref<Chat | null>(null)
 const liveTurns = reactive<{ [chatId: string]: ChatTurn[] }>({})
+// Индекс первого turn'а текущего стрима в liveTurns. Нужен, чтобы при
+// прилёте `usage` события (cumulative-снимок) занулить токены на
+// предыдущих assistant-турнах ТОГО же стрима — иначе при многошаговом
+// agent-loop'е каждый tool-call создаёт новый empty-assistant в buf, на
+// него уходит новый снимок cumulative, и итоговая сумма токенов в шапке
+// чата раздувается в N раз. Турны прошлых стримов / persisted из БД сюда
+// не входят — у них уже корректные delta-токены.
+const streamStartIdx = reactive<{ [chatId: string]: number }>({})
 const streaming = ref(false)
 const scanning = ref(false)
 const errorBanner = ref<string | null>(null)
@@ -510,6 +518,10 @@ async function sendMessage(text: string, opts?: { compact?: boolean }) {
     { role: 'user', content: text },
     { role: 'assistant', content: '' },
   ]
+  // Запоминаем границу стрима — handleStreamEvent('usage') обнуляет токены
+  // только на assistant-турнах от этого индекса до конца buf, не трогая
+  // persisted-турны прошлых стримов с уже корректными значениями.
+  streamStartIdx[id] = prevHistory.length
   // Гарантируем, что Vue отрисует user-сообщение ДО того, как начнёт
   // приходить первый text-delta стрима. Без этого — если модель отвечает
   // мгновенно, оба обновления (user-msg + первый delta) попадают в один
@@ -603,18 +615,39 @@ function handleStreamEvent(chatId: string, event: string, data: any) {
     return
   }
   if (event === 'usage') {
-    // Live-обновление токенов в шапке чата: бэк присылает накопленный
-    // usage после каждой итерации agent-loop'а. Записываем в последний
-    // assistant turn (currentChatTokens суммирует по live, остальные
-    // assistant'ы остаются с tokens=0 — итог == последний накопленный).
-    for (let i = buf.length - 1; i >= 0; i--) {
+    // Бэк присылает CUMULATIVE-снимок usage'а после каждой итерации
+    // agent-loop'а. Каждый `tool-call` event между итерациями пушит в buf
+    // новый empty-assistant, и если просто писать снимок на «последний
+    // assistant», на промежуточных empty'ах копятся стейл cumulative-
+    // значения от прошлых итераций. `currentChatTokens.reduce` суммирует
+    // по всем assistant-турнам — и шапка чата раздувается в N раз
+    // (см. v0.13.7 баг: $0.29 в шапке против $0.08 в sidebar/per-message).
+    //
+    // Фикс: в пределах ТЕКУЩЕГО стрима (от streamStartIdx до конца buf)
+    // обнуляем токены на ВСЕХ assistant'ах кроме последнего, а на
+    // последний пишем актуальный cumulative. Тогда сумма live-турнов
+    // в этом стриме == cumulative последней итерации == реальный billing.
+    const start = streamStartIdx[chatId] ?? 0
+    let lastAssistantIdx = -1
+    for (let i = buf.length - 1; i >= start; i--) {
+      if (buf[i]?.role === 'assistant') {
+        lastAssistantIdx = i
+        break
+      }
+    }
+    for (let i = start; i < buf.length; i++) {
       const t = buf[i]
-      if (t?.role === 'assistant') {
+      if (t?.role !== 'assistant') continue
+      if (i === lastAssistantIdx) {
         t.tokensPrompt = data.promptTokens ?? 0
         t.tokensCompletion = data.completionTokens ?? 0
         t.tokensCached = data.cachedTokens ?? 0
         if (typeof data.totalCost === 'number') t.tokensCost = data.totalCost
-        break
+      } else {
+        t.tokensPrompt = 0
+        t.tokensCompletion = 0
+        t.tokensCached = 0
+        delete t.tokensCost
       }
     }
     return
