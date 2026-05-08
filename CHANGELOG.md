@@ -7,6 +7,15 @@
 
 ## [Unreleased]
 
+## [0.13.9] — 2026-05-08
+
+### Changed
+- Tooltip у счётчика 🔧 в подвале ассистент-сообщения переформулирован: было
+  «В стоимость рядом входит N LLM-вызовов с инструментами в этом ответе —
+  каждый итерационный вызов биллится отдельно», стало «Перед этим ответом
+  было N LLM-вызовов с инструментами — стоимость рядом включает их.»
+  Чище читается, ту же мысль доносит короче.
+
 ## [0.13.8] — 2026-05-08
 
 ### Fixed
@@ -345,7 +354,8 @@
   CLI interface...`; для `apt list --upgradable` без свежего `apt-get
   update` подсказывает обновить кэш и подгрузить скилл `controller-update`.
 
-[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.8...HEAD
+[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.9...HEAD
+[0.13.9]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.8...v0.13.9
 [0.13.8]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.7...v0.13.8
 [0.13.7]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.6...v0.13.7
 [0.13.6]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.5...v0.13.6

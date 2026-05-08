@@ -233,7 +233,7 @@ async function downloadViaFetch(url: string, name: string) {
           class="footer-tokens"
           v-if="item.tokensPrompt || item.tokensCompletion || messageCost || item.toolCallsCount"
         ><template v-if="item.toolCallsCount"
-          ><span :title="`В стоимость рядом входит ${item.toolCallsCount} ${plural(item.toolCallsCount, ['LLM-вызов с инструментом', 'LLM-вызова с инструментами', 'LLM-вызовов с инструментами'])} в этом ответе — каждый итерационный вызов биллится отдельно.`">🔧 {{ item.toolCallsCount }}</span> · </template
+          ><span :title="`Перед этим ответом было ${item.toolCallsCount} ${plural(item.toolCallsCount, ['LLM-вызов с инструментом', 'LLM-вызова с инструментами', 'LLM-вызовов с инструментами'])} — стоимость рядом включает их.`">🔧 {{ item.toolCallsCount }}</span> · </template
         >↑{{ item.tokensPrompt ?? 0 }} ↓{{ item.tokensCompletion ?? 0 }}<template v-if="item.tokensCached"> ⊙{{ item.tokensCached }}</template><template v-if="messageCost"> · {{ fmtCost(messageCost) }}</template></span>
         <span v-if="item.createdAt" class="footer-time">{{ fmtTime(item.createdAt) }}</span>
       </div>
