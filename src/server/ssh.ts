@@ -33,14 +33,23 @@ const DEFAULT_EXEC_TIMEOUT = 10_000
 const MAX_EXEC_TIMEOUT = 120_000
 const MAX_BUFFER = 1_000_000  // 1 MB на stdout+stderr на один exec
 
+/** Сколько одновременных channels (exec/sftp/shell) разрешаем на одном
+ * Client. sshd на WB-контроллерах настроен MaxSessions=10. Держим 7 для
+ * себя, оставляя ~3 пользователю на ручные ssh-подключения и непредвиденное.
+ * Интерактивный shell в приложении тоже забирает 1 из этих 7. */
+const MAX_PARALLEL_CHANNELS = 7
+
 type Conn = {
   client: Client
   ready: Promise<void>
   lastUsed: number
 }
 
+type Slot = { active: number; queue: (() => void)[] }
+
 export class SshPool {
   private conns = new Map<string, Conn>()
+  private slots = new Map<string, Slot>()
   private auth: SshAuth
 
   constructor(auth: SshAuth) {
@@ -56,6 +65,45 @@ export class SshPool {
   async closeAll() {
     for (const c of this.conns.values()) c.client.end()
     this.conns.clear()
+  }
+
+  /** Получить слот для открытия channel (exec/sftp/shell) на контроллере.
+   * FIFO-очередь не даёт «новеньким» обходить ожидающих. Возвращает функцию
+   * release — её обязательно вызвать в finally. Идемпотентна. */
+  private async acquireSlot(sn: string): Promise<() => void> {
+    let slot = this.slots.get(sn)
+    if (!slot) {
+      slot = { active: 0, queue: [] }
+      this.slots.set(sn, slot)
+    }
+    const s = slot
+    if (s.queue.length > 0 || s.active >= MAX_PARALLEL_CHANNELS) {
+      await new Promise<void>((resolve) => s.queue.push(resolve))
+      // слот «передан» нам предыдущим релизом — active уже учитывает нас
+    } else {
+      s.active++
+    }
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const next = s.queue.shift()
+      if (next) {
+        // передаём слот следующему ожидающему — не декрементим
+        next()
+      } else {
+        s.active--
+      }
+    }
+  }
+
+  private async withSlot<T>(sn: string, fn: () => Promise<T>): Promise<T> {
+    const release = await this.acquireSlot(sn)
+    try {
+      return await fn()
+    } finally {
+      release()
+    }
   }
 
   /**
@@ -76,15 +124,21 @@ export class SshPool {
     rows = 24,
   ): Promise<{ write: (s: string) => void; resize: (c: number, r: number) => void; close: () => void }> {
     const conn = await this.connect(controller)
+    // Интерактивный shell держит слот всё время жизни сессии.
+    const release = await this.acquireSlot(controller.sn)
     return await new Promise((resolve, reject) => {
       conn.client.shell({ cols, rows, term: 'xterm-256color' }, (err, ch) => {
-        if (err) return reject(err)
+        if (err) { release(); return reject(err) }
         let closed = false
+        const finish = () => {
+          if (closed) return
+          closed = true
+          release()
+        }
         ch.on('data', (chunk: Buffer) => onData(chunk))
         ch.stderr?.on('data', (chunk: Buffer) => onData(chunk))
         ch.on('close', () => {
-          if (closed) return
-          closed = true
+          finish()
           conn.lastUsed = Date.now()
           onClose()
         })
@@ -94,8 +148,11 @@ export class SshPool {
           resize: (c: number, r: number) => { try { ch.setWindow(r, c, 0, 0) } catch { /* ignore */ } },
           close: () => {
             if (closed) return
-            closed = true
             try { ch.end() } catch { /* ignore */ }
+            // release произойдёт в ch.on('close'); если ch.end не выстрелит
+            // close-event (зависший канал) — release всё равно идемпотентен,
+            // но шанс утечки слота минимален. Подстраховку не делаем,
+            // чтобы не освободить слот пока ssh2 ещё пишет данные.
           },
         })
       })
@@ -105,7 +162,7 @@ export class SshPool {
   async exec(controller: Controller, command: string, timeoutMs = DEFAULT_EXEC_TIMEOUT): Promise<ExecResult> {
     const limit = Math.min(timeoutMs, MAX_EXEC_TIMEOUT)
     const conn = await this.connect(controller)
-    return await new Promise<ExecResult>((resolve, reject) => {
+    return await this.withSlot(controller.sn, () => new Promise<ExecResult>((resolve, reject) => {
       conn.client.exec(command, (err, ch) => {
         if (err) return reject(err)
         let stdout = ''
@@ -150,7 +207,7 @@ export class SshPool {
           reject(e)
         })
       })
-    })
+    }))
   }
 
   async readFile(controller: Controller, path: string, maxBytes = 64_000): Promise<{ content: string; truncated: boolean }> {
@@ -181,7 +238,7 @@ export class SshPool {
   async writeFile(controller: Controller, path: string, content: string): Promise<void> {
     const conn = await this.connect(controller)
     const buf = Buffer.from(content, 'utf8')
-    await new Promise<void>((resolve, reject) => {
+    await this.withSlot(controller.sn, () => new Promise<void>((resolve, reject) => {
       conn.client.sftp((err, sftp) => {
         if (err) return reject(err)
         const ws = sftp.createWriteStream(path)
@@ -189,12 +246,12 @@ export class SshPool {
         ws.on('close', () => { sftp.end(); resolve() })
         ws.end(buf)
       })
-    })
+    }))
   }
 
   async downloadFile(controller: Controller, path: string, maxBytes = 20 * 1024 * 1024): Promise<Buffer> {
     const conn = await this.connect(controller)
-    return new Promise<Buffer>((resolve, reject) => {
+    return this.withSlot(controller.sn, () => new Promise<Buffer>((resolve, reject) => {
       conn.client.sftp((err, sftp) => {
         if (err) return reject(err)
         sftp.stat(path, (statErr, stats) => {
@@ -215,12 +272,12 @@ export class SshPool {
           rs.on('end', () => { sftp.end(); resolve(Buffer.concat(chunks)) })
         })
       })
-    })
+    }))
   }
 
   async writeFileBuffer(controller: Controller, path: string, buf: Buffer): Promise<void> {
     const conn = await this.connect(controller)
-    await new Promise<void>((resolve, reject) => {
+    await this.withSlot(controller.sn, () => new Promise<void>((resolve, reject) => {
       conn.client.sftp((err, sftp) => {
         if (err) return reject(err)
         const ws = sftp.createWriteStream(path)
@@ -228,7 +285,7 @@ export class SshPool {
         ws.on('close', () => { sftp.end(); resolve() })
         ws.end(buf)
       })
-    })
+    }))
   }
 
   async mqttRpc(
