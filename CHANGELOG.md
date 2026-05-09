@@ -7,6 +7,34 @@
 
 ## [Unreleased]
 
+## [0.13.20] — 2026-05-09
+
+### Fixed
+- **SSH-сессии: лимит на параллельные channels.** Симптом: запрос истории
+  на 6+ каналов (внутри `get_history`/`get_history_chart`/`get_history_table`)
+  упирался в `MaxSessions` контроллера — `mqttRpc` под капотом делает
+  `mosquitto_sub`/`_pub` через ssh exec, и `Promise.all` по каналам открывал
+  по одному channel на каждый. Аналогично — pre-flight через
+  `mqtt_list_topics` (по уникальным device) и фоновый job-tracker с 5+
+  running-задачами на одном контроллере.
+- В `SshPool` добавлен per-controller семафор `MAX_PARALLEL_CHANNELS = 7`
+  (sshd на WB настроен `MaxSessions=10`; ~3 слота оставлены пользователю
+  на ручные ssh-подключения). Семафор оборачивает `exec`, `writeFile`,
+  `writeFileBuffer`, `downloadFile`, `openShell`. `connect()` вне
+  семафора — handshake не ест слот. Очередь FIFO, новые вызовы не
+  обходят ожидающих. Интерактивный shell держит слот всё время сессии.
+
+### Changed
+- **`controller-update.md`: зонтичное согласие.** Раньше скилл требовал
+  HITL перед каждым шагом сценария A (apt upgrade → kept back? →
+  dist-upgrade → ядро обновилось? → reboot), даже если пользователь уже
+  сказал «обнови всё, не спрашивай». Добавлен раздел «Зонтичное согласие»:
+  фразы «обнови всё», «сделай это и всё остальное», «делай», «доведи до
+  конца», «не спрашивай каждый раз», «мне нужна самая свежая» —
+  разрешение на ВСЕ шаги сценария A. Не покрывает смену релиза
+  (`wb-release -t`), `wb-release -p/-r` и destructive-команды вне
+  сценария A — там HITL остаётся.
+
 ## [0.13.19] — 2026-05-08
 
 ### Fixed
@@ -668,7 +696,12 @@
   CLI interface...`; для `apt list --upgradable` без свежего `apt-get
   update` подсказывает обновить кэш и подгрузить скилл `controller-update`.
 
-[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.15...HEAD
+[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.20...HEAD
+[0.13.20]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.19...v0.13.20
+[0.13.19]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.18...v0.13.19
+[0.13.18]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.17...v0.13.18
+[0.13.17]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.16...v0.13.17
+[0.13.16]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.15...v0.13.16
 [0.13.15]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.14...v0.13.15
 [0.13.14]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.13...v0.13.14
 [0.13.13]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.12...v0.13.13
