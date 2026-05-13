@@ -336,16 +336,30 @@ export class SshPool {
   }
 
   async getInfo(controller: Controller): Promise<Record<string, string>> {
+    // SN на WB-контроллере живёт в /var/lib/wirenboard/short_sn (точный
+    // наклеечный серийник, не путать с hostname — тот может быть переименован
+    // пользователем). Если файла нет (старая прошивка / не-WB железо) —
+    // возвращаем пустую строку и НЕ выводим SN из hostname: hostname-суффикс
+    // может быть переопределён, неавторитетен.
     const r = await this.exec(
       controller,
-      'echo HOST; hostname; echo UNAME; uname -a; echo UPTIME; uptime; echo RELEASE; cat /etc/wb-release 2>/dev/null; echo FW; cat /etc/wb-fw-version 2>/dev/null'
+      'echo HOST; hostname; echo UNAME; uname -a; echo UPTIME; uptime; echo RELEASE; cat /etc/wb-release 2>/dev/null; echo FW; cat /etc/wb-fw-version 2>/dev/null; echo HWSN; cat /var/lib/wirenboard/short_sn 2>/dev/null'
     )
-    const sections = r.stdout.split(/^(HOST|UNAME|UPTIME|RELEASE|FW)$/m)
+    const sections = r.stdout.split(/^(HOST|UNAME|UPTIME|RELEASE|FW|HWSN)$/m)
     const get = (name: string) => {
       const i = sections.indexOf(name)
       return i >= 0 ? (sections[i + 1] ?? '').trim() : ''
     }
-    return { sn: controller.sn, hostname: get('HOST'), uname: get('UNAME'), uptime: get('UPTIME'), release: get('RELEASE'), fwVersion: get('FW') }
+    const hardwareSn = get('HWSN')
+    return {
+      sn: controller.sn,
+      hardwareSn,
+      hostname: get('HOST'),
+      uname: get('UNAME'),
+      uptime: get('UPTIME'),
+      release: get('RELEASE'),
+      fwVersion: get('FW'),
+    }
   }
 
   async getMetrics(controller: Controller): Promise<Record<string, unknown>> {

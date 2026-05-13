@@ -38,6 +38,17 @@ import {
   enrichSerialRpcError,
 } from './modbus-templates.ts'
 
+/** Common controller-target params: either `sn` (registry key, обычно серийник
+ *  типа A25NDEMJ из list_controllers) или `host` (IP/hostname/host:port для
+ *  ad-hoc подключения). Хотя бы одно должно быть, но `required` оставлен пустым
+ *  — runtime fallback на chat contextSns обработает случай когда ни sn ни host
+ *  не переданы. JSON Schema XOR не выражает кросс-провайдерно надёжно, поэтому
+ *  валидация на стороне backend (`resolve1`). */
+const CONTROLLER_TARGET_PROPS = {
+  sn: { type: 'string' as const, description: 'Серийный номер контроллера (например A25NDEMJ) из контекста чата или ответа list_controllers.' },
+  host: { type: 'string' as const, description: 'Альтернатива sn — IP, hostname или host:port (например 192.168.1.10, wirenboard-abc.local, 192.168.1.10:2222). Используй когда контроллер показан по IP, или явно хочешь обратиться по нестандартному SSH-порту.' },
+}
+
 export function toolSchemas(): ChatCompletionTool[] {
   return [
     {
@@ -56,8 +67,8 @@ export function toolSchemas(): ChatCompletionTool[] {
         description: 'Проверить доступность контроллера по HTTP (web UI) и обновить статус.',
         parameters: {
           type: 'object',
-          properties: { sn: { type: 'string', description: 'Серийный номер контроллера' } },
-          required: ['sn'],
+          properties: { ...CONTROLLER_TARGET_PROPS },
+          required: [],
           additionalProperties: false,
         },
       },
@@ -94,7 +105,7 @@ export function toolSchemas(): ChatCompletionTool[] {
             sn: { type: 'string' },
             device: { type: 'string', description: 'ID устройства, например `wb-mr6c_45`' },
           },
-          required: ['sn', 'device'],
+          required: ['device'],
           additionalProperties: false,
         },
       },
@@ -107,13 +118,13 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             device: { type: 'string', description: 'Фильтр по device_id (подстрока, регистронезависимо). Пусто — все устройства.' },
             timeout: { type: 'number', description: 'Окно сбора в секундах. По умолчанию 3.' },
             includeEmpty: { type: 'boolean', description: 'Включать устройства без контролов (только с meta). По умолчанию false.' },
             includeMeta: { type: 'boolean', description: 'Класть полный raw meta-объект в каждый control. По умолчанию false (только распакованные поля).' },
           },
-          required: ['sn'],
+          required: [],
           additionalProperties: false,
         },
       },
@@ -129,7 +140,7 @@ export function toolSchemas(): ChatCompletionTool[] {
             sn: { type: 'string' },
             topic: { type: 'string', description: 'Полный путь к топику, например `/devices/wb-mr6c_45/controls/K1`' },
           },
-          required: ['sn', 'topic'],
+          required: ['topic'],
           additionalProperties: false,
         },
       },
@@ -154,7 +165,7 @@ export function toolSchemas(): ChatCompletionTool[] {
             qos: { type: 'integer', enum: [0, 1, 2], description: 'MQTT QoS, по умолчанию 1.' },
             retain: { type: 'boolean', description: 'Опубликовать как retained, по умолчанию false.' },
           },
-          required: ['sn', 'topic', 'payload'],
+          required: ['topic', 'payload'],
           additionalProperties: false,
         },
       },
@@ -195,7 +206,7 @@ export function toolSchemas(): ChatCompletionTool[] {
             path: { type: 'string' },
             maxBytes: { type: 'number', description: 'по умолчанию 64000' },
           },
-          required: ['sn', 'path'],
+          required: ['path'],
           additionalProperties: false,
         },
       },
@@ -213,7 +224,7 @@ export function toolSchemas(): ChatCompletionTool[] {
             lines: { type: 'number', description: 'кол-во строк (по умолчанию 200, максимум 2000)' },
             priority: { type: 'string', description: 'фильтр приоритета journalctl: err, warning, info, debug. По умолчанию — все уровни.' },
           },
-          required: ['sn'],
+          required: [],
           additionalProperties: false,
         },
       },
@@ -326,8 +337,8 @@ export function toolSchemas(): ChatCompletionTool[] {
         description: 'Базовая информация о контроллере: hostname, uname, uptime, версия прошивки. Делается одним SSH-запросом.',
         parameters: {
           type: 'object',
-          properties: { sn: { type: 'string', description: 'Серийный номер контроллера.' } },
-          required: ['sn'],
+          properties: { ...CONTROLLER_TARGET_PROPS },
+          required: [],
           additionalProperties: false,
         },
       },
@@ -339,8 +350,8 @@ export function toolSchemas(): ChatCompletionTool[] {
         description: 'Системные метрики контроллера: load average, RAM, диски (/, /mnt/data). Сырые данные с cat /proc/loadavg, free -m, df -h.',
         parameters: {
           type: 'object',
-          properties: { sn: { type: 'string', description: 'Серийный номер контроллера.' } },
-          required: ['sn'],
+          properties: { ...CONTROLLER_TARGET_PROPS },
+          required: [],
           additionalProperties: false,
         },
       },
@@ -352,8 +363,8 @@ export function toolSchemas(): ChatCompletionTool[] {
         description: 'Список упавших systemd-юнитов на контроллере (`systemctl --failed`). Один из первых шагов диагностики «что-то сломалось» — быстрее, чем читать journalctl целиком.',
         parameters: {
           type: 'object',
-          properties: { sn: { type: 'string', description: 'Серийный номер контроллера.' } },
-          required: ['sn'],
+          properties: { ...CONTROLLER_TARGET_PROPS },
+          required: [],
           additionalProperties: false,
         },
       },
@@ -366,7 +377,7 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             unit: { type: 'string', description: 'Имя юнита (wb-mqtt-serial.service, fstrim.timer, mosquitto). Суффикс .service можно опустить.' },
             action: {
               type: 'string',
@@ -374,7 +385,7 @@ export function toolSchemas(): ChatCompletionTool[] {
               description: 'Действие. По умолчанию status.',
             },
           },
-          required: ['sn', 'unit'],
+          required: ['unit'],
           additionalProperties: false,
         },
       },
@@ -387,10 +398,10 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             pingTarget: { type: 'string', description: 'Если задан — `ping -c1 -W2 <target>` (например 8.8.8.8). Иначе пинг пропускается.' },
           },
-          required: ['sn'],
+          required: [],
           additionalProperties: false,
         },
       },
@@ -403,9 +414,9 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
           },
-          required: ['sn'],
+          required: [],
           additionalProperties: false,
         },
       },
@@ -418,11 +429,11 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             path: { type: 'string', description: 'Абсолютный путь к файлу.' },
             content: { type: 'string', description: 'Полное содержимое файла.' },
           },
-          required: ['sn', 'path', 'content'],
+          required: ['path', 'content'],
           additionalProperties: false,
         },
       },
@@ -465,14 +476,14 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             driver: { type: 'string', description: 'Имя RPC-драйвера: wb-mqtt-serial, confed, db_logger, wb-device-manager, wbrules.' },
             service: { type: 'string', description: 'Имя сервиса (device, config, Editor, history и т.д.)' },
             method: { type: 'string', description: 'Имя метода (LoadConfig, Load, Save, Start и т.д.)' },
             params: { type: 'object', description: 'Параметры вызова. Для пустых параметров — {}.' },
             timeoutSec: { type: 'integer', minimum: 1, maximum: 30, description: 'Таймаут ожидания ответа (по умолч. 5с).' },
           },
-          required: ['sn', 'driver', 'service', 'method', 'params'],
+          required: ['driver', 'service', 'method', 'params'],
           additionalProperties: false,
         },
       },
@@ -485,13 +496,13 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             prefix: { type: 'string', description: 'MQTT-фильтр, дефолт "#".' },
             timeoutSec: { type: 'integer', minimum: 1, maximum: 10 },
             limit: { type: 'integer', minimum: 1, maximum: 2000, description: 'Макс. топиков на страницу (дефолт 200).' },
             offset: { type: 'integer', minimum: 0, description: 'Пропустить N топиков (для пагинации, дефолт 0).' },
           },
-          required: ['sn'],
+          required: [],
           additionalProperties: false,
         },
       },
@@ -504,11 +515,11 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             command: { type: 'string' },
             label: { type: 'string', description: 'Короткая метка для человека.' },
           },
-          required: ['sn', 'command'],
+          required: ['command'],
           additionalProperties: false,
         },
       },
@@ -521,10 +532,10 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             jobId: { type: 'string', description: '8-символьный hex id из ssh_exec_async.' },
           },
-          required: ['sn', 'jobId'],
+          required: ['jobId'],
           additionalProperties: false,
         },
       },
@@ -537,12 +548,12 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             jobId: { type: 'string' },
             fromLine: { type: 'integer', minimum: 1, description: 'С какой строки читать (1-based). Дефолт 1.' },
             maxLines: { type: 'integer', minimum: 1, maximum: 1000, description: 'Сколько строк максимум вернуть. Дефолт 100.' },
           },
-          required: ['sn', 'jobId'],
+          required: ['jobId'],
           additionalProperties: false,
         },
       },
@@ -555,10 +566,10 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             jobId: { type: 'string' },
           },
-          required: ['sn', 'jobId'],
+          required: ['jobId'],
           additionalProperties: false,
         },
       },
@@ -571,9 +582,9 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
           },
-          required: ['sn'],
+          required: [],
           additionalProperties: false,
         },
       },
@@ -586,10 +597,10 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             durationSec: { type: 'integer', minimum: 10, maximum: 300, description: 'Сколько секунд собирать debug-данные. По умолчанию 30.' },
           },
-          required: ['sn'],
+          required: [],
           additionalProperties: false,
         },
       },
@@ -602,7 +613,7 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             port: { type: 'string', description: 'Путь к порту, например "/dev/ttyRS485-1".' },
             baud_rate: { type: 'integer', description: 'Скорость, по умолчанию перебирает 115200 и 9600.' },
             data_bits: { type: 'integer', description: 'Биты данных, по умолчанию 8.' },
@@ -610,7 +621,7 @@ export function toolSchemas(): ChatCompletionTool[] {
             stop_bits: { type: 'integer', description: '1 или 2. По умолчанию 2.' },
             scan_type: { type: 'string', enum: ['extended', 'standard'], description: '"extended" — Fast Modbus (по умолчанию). "standard" — обычный Modbus.' },
           },
-          required: ['sn'],
+          required: [],
           additionalProperties: false,
         },
       },
@@ -623,9 +634,9 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
           },
-          required: ['sn'],
+          required: [],
           additionalProperties: false,
         },
       },
@@ -638,10 +649,10 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             filter: { type: 'string', description: 'Подстрока для фильтрации (например "wb-mr6c", "dimmer", "MAI"). Регистронезависимо.' },
           },
-          required: ['sn'],
+          required: [],
           additionalProperties: false,
         },
       },
@@ -654,7 +665,7 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             device_id: { type: 'string', description: 'Имя устройства в MQTT (wb-mr6c_138). Альтернатива path+slave_id.' },
             path: { type: 'string', description: 'Порт (/dev/ttyRS485-1) — если без device_id.' },
             slave_id: { type: 'number', description: 'Modbus slave-id — если без device_id.' },
@@ -664,7 +675,7 @@ export function toolSchemas(): ChatCompletionTool[] {
             data_bits: { type: 'number' },
             stop_bits: { type: 'number' },
           },
-          required: ['sn'],
+          required: [],
           additionalProperties: false,
         },
       },
@@ -677,7 +688,7 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             path: { type: 'string', description: 'Порт (/dev/ttyRS485-1).' },
             slave_id: { type: 'number', description: 'Modbus slave-id.' },
             baud_rate: { type: 'number', description: 'Baud, по умолчанию 9600.' },
@@ -685,7 +696,7 @@ export function toolSchemas(): ChatCompletionTool[] {
             data_bits: { type: 'number', description: 'Data bits, по умолчанию 8.' },
             stop_bits: { type: 'number', description: 'Stop bits, по умолчанию 2.' },
           },
-          required: ['sn', 'path', 'slave_id'],
+          required: ['path', 'slave_id'],
           additionalProperties: false,
         },
       },
@@ -698,9 +709,9 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
           },
-          required: ['sn'],
+          required: [],
           additionalProperties: false,
         },
       },
@@ -713,14 +724,14 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             device_type: { type: 'string', description: 'Тип устройства как в Load.types[].types[].type (например "WB-MR6C"). Альтернатива — mqtt_id.' },
             mqtt_id: { type: 'string', description: 'mqtt-id шаблона (например "wb-mr6c"). Если задан — резолв пропускается, читается файл config-<mqtt_id>.json напрямую.' },
             view: { type: 'string', enum: ['summary', 'full', 'channels-only', 'meta-only'], description: 'Представление. По умолчанию summary.' },
             enabledOnly: { type: 'boolean', description: 'Только enabled-каналы (default false).' },
             channelFilter: { type: 'string', description: 'Подстрока в имени канала (case-insensitive).' },
           },
-          required: ['sn'],
+          required: [],
           additionalProperties: false,
         },
       },
@@ -733,7 +744,7 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             channels: {
               type: 'array',
               description: 'Каналы для запроса. Каждый элемент — пара [device_id, control_name].',
@@ -744,7 +755,7 @@ export function toolSchemas(): ChatCompletionTool[] {
             from: { type: 'number', description: 'Начало диапазона (unix timestamp, секунды).' },
             to: { type: 'number', description: 'Конец диапазона (unix timestamp, секунды).' },
           },
-          required: ['sn', 'channels'],
+          required: ['channels'],
           additionalProperties: false,
         },
       },
@@ -763,7 +774,7 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             channels: {
               type: 'array',
               description: 'Каналы для графика. Каждый элемент — пара [device_id, control_name].',
@@ -785,7 +796,7 @@ export function toolSchemas(): ChatCompletionTool[] {
                 'boxplot — ящики с усами по периодам (час/день).',
             },
           },
-          required: ['sn', 'channels'],
+          required: ['channels'],
           additionalProperties: false,
         },
       },
@@ -798,7 +809,7 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             channels: {
               type: 'array',
               description: 'Каналы для таблицы. Каждый элемент — пара [device_id, control_name].',
@@ -811,7 +822,7 @@ export function toolSchemas(): ChatCompletionTool[] {
             limit: { type: 'number', description: 'Максимум точек на канал. По умолчанию 10000.' },
             min_interval: { type: 'number', description: 'Минимальный интервал между точками в секундах. 0 — все точки.' },
           },
-          required: ['sn', 'channels'],
+          required: ['channels'],
           additionalProperties: false,
         },
       },
@@ -824,9 +835,9 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
           },
-          required: ['sn'],
+          required: [],
           additionalProperties: false,
         },
       },
@@ -839,12 +850,12 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             slot_id: { type: 'string', description: 'Идентификатор слота из get_hardware_config (например: "mod1", "extio3").' },
             module: { type: 'string', description: 'Идентификатор модуля. Пустая строка — убрать модуль из слота.' },
             options: { type: 'object', description: 'Настройки модуля (опционально).' },
           },
-          required: ['sn', 'slot_id', 'module'],
+          required: ['slot_id', 'module'],
           additionalProperties: false,
         },
       },
@@ -857,9 +868,9 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
           },
-          required: ['sn'],
+          required: [],
           additionalProperties: false,
         },
       },
@@ -872,9 +883,9 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
           },
-          required: ['sn'],
+          required: [],
           additionalProperties: false,
         },
       },
@@ -887,10 +898,10 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             beforePath: { type: 'string', description: 'Абсолютный путь к JSON-слепку на контроллере.' },
           },
-          required: ['sn', 'beforePath'],
+          required: ['beforePath'],
           additionalProperties: false,
         },
       },
@@ -903,11 +914,11 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             path: { type: 'string', description: 'Абсолютный путь к файлу.' },
             maxBytes: { type: 'number', description: 'по умолчанию 64000' },
           },
-          required: ['sn', 'path'],
+          required: ['path'],
           additionalProperties: false,
         },
       },
@@ -920,11 +931,11 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             path: { type: 'string', description: 'Абсолютный путь к файлу на контроллере.' },
             name: { type: 'string', description: 'Имя файла для сохранения (опционально, по умолчанию basename пути).' },
           },
-          required: ['sn', 'path'],
+          required: ['path'],
           additionalProperties: false,
         },
       },
@@ -937,11 +948,11 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             fileId: { type: 'string', description: 'ID вложения из list_attachments.' },
             path: { type: 'string', description: 'Абсолютный путь на контроллере для сохранения файла.' },
           },
-          required: ['sn', 'fileId', 'path'],
+          required: ['fileId', 'path'],
           additionalProperties: false,
         },
       },
@@ -963,7 +974,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       function: {
         name: 'list_rules',
         description: 'Список всех wb-rules скриптов с состоянием enabled/disabled и привязанными правилами. Обёртка над wbrules/Editor/List — не нужно знать RPC-синтаксис.',
-        parameters: { type: 'object', properties: { sn: { type: 'string', description: 'Серийный номер контроллера.' } }, required: ['sn'], additionalProperties: false },
+        parameters: { type: 'object', properties: { ...CONTROLLER_TARGET_PROPS }, required: [], additionalProperties: false },
       },
     },
     {
@@ -974,10 +985,10 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             name: { type: 'string', description: 'Имя файла правила без расширения (например "wb-la-temp-relay").' },
           },
-          required: ['sn', 'name'],
+          required: ['name'],
           additionalProperties: false,
         },
       },
@@ -990,11 +1001,11 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             name: { type: 'string', description: 'Имя файла без расширения (например "my-rule").' },
             content: { type: 'string', description: 'Полный JS-код файла. ES5 (без let/const/arrow).' },
           },
-          required: ['sn', 'name', 'content'],
+          required: ['name', 'content'],
           additionalProperties: false,
         },
       },
@@ -1007,10 +1018,10 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             name: { type: 'string', description: 'Имя файла без расширения.' },
           },
-          required: ['sn', 'name'],
+          required: ['name'],
           additionalProperties: false,
         },
       },
@@ -1023,10 +1034,10 @@ export function toolSchemas(): ChatCompletionTool[] {
         parameters: {
           type: 'object',
           properties: {
-            sn: { type: 'string', description: 'Серийный номер контроллера.' },
+            ...CONTROLLER_TARGET_PROPS,
             name: { type: 'string', description: 'Имя файла правила без расширения.' },
           },
-          required: ['sn', 'name'],
+          required: ['name'],
           additionalProperties: false,
         },
       },
@@ -1177,9 +1188,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     }
 
     case 'probe_controller': {
-      const sn = String(args['sn'] ?? '')
-      const c = ctx.discovery.get(sn) ?? ctx.discovery.getOrCreate(sn) ?? adHocController(sn)
-      if (!c) return notFound(sn)
+      const c = resolve1(args, ctx)
       const r = await probe(c)
       c.reachable = r.reachable
       if (r.fw) c.fw = r.fw
@@ -1188,7 +1197,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     }
 
     case 'list_devices': {
-      const targets = resolveTargets(args['sn'], ctx)
+      const targets = resolveTargets(args, ctx)
       const out: Record<string, unknown> = {}
       await Promise.all(
         targets.map(async (c) => {
@@ -1203,16 +1212,14 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     }
 
     case 'list_controls': {
-      const sn = String(args['sn'] ?? '')
+      const c = resolve1(args, ctx)
       const device = String(args['device'] ?? '')
-      const c = ctx.discovery.get(sn) ?? ctx.discovery.getOrCreate(sn) ?? adHocController(sn)
-      if (!c) return notFound(sn)
       const controls = await ctx.mqtt.listControls(c, device)
       return JSON.stringify(controls, null, 2)
     }
 
     case 'mqtt_inventory': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const filter = typeof args['device'] === 'string' ? (args['device'] as string) : undefined
       const timeoutSec = typeof args['timeout'] === 'number' ? Math.max(1, Math.min(15, args['timeout'] as number)) : 3
       const includeEmpty = args['includeEmpty'] === true
@@ -1223,16 +1230,14 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     }
 
     case 'mqtt_read': {
-      const sn = String(args['sn'] ?? '')
+      const c = resolve1(args, ctx)
       const topic = String(args['topic'] ?? '')
-      const c = ctx.discovery.get(sn) ?? ctx.discovery.getOrCreate(sn) ?? adHocController(sn)
-      if (!c) return notFound(sn)
       const value = await ctx.mqtt.readTopic(c, topic)
       return JSON.stringify({ topic, value }, null, 2)
     }
 
     case 'mqtt_write': {
-      const targets = resolveTargets(args['sn'], ctx)
+      const targets = resolveTargets(args, ctx)
       const topic = String(args['topic'] ?? '')
       const payload = String(args['payload'] ?? '')
       const rawQos = args['qos']
@@ -1254,7 +1259,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     }
 
     case 'ssh_exec': {
-      const targets = resolveTargets(args['sn'], ctx)
+      const targets = resolveTargets(args, ctx)
       const command = String(args['command'] ?? '')
       const timeoutMs = typeof args['timeoutMs'] === 'number' ? args['timeoutMs'] : undefined
       if (!command) return JSON.stringify({ error: 'command required' })
@@ -1320,11 +1325,9 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     }
 
     case 'ssh_read_file': {
-      const sn = String(args['sn'] ?? '')
+      const c = resolve1(args, ctx)
       const filePath = String(args['path'] ?? '')
       const maxBytes = typeof args['maxBytes'] === 'number' ? args['maxBytes'] : undefined
-      const c = ctx.discovery.get(sn) ?? ctx.discovery.getOrCreate(sn) ?? adHocController(sn)
-      if (!c) return notFound(sn)
       try {
         const r = await ctx.ssh.readFile(c, filePath, maxBytes)
         return JSON.stringify({ path: filePath, ...r }, null, 2)
@@ -1334,12 +1337,10 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     }
 
     case 'ssh_read_logs': {
-      const sn = String(args['sn'] ?? '')
+      const c = resolve1(args, ctx)
       const unit = args['unit'] ? String(args['unit']) : undefined
       const lines = typeof args['lines'] === 'number' ? args['lines'] : undefined
       const priority = args['priority'] ? String(args['priority']) : undefined
-      const c = ctx.discovery.get(sn) ?? ctx.discovery.getOrCreate(sn) ?? adHocController(sn)
-      if (!c) return notFound(sn)
       try {
         const text = await ctx.ssh.readLogs(c, unit, lines, priority)
         return text
@@ -1429,23 +1430,23 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     }
 
     case 'get_controller': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       return JSON.stringify(await ctx.ssh.getInfo(c), null, 2)
     }
 
     case 'get_metrics': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       return JSON.stringify(await ctx.ssh.getMetrics(c), null, 2)
     }
 
     case 'failed_units': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const r = await ctx.ssh.exec(c, 'systemctl --failed --no-pager', 10000)
       return JSON.stringify({ output: r.stdout.trim() }, null, 2)
     }
 
     case 'systemd_unit': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const unit = String(args['unit'] ?? '')
       const action = (args['action'] ?? 'status') as string
       // Whitelist allowed unit-name characters before passing to systemctl.
@@ -1496,7 +1497,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     }
 
     case 'network_status': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       // Whitelist hostname/IP-символы перед склейкой в shell. Защита поверх
       // shellQuote: даже если кто-то по ошибке передаст `; rm -rf …` в
       // pingTarget, regex обнулит всё лишнее. Допускаем точку, двоеточие
@@ -1534,7 +1535,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     }
 
     case 'cloud_status': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const sh = [
         'echo ===SVC===',
         'systemctl is-active wb-cloud-agent 2>/dev/null || true',
@@ -1563,7 +1564,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     }
 
     case 'write_file': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const path = String(args['path'] ?? '')
       const content = String(args['content'] ?? '')
       if (!path.startsWith('/')) return JSON.stringify({ error: 'path must be absolute' })
@@ -1652,7 +1653,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     }
 
     case 'mqtt_rpc': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const driver = String(args['driver'] ?? '')
       const service = String(args['service'] ?? '')
       const method = String(args['method'] ?? '')
@@ -1666,7 +1667,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     }
 
     case 'mqtt_list_topics': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const prefix = args['prefix'] ? String(args['prefix']) : '#'
       const timeoutSec = typeof args['timeoutSec'] === 'number' ? args['timeoutSec'] : 2
       const limit = typeof args['limit'] === 'number' ? Math.min(2000, Math.max(1, args['limit'])) : 200
@@ -1686,7 +1687,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     }
 
     case 'ssh_exec_async': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       let command = String(args['command'] ?? '')
       const label = typeof args['label'] === 'string' ? args['label'] : undefined
       if (!command.trim()) return JSON.stringify({ error: 'ssh_exec_async: пустая команда' })
@@ -1711,7 +1712,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     }
 
     case 'job_status': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const jobId = String(args['jobId'] ?? '')
       const result = await ctx.ssh.jobStatus(c, jobId)
       const state = result['state'] as 'running' | 'exited' | 'unknown'
@@ -1720,7 +1721,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     }
 
     case 'job_tail': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const jobId = String(args['jobId'] ?? '')
       const fromLine = typeof args['fromLine'] === 'number' ? args['fromLine'] : 1
       const maxLines = typeof args['maxLines'] === 'number' ? args['maxLines'] : 500
@@ -1731,19 +1732,19 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     }
 
     case 'job_cancel': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const jobId = String(args['jobId'] ?? '')
       await ctx.ssh.jobCancel(c, jobId)
       return JSON.stringify({ cancelled: jobId }, null, 2)
     }
 
     case 'job_list': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       return JSON.stringify(await ctx.ssh.jobList(c), null, 2)
     }
 
     case 'serial_debug_collect': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const duration = typeof args['durationSec'] === 'number' ? Math.min(300, Math.max(10, args['durationSec'])) : 30
       const logPath = '/mnt/data/ai/wb-ai-helper/diag/debug-serial.log'
       // Important properties of this script (each one was a real bug in the previous && chain):
@@ -1780,7 +1781,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     }
 
     case 'wb_bus_scan': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const explicitPort = typeof args['port'] === 'string' ? args['port'] : null
       const scanType = args['scan_type'] === 'standard' ? 'standard' : 'extended'
       const dataBits = typeof args['data_bits'] === 'number' ? args['data_bits'] : 8
@@ -1896,7 +1897,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
     }
 
     case 'wb_add_devices': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
 
       // 1. Read scan results from /wb-device-manager/state
       const stateRaw = await ctx.mqtt.readTopic(c, '/wb-device-manager/state')
@@ -2070,7 +2071,7 @@ import json as j; print(j.dumps(m))
     }
 
     case 'modbus_device_info': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const params = buildLoadConfigParams({
         device_id: typeof args['device_id'] === 'string' ? (args['device_id'] as string) : undefined,
         path: typeof args['path'] === 'string' ? (args['path'] as string) : undefined,
@@ -2093,7 +2094,7 @@ import json as j; print(j.dumps(m))
     }
 
     case 'modbus_probe': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const path = typeof args['path'] === 'string' ? (args['path'] as string) : ''
       const slave_id = typeof args['slave_id'] === 'number' ? (args['slave_id'] as number) : NaN
       if (!path || Number.isNaN(slave_id)) {
@@ -2117,13 +2118,13 @@ import json as j; print(j.dumps(m))
     }
 
     case 'modbus_ports': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const r = await ctx.ssh.mqttRpc(c, 'wb-mqtt-serial', 'ports', 'Load', {}, 5)
       return JSON.stringify(r, null, 2)
     }
 
     case 'modbus_templates_list': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const filter = typeof args['filter'] === 'string' ? (args['filter'] as string) : ''
       const result = await ctx.ssh.mqttRpc(c, 'wb-mqtt-serial', 'config', 'Load', {}, 10) as { types?: unknown }
       const list = parseTemplatesList({ types: (result.types as any) ?? [] })
@@ -2136,7 +2137,7 @@ import json as j; print(j.dumps(m))
     }
 
     case 'modbus_template': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const deviceType = typeof args['device_type'] === 'string' ? (args['device_type'] as string).trim() : ''
       let mqttId = typeof args['mqtt_id'] === 'string' ? (args['mqtt_id'] as string).trim() : ''
       if (!deviceType && !mqttId) {
@@ -2179,7 +2180,7 @@ import json as j; print(j.dumps(m))
     }
 
     case 'get_history': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const channels = args['channels'] as [string, string][]
       if (!Array.isArray(channels) || channels.length === 0) return JSON.stringify({ error: 'channels обязателен' })
       const { from, to } = resolveTimeRange(args)
@@ -2191,7 +2192,7 @@ import json as j; print(j.dumps(m))
     }
 
     case 'get_history_chart': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const channels = args['channels'] as [string, string][]
       if (!Array.isArray(channels) || channels.length === 0) return JSON.stringify({ error: 'channels обязателен' })
       const { from, to } = resolveTimeRange(args)
@@ -2228,7 +2229,7 @@ import json as j; print(j.dumps(m))
     }
 
     case 'get_history_table': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const channels = args['channels'] as [string, string][]
       if (!Array.isArray(channels) || channels.length === 0) return JSON.stringify({ error: 'channels обязателен' })
       const { from, to } = resolveTimeRange(args)
@@ -2257,13 +2258,13 @@ import json as j; print(j.dumps(m))
     }
 
     case 'get_hardware_config': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const result = await ctx.ssh.mqttRpc(c, 'confed', 'Editor', 'Load', { path: '/etc/wb-hardware.conf' }, 10)
       return JSON.stringify(result, null, 2)
     }
 
     case 'save_hardware_config': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const slotId = String(args['slot_id'] ?? '')
       const module = String(args['module'] ?? '')
       const options = (args['options'] && typeof args['options'] === 'object') ? args['options'] : {}
@@ -2281,28 +2282,26 @@ import json as j; print(j.dumps(m))
     }
 
     case 'audit_controller': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       return JSON.stringify(await runAudit(ctx.ssh, c), null, 2)
     }
 
     case 'save_state_for_diff': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       return JSON.stringify(await runSnapshot(ctx.ssh, c), null, 2)
     }
 
     case 'diff_snapshot': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const beforePath = String(args['beforePath'] ?? '')
       if (!beforePath.startsWith('/')) return JSON.stringify({ error: 'beforePath должен быть абсолютным путём' })
       return JSON.stringify(await runDiffSnapshot(ctx.ssh, c, beforePath), null, 2)
     }
 
     case 'read_file': {
-      const sn = String(args['sn'] ?? '')
+      const c = resolve1(args, ctx)
       const filePath = String(args['path'] ?? '')
       const maxBytes = typeof args['maxBytes'] === 'number' ? args['maxBytes'] : undefined
-      const c = ctx.discovery.get(sn) ?? ctx.discovery.getOrCreate(sn) ?? adHocController(sn)
-      if (!c) return notFound(sn)
       try {
         const r = await ctx.ssh.readFile(c, filePath, maxBytes)
         return JSON.stringify({ path: filePath, ...r }, null, 2)
@@ -2312,12 +2311,10 @@ import json as j; print(j.dumps(m))
     }
 
     case 'fetch_from_controller': {
-      const sn = String(args['sn'] ?? '')
+      const c = resolve1(args, ctx)
       const path = String(args['path'] ?? '')
       const name = args['name'] ? String(args['name']).trim() : ''
       if (!path.startsWith('/')) return JSON.stringify({ error: 'path must be absolute' })
-      const c = ctx.discovery.get(sn) ?? ctx.discovery.getOrCreate(sn) ?? adHocController(sn)
-      if (!c) return notFound(sn)
       try {
         const buf = await ctx.ssh.downloadFile(c, path)
         const fileName = name || basename(path) || 'file'
@@ -2330,12 +2327,10 @@ import json as j; print(j.dumps(m))
     }
 
     case 'upload_to_controller': {
-      const sn = String(args['sn'] ?? '')
+      const c = resolve1(args, ctx)
       const fileId = String(args['fileId'] ?? '').trim()
       const path = String(args['path'] ?? '')
       if (!path.startsWith('/')) return JSON.stringify({ error: 'path must be absolute' })
-      const c = ctx.discovery.get(sn) ?? ctx.discovery.getOrCreate(sn) ?? adHocController(sn)
-      if (!c) return notFound(sn)
       const meta = getAttachment(ctx.sessionId, fileId)
       if (!meta) return JSON.stringify({ error: `file ${fileId} not found in session — user must upload it first` })
       const buf = readAttachment(ctx.sessionId, fileId)
@@ -2349,13 +2344,13 @@ import json as j; print(j.dumps(m))
     }
 
     case 'list_rules': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const r = await ctx.ssh.mqttRpc(c, 'wbrules', 'Editor', 'List', {}, 10)
       return JSON.stringify(r, null, 2)
     }
 
     case 'load_rule': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const name = ruleNameToPath(args['name'])
       if (!name) return JSON.stringify({ error: 'name обязателен' })
       const r = await ctx.ssh.mqttRpc(c, 'wbrules', 'Editor', 'Load', { path: name }, 10)
@@ -2363,7 +2358,7 @@ import json as j; print(j.dumps(m))
     }
 
     case 'save_rule': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const name = ruleNameToPath(args['name'])
       const content = String(args['content'] ?? '')
       if (!name) return JSON.stringify({ error: 'name обязателен' })
@@ -2377,7 +2372,7 @@ import json as j; print(j.dumps(m))
     }
 
     case 'delete_rule': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const name = ruleNameToPath(args['name'])
       if (!name) return JSON.stringify({ error: 'name обязателен' })
       try {
@@ -2398,7 +2393,7 @@ import json as j; print(j.dumps(m))
     }
 
     case 'disable_rule': {
-      const c = resolve1(args['sn'], ctx)
+      const c = resolve1(args, ctx)
       const name = ruleNameToPath(args['name'])
       if (!name) return JSON.stringify({ error: 'name обязателен' })
       try {
@@ -2514,11 +2509,26 @@ import json as j; print(j.dumps(m))
   return JSON.stringify({ error: `unknown tool ${name}` })
 }
 
-function resolve1(raw: unknown, ctx: Ctx): Controller {
-  const sn = typeof raw === 'string' && raw ? raw : (ctx.contextSns[0] ?? '')
-  const c = ctx.discovery.get(sn) ?? ctx.discovery.getOrCreate(sn) ?? adHocController(sn)
-  if (!c) throw new Error(`контроллер ${sn} не найден`)
+/** Resolve a single target controller from tool args. Accepts either `sn`
+ *  (registry key — обычно WB-серийник из list_controllers) or `host`
+ *  (IP/hostname/host:port для ad-hoc). Host выигрывает если задан, потому что
+ *  модель использует его именно когда явно хочет адресовать что-то вне реестра
+ *  (нестандартный порт, временный IP в чате). Fallback на первый
+ *  `ctx.contextSns` если ни sn ни host не переданы. */
+function resolve1(args: Record<string, unknown>, ctx: Ctx): Controller {
+  const target = pickTarget(args, ctx)
+  if (!target) throw new Error('не указан контроллер: передай `sn` или `host`, или выбери контроллер в правой панели')
+  const c = ctx.discovery.get(target) ?? ctx.discovery.getOrCreate(target) ?? adHocController(target)
+  if (!c) throw new Error(`контроллер ${target} не найден (не подходит как SN/IP/hostname)`)
   return c
+}
+
+function pickTarget(args: Record<string, unknown>, ctx: Ctx): string {
+  const host = typeof args['host'] === 'string' ? args['host'].trim() : ''
+  if (host) return host
+  const sn = typeof args['sn'] === 'string' ? args['sn'].trim() : ''
+  if (sn) return sn
+  return ctx.contextSns[0] ?? ''
 }
 
 const BLOCKED_RPC_DRIVERS = new Set(['wb-connection-manager'])
@@ -2869,11 +2879,17 @@ function historyToCsv(result: HistoryResult): string {
   return lines.join('\n') + '\n'
 }
 
-function resolveTargets(raw: unknown, ctx: Ctx): Controller[] {
-  let keys: string[]
-  if (Array.isArray(raw)) keys = raw.map(String)
-  else if (typeof raw === 'string' && raw) keys = [raw]
-  else keys = ctx.contextSns
+/** Multi-target version of resolve1. Accepts `sn`/`host` as string or array.
+ *  Host array merges with sn array; if both пустые — fallback на ctx.contextSns. */
+function resolveTargets(args: Record<string, unknown>, ctx: Ctx): Controller[] {
+  const toKeys = (raw: unknown): string[] => {
+    if (Array.isArray(raw)) return raw.map(String).map((s) => s.trim()).filter(Boolean)
+    if (typeof raw === 'string' && raw.trim()) return [raw.trim()]
+    return []
+  }
+  const fromHost = toKeys(args['host'])
+  const fromSn = toKeys(args['sn'])
+  const keys = (fromHost.length || fromSn.length) ? [...fromHost, ...fromSn] : ctx.contextSns
   return keys
     .map((k) => ctx.discovery.get(k) ?? ctx.discovery.getOrCreate(k) ?? adHocController(k))
     .filter((c): c is Controller => !!c)
@@ -2905,10 +2921,6 @@ function parseArgs(json: string): Record<string, unknown> {
   } catch {
     return {}
   }
-}
-
-function notFound(sn: string): string {
-  return JSON.stringify({ error: `controller ${sn} not found` })
 }
 
 function toPublic(c: Controller) {
