@@ -67,6 +67,7 @@ function migrate(db: Database) {
   // миграции остаются без атрибуции.
   try { db.exec(`ALTER TABLE turns ADD COLUMN provider TEXT`) } catch {}
   try { db.exec(`ALTER TABLE turns ADD COLUMN model TEXT`) } catch {}
+  try { db.exec(`ALTER TABLE manual_controllers ADD COLUMN port INTEGER`) } catch {}
 }
 
 function defaultDbPath(): string {

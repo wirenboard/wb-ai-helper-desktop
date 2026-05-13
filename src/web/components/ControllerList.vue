@@ -72,7 +72,9 @@ function add() {
         />
         <div class="meta">
           <div class="sn">{{ c.sn }}</div>
-          <div class="host" :title="c.host">{{ c.host }}</div>
+          <div class="host" :title="c.port ? `${c.host} (SSH порт ${c.port})` : c.host">
+            {{ c.host }}<span v-if="c.port && c.port !== 22" class="port-suffix">:{{ c.port }}</span>
+          </div>
           <div class="row" style="justify-content:space-between;margin-top:2px">
             <span class="status" :class="statusOf(c).cls">{{ statusOf(c).text }}</span>
             <span class="small muted">{{ c.source === 'manual' ? 'вручную' : 'mDNS' }}</span>
@@ -113,7 +115,8 @@ function add() {
       <div class="spread">
         <input
           v-model="manualHost"
-          placeholder="hostname / IP вручную"
+          placeholder="hostname / IP[:ssh-порт]"
+          title="Примеры: wirenboard-abc.local · 192.168.1.10 · 192.168.1.10:2222"
           @keydown.enter="add"
         />
         <button @click="add">+</button>
@@ -124,6 +127,7 @@ function add() {
 </template>
 
 <style scoped>
+.port-suffix { color: var(--text-mute); }
 .actions { display: flex; gap: 4px; margin-top: 6px; justify-content: flex-end; }
 .icon-action {
   display: inline-flex; align-items: center; justify-content: center;

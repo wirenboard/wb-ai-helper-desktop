@@ -1,5 +1,5 @@
 import type { ChatCompletionTool } from 'openai/resources/chat/completions.mjs'
-import type { Discovery, Controller } from './discovery.ts'
+import { parseHostPort, type Discovery, type Controller } from './discovery.ts'
 import type { MqttPool } from './mqtt-pool.ts'
 import type { SshPool } from './ssh.ts'
 import { probe } from './http-probe.ts'
@@ -2879,8 +2879,11 @@ function resolveTargets(raw: unknown, ctx: Ctx): Controller[] {
     .filter((c): c is Controller => !!c)
 }
 
-function adHocController(host: string): Controller | null {
-  // Allow bare IP / hostname that isn't in the registry yet.
+function adHocController(input: string): Controller | null {
+  // Allow bare IP / hostname that isn't in the registry yet. Supports an
+  // optional ":port" suffix so the LLM can address controllers running ssh
+  // on a non-default port without the user having to pre-add them.
+  const { host, port } = parseHostPort(input)
   const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(host)
   const isHostname = host.includes('.') || host.includes('-')
   if (!isIp && !isHostname) return null
@@ -2888,6 +2891,7 @@ function adHocController(host: string): Controller | null {
     sn: host.toUpperCase(),
     host,
     addresses: isIp ? [host] : [],
+    port,
     lastSeen: Date.now(),
     source: 'manual',
     reachable: undefined,

@@ -611,7 +611,7 @@ export class SshPool {
     const host = controller.addresses[0] ?? controller.host
     return {
       host,
-      port: 22,
+      port: controller.port ?? 22,
       username: this.auth.user || 'root',
       readyTimeout: HANDSHAKE_TIMEOUT,
       hostVerifier: () => true,
