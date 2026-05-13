@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [0.13.21] — 2026-05-13
+
 ### Added
 - **Подключение к контроллеру по IP/hostname и нестандартному SSH-порту.**
   Поле «добавить вручную» в правой панели теперь принимает синтаксис
@@ -728,7 +730,8 @@
   CLI interface...`; для `apt list --upgradable` без свежего `apt-get
   update` подсказывает обновить кэш и подгрузить скилл `controller-update`.
 
-[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.20...HEAD
+[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.21...HEAD
+[0.13.21]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.20...v0.13.21
 [0.13.20]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.19...v0.13.20
 [0.13.19]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.18...v0.13.19
 [0.13.18]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.17...v0.13.18
