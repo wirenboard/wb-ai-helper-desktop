@@ -166,12 +166,13 @@ export class Discovery {
           if (!line.startsWith('=')) continue
           const p = line.split(';')
           // =;iface;proto;name;type;domain;hostname;address;port;txt
+          const serviceType = p[4]?.trim() ?? ''
           const host = p[6]?.trim()
           const addr = p[7]?.trim()
           if (!host) continue
           const sn = parseSn(host)
           if (!sn) continue
-          this.onService({ host, addresses: addr ? [addr] : [] })
+          this.onService({ host, addresses: addr ? [addr] : [] }, serviceType)
         }
         resolve()
       })
@@ -184,23 +185,40 @@ export class Discovery {
     const types = ['http', 'ssh', 'workstation']
     for (const type of types) {
       const browser = this.bonjour.find({ type })
-      browser.on('up', (svc) => this.onService(svc))
+      browser.on('up', (svc) => this.onService(svc, `_${type}._tcp`))
       browser.on('down', () => {})
       this.browsers.push(browser)
     }
   }
 
-  private onService(svc: { host?: string; addresses?: string[]; port?: number }) {
+  /** `serviceType` (e.g. `_ssh._tcp`, `_http._tcp`, `_workstation._tcp`) — нужен
+   *  чтобы НЕ принимать `svc.port` от чего попало. Поле `Controller.port`
+   *  семантически означает «нестандартный SSH-порт»; mDNS-announce от http/
+   *  workstation шлёт 80/9 соответственно, и если их подхватить — `SshPool`
+   *  пойдёт коннектиться на 80/9. Поэтому порт берём только из `_ssh._tcp`. */
+  private onService(
+    svc: { host?: string; addresses?: string[]; port?: number },
+    serviceType: string = '',
+  ) {
     if (!svc.host) return
     const sn = parseSn(svc.host)
     if (!sn) return
     const key = sn.toUpperCase()
     const existing = this.controllers.get(key)
+    const isSshAnnouncement = /^_ssh\._tcp/.test(serviceType)
+    // Existing port wins (он либо из предыдущего _ssh._tcp announce, либо ввели
+    // вручную как `host:port`); только потом — новый порт, но только если это
+    // именно SSH-announce, и только если порт нестандартный (22 явно
+    // указывать не нужно — это дефолт baseConfig).
+    let port = existing?.port
+    if (isSshAnnouncement && typeof svc.port === 'number' && svc.port > 0 && svc.port !== 22) {
+      port = svc.port
+    }
     const merged: Controller = {
       sn: key,
       host: svc.host,
       addresses: svc.addresses ?? existing?.addresses ?? [],
-      port: svc.port ?? existing?.port,
+      port,
       lastSeen: Date.now(),
       source: existing?.source === 'manual' ? 'manual' : 'mdns',
       reachable: true,
