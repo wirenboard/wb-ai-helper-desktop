@@ -53,24 +53,28 @@ export class Discovery {
     // 1. Try existing registry by SN
     const existing = this.controllers.get(upper)
     if (existing) return existing
-    // 2. Try matching by host field
+    // 2. Try matching by host field; strip an optional :port so callers passing
+    //    "1.2.3.4:2222" still hit the controller stored with just the host.
+    const { host: needle } = parseHostPort(snOrHost)
     for (const c of this.controllers.values()) {
-      if (c.host === snOrHost || c.addresses.includes(snOrHost)) return c
+      if (c.host === snOrHost || c.host === needle || c.addresses.includes(needle)) return c
     }
     return undefined
   }
 
   private loadManualFromDb() {
     const rows = this.db
-      .query<{ sn: string; host: string; added_at: number }, []>(
-        `SELECT sn, host, added_at FROM manual_controllers`,
+      .query<{ sn: string; host: string; port: number | null; added_at: number }, []>(
+        `SELECT sn, host, port, added_at FROM manual_controllers`,
       )
       .all()
     for (const r of rows) {
+      const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(r.host)
       this.controllers.set(r.sn, {
         sn: r.sn,
         host: r.host,
-        addresses: [],
+        addresses: isIp ? [r.host] : [],
+        port: r.port ?? undefined,
         lastSeen: r.added_at,
         source: 'manual',
       })
@@ -92,22 +96,25 @@ export class Discovery {
     return this.controllers.get(sn.toUpperCase())
   }
 
-  addManual(host: string): Controller {
+  addManual(input: string): Controller {
+    const { host, port } = parseHostPort(input)
     const sn = parseSn(host) ?? host.toUpperCase()
+    const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(host)
     const c: Controller = {
       sn,
       host,
-      addresses: [],
+      addresses: isIp ? [host] : [],
+      port,
       lastSeen: Date.now(),
       source: 'manual',
     }
     this.controllers.set(sn, c)
     this.db
       .query(
-        `INSERT INTO manual_controllers (sn, host, added_at) VALUES (?, ?, ?)
-         ON CONFLICT(sn) DO UPDATE SET host = excluded.host`,
+        `INSERT INTO manual_controllers (sn, host, port, added_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(sn) DO UPDATE SET host = excluded.host, port = excluded.port`,
       )
-      .run(sn, host, c.lastSeen)
+      .run(sn, host, port ?? null, c.lastSeen)
     this.notify()
     return c
   }
@@ -223,4 +230,20 @@ export function parseSn(host: string): string | null {
 
 export function defaultHost(sn: string): string {
   return `wirenboard-${sn.toLowerCase()}.local`
+}
+
+/** Split a free-form "host[:port]" string into parts. Port must be a positive
+ *  integer ≤ 65535; otherwise it's silently dropped so a stray colon doesn't
+ *  break the host. IPv6 literals aren't supported — too edge-case for the UI. */
+export function parseHostPort(input: string): { host: string; port?: number } {
+  const trimmed = input.trim()
+  const colon = trimmed.lastIndexOf(':')
+  if (colon < 0) return { host: trimmed }
+  // Reject if it looks like IPv6 (multiple colons) — keep host as-is.
+  if (trimmed.indexOf(':') !== colon) return { host: trimmed }
+  const host = trimmed.slice(0, colon)
+  const portStr = trimmed.slice(colon + 1)
+  const port = Number(portStr)
+  if (!host || !Number.isInteger(port) || port <= 0 || port > 65535) return { host: trimmed }
+  return { host, port }
 }

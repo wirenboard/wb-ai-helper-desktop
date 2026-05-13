@@ -7,6 +7,40 @@
 
 ## [Unreleased]
 
+## [0.13.21] — 2026-05-13
+
+### Added
+- **Подключение к контроллеру по IP/hostname и нестандартному SSH-порту.**
+  Поле «добавить вручную» в правой панели теперь принимает синтаксис
+  `host[:port]` — например `192.168.1.10`, `192.168.1.10:2222`,
+  `wirenboard-abc.local:8022`. Порт сохраняется в `manual_controllers`
+  (миграция `ALTER TABLE … ADD COLUMN port INTEGER`, идемпотентная) и
+  используется `SshPool` вместо дефолтного 22. Если порт не указан —
+  поведение прежнее (порт 22). В карточке контроллера рядом с хостом
+  показывается `:<port>`, когда он отличается от 22.
+- **Ad-hoc контроллер по IP[:port] из tool-вызова.** Если LLM передаёт в
+  `sn` IP или hostname (опционально с `:port`), которого нет в реестре —
+  `adHocController` собирает временный `Controller` с этим хостом и
+  портом, и SSH-вызов проходит без предварительного «добавь в список».
+  Раньше порт молча игнорировался → попытка подключиться на 22 висла.
+- **Параметр `host` во всех тулах рядом с `sn`.** Каждая тул-схема,
+  которая принимала `sn`, теперь также принимает `host` (IP, hostname
+  или host:port). `resolve1`/`resolveTargets` обрабатывают оба:
+  если задан `host` — он выигрывает (явное намерение адресовать ad-hoc);
+  иначе `sn`; иначе fallback на `ctx.contextSns`. Старые вызовы с `sn`
+  работают как раньше — параметр `host` дополнительный.
+  В системный промпт добавлено правило выбора: `sn` для серийников из
+  `list_controllers`, `host` для упомянутых в чате IP/hostname.
+- **`get_controller` отдаёт `hardwareSn` из `/var/lib/wirenboard/short_sn`.**
+  Авторитетный наклеечный SN — не суффикс hostname (тот настраивается
+  пользователем). Если файла нет (старая прошивка / не-WB железо) —
+  поле приходит пустым. Промпт явно запрещает выводить SN из hostname.
+- Удалена мёртвая функция `notFound`; 8 тулов (`probe_controller`,
+  `list_controls`, `mqtt_read`, `ssh_read_file`, `ssh_read_logs`,
+  `read_file`, `fetch_from_controller`, `upload_to_controller`)
+  переведены на единый `resolve1` вместо встроенного
+  `discovery.get→getOrCreate→adHocController`.
+
 ## [0.13.20] — 2026-05-09
 
 ### Fixed
@@ -696,7 +730,8 @@
   CLI interface...`; для `apt list --upgradable` без свежего `apt-get
   update` подсказывает обновить кэш и подгрузить скилл `controller-update`.
 
-[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.20...HEAD
+[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.21...HEAD
+[0.13.21]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.20...v0.13.21
 [0.13.20]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.19...v0.13.20
 [0.13.19]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.18...v0.13.19
 [0.13.18]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.17...v0.13.18
