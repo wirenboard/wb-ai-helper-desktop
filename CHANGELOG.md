@@ -7,6 +7,21 @@
 
 ## [Unreleased]
 
+## [0.13.22] — 2026-05-13
+
+### Fixed
+- **Регрессия 0.13.21: SSH стучался не в 22, а в порт mDNS-announce от
+  `_workstation._tcp` (9) или `_http._tcp` (80).** В 0.13.21 поле
+  `Controller.port` стало использоваться в `SshPool.baseConfig`, но
+  `Discovery.onService` принимал `svc.port` от любого типа сервиса.
+  Симптом: после mDNS-сканирования все авто-обнаруженные контроллеры
+  падали в SSH-таймаут. Фикс: `port` берётся только из `_ssh._tcp`
+  announcements; и только если он отличается от 22 (дефолт). Ручные
+  записи с явным `host:port` не затрагиваются.
+- В `avahiBrowse` теперь парсится поле service-type (`p[4]`) и
+  передаётся в `onService` — раньше тоже фильтровалось «по факту»,
+  потому что игнорировался `port` в baseConfig.
+
 ## [0.13.21] — 2026-05-13
 
 ### Added
@@ -730,7 +745,8 @@
   CLI interface...`; для `apt list --upgradable` без свежего `apt-get
   update` подсказывает обновить кэш и подгрузить скилл `controller-update`.
 
-[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.21...HEAD
+[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.22...HEAD
+[0.13.22]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.21...v0.13.22
 [0.13.21]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.20...v0.13.21
 [0.13.20]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.19...v0.13.20
 [0.13.19]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.18...v0.13.19
