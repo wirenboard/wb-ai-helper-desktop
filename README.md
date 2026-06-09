@@ -154,8 +154,8 @@ src/
 │   ├── history-chart.ts     рендер графиков через vega-lite SSR (line/bar/heatmap/...)
 │   ├── jobs.ts              трекер фоновых SSH-задач (in-memory)
 │   ├── attachments.ts       файлы с тегом source='user'|'assistant'
-│   ├── chats.ts             SQLite-хранилище chats/turns + системный промт (RU)
-│   ├── skills.ts            каталог + загрузка скиллов в контекст LLM
+│   ├── chats.ts             SQLite-хранилище chats/turns + системный промт (язык-директива RU/EN)
+│   ├── skills.ts            каталог + загрузка скиллов (англ., model-facing) в контекст LLM
 │   ├── ssh.ts               пул ssh2-клиентов, exec/jobStart/openShell, SFTP
 │   ├── mqtt-pool.ts         пул mqtt.js-клиентов
 │   ├── discovery.ts         mDNS/avahi-browse сканер
@@ -164,6 +164,7 @@ src/
 └── web/                     Vue 3, Vite, без UI-фреймворка
     ├── App.vue              корневой layout
     ├── api.ts               клиент API + типы
+    ├── i18n.ts              UI-словари RU/EN + t()/plural()/fmtSize(), реактивный lang
     ├── components/
     │   ├── ChatList.vue                Левый сайдбар (чаты + delete-all undo)
     │   ├── ChatPane.vue                Чат + поле ввода
@@ -179,6 +180,15 @@ src/
 
 Под `bun build --compile` фронт пакуется в бинарник через `import('./web/dist/...', { with: { type: 'file' } })` — отдельные ассеты не нужны. AppImage — wrapper-script (AppRun) поверх того же бинарника, который ищет Chrome/Chromium и запускает его в `--app` режиме.
 
+### Локализация (RU/EN)
+
+Принцип: **текст для пользователя — двуязычный, текст для модели — на одном языке (английском), потому что модель сама переводит**.
+
+- **UI** — `src/web/i18n.ts`: лёгкий модуль без vue-i18n (`t()`/`plural()`/`fmtSize()`, реактивный `lang`, автодетект `localStorage('wb-lang')` + `navigator.language`). Компоненты импортируют `t`/`plural` напрямую. Чтобы добавить строку — впиши ключ в оба блока `ru`/`en` и используй `t('group.key')`.
+- **`settings.uiLanguage`** (shared-поле, env `WB_HELPER_LANGUAGE`) задаёт язык UI и тех серверных строк, что видит пользователь: языковую директиву системного промпта (`LANG_DIRECTIVE` в `chats.ts` — велит модели **отвечать на языке пользователя**), welcome/fallback/checkpoint и `getExtraSystemMsgs` (через хелпер `L()` в `index.ts`).
+- **Скиллы (`fixtures/skills/*.md`) и описания инструментов (`tools.ts`) — только на английском, единый набор.** Это инструкции для модели, юзеру не показываются дословно; модель читает английский и всё равно отвечает на языке пользователя. Никаких `.en.md`-вариантов и `toolSchemas(lang)`. Блоки `{en, ru}` / `translations.ru` внутри `wb-rules.md` и `wb-serial-templates.md` — намеренные, они документируют двуязычные API самих скиллов.
+- Префикс `[Система]` — технический протокольный сентинел, не переводится (фронт срезает его перед показом).
+
 ## Переменные окружения
 
 Применяются только при первом запуске и записываются в `settings.json`:
@@ -190,6 +200,7 @@ src/
 | `OPENAI_MODEL` | имя модели | — |
 | `WB_HELPER_PORT` | порт UI | `17321` |
 | `WB_HELPER_OPEN_BROWSER` | `0` чтобы не открывать окно | `1` |
+| `WB_HELPER_LANGUAGE` | язык интерфейса/ассистента: `ru` или `en` | `ru` |
 | `WB_HELPER_DISCOVERY_INTERVAL` | интервал mDNS-скана, мс | `15000` |
 | `WB_HELPER_MQTT_USER` | MQTT-логин | — |
 | `WB_HELPER_MQTT_PASSWORD` | MQTT-пароль | — |

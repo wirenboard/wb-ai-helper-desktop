@@ -1,20 +1,20 @@
 # wb-serial-templates
 
-Создание собственных Modbus-шаблонов для `wb-mqtt-serial`. Нужно когда производитель не WB/Onokom (нет встроенного шаблона) или когда добавляешь свои регистры в существующий.
+Creating your own Modbus templates for `wb-mqtt-serial`. Needed when the manufacturer is not WB/Onokom (no built-in template) or when adding your own registers to an existing one.
 
-Подгружай на: «нет шаблона для устройства», «добавь стороннее Modbus-устройство», «создать шаблон», «как добавить кастомные регистры», «шаблон для счётчика электроэнергии», «Modbus-термометр».
+Load on: "no template for the device", "add a third-party Modbus device", "create a template", "how to add custom registers", "template for an electricity meter", "Modbus thermometer".
 
-## Где живут шаблоны
+## Where templates live
 
-| Каталог | Что | Редактируемый? |
+| Directory | What | Editable? |
 |---|---|---|
-| `/usr/share/wb-mqtt-serial/templates/config-<id>.json` | Шаблоны WB и Onokom (пакетные) | НЕТ — перезаписываются `apt upgrade` |
-| `/etc/wb-mqtt-serial.conf.d/templates/<имя>.json` | Кастомные шаблоны | Да, переживают апгрейд |
-| `/etc/wb-mqtt-serial.conf.d/confs/*.conf` | Кастомные куски основного конфига | Реже |
+| `/usr/share/wb-mqtt-serial/templates/config-<id>.json` | WB and Onokom templates (packaged) | NO — overwritten by `apt upgrade` |
+| `/etc/wb-mqtt-serial.conf.d/templates/<name>.json` | Custom templates | Yes, survive upgrades |
+| `/etc/wb-mqtt-serial.conf.d/confs/*.conf` | Custom pieces of the main config | Less often |
 
-`wb-mqtt-serial` сканирует обе директории при старте. Кастомный шаблон с тем же `device_type`, что и пакетный, **перекрывает** пакетный (полезно для патчей; рискованно — забудешь).
+`wb-mqtt-serial` scans both directories on startup. A custom template with the same `device_type` as a packaged one **overrides** the packaged one (useful for patches; risky — you might forget).
 
-## Минимальный шаблон
+## Minimal template
 
 ```json
 {
@@ -32,35 +32,35 @@
 }
 ```
 
-`device_type` идёт в `/etc/wb-mqtt-serial.conf` (`ports[*].devices[*].device_type`).
-`device.id` — префикс MQTT-топика (`/devices/<id>_<slave_id>/...`).
+`device_type` goes into `/etc/wb-mqtt-serial.conf` (`ports[*].devices[*].device_type`).
+`device.id` — the MQTT topic prefix (`/devices/<id>_<slave_id>/...`).
 
-## Поля канала (полный набор)
+## Channel fields (full set)
 
-| Поле | Назначение |
+| Field | Purpose |
 |---|---|
-| `name` | Имя контрола в MQTT (пробелы можно: `Input 0 counter`) |
+| `name` | Control name in MQTT (spaces allowed: `Input 0 counter`) |
 | `reg_type` | `coil` (FC1, RW), `discrete` (FC2, RO), `holding` (FC3, RW), `input` (FC4, RO) |
-| `address` | Адрес регистра (десятичный) |
+| `address` | Register address (decimal) |
 | `format` | `u8/s8/u16/s16/u32/s32/u64/s64`, `bcd16/bcd32/bcd64`, `float`, `double`, `string`, `varstring` |
-| `scale` | Множитель: `value = raw * scale` |
-| `offset` | Прибавляется после scale |
-| `round_to` | Округление до N знаков |
-| `type` | Тип контрола: `switch`, `value`, `voltage`, `current`, `power`, `energy_power`, `temperature`, `pressure`, `range`, `text`, `pushbutton` |
-| `units` | Единицы (V, A, °C, kWh) |
-| `error_value` | Если raw == это, контрол публикуется с ошибкой |
-| `unsupported_value` | Если raw == это, контрол не публикуется |
-| `read_rate_limit_ms` | Не опрашивать чаще раза в N мс (для медленных регистров) |
-| `enabled` | `false` — канал есть в шаблоне, но выключен по умолчанию |
-| `readonly` | `true` — даже для `holding`/`coil` только чтение |
-| `sporadic` | `true` — не запрашивать при первом старте |
-| `condition` | Выражение по `parameters` — канал виден только если true |
-| `group` | ID группы для UI |
-| `word_order` | `big_endian` (default) или `little_endian` для multi-register |
+| `scale` | Multiplier: `value = raw * scale` |
+| `offset` | Added after scale |
+| `round_to` | Round to N digits |
+| `type` | Control type: `switch`, `value`, `voltage`, `current`, `power`, `energy_power`, `temperature`, `pressure`, `range`, `text`, `pushbutton` |
+| `units` | Units (V, A, °C, kWh) |
+| `error_value` | If raw == this, the control is published with an error |
+| `unsupported_value` | If raw == this, the control is not published |
+| `read_rate_limit_ms` | Do not poll more than once per N ms (for slow registers) |
+| `enabled` | `false` — the channel is in the template but disabled by default |
+| `readonly` | `true` — read-only even for `holding`/`coil` |
+| `sporadic` | `true` — do not request on the first start |
+| `condition` | Expression over `parameters` — the channel is visible only if true |
+| `group` | Group ID for the UI |
+| `word_order` | `big_endian` (default) or `little_endian` for multi-register |
 
 ### Endianness
 
-Modbus байты big-endian, но **порядок слов** (16-битных регистров) у u32/s32/float часто little-endian. Симптом: значение «прыгает» — попробуй `"word_order": "little_endian"`.
+Modbus bytes are big-endian, but the **word order** (of 16-bit registers) for u32/s32/float is often little-endian. Symptom: the value "jumps" — try `"word_order": "little_endian"`.
 
 ### `string` / `varstring`
 
@@ -68,11 +68,11 @@ Modbus байты big-endian, но **порядок слов** (16-битных 
 {"name": "FW Version", "reg_type": "input", "address": 250, "format": "string", "size": 8, "type": "text"}
 ```
 
-`size` — длина в регистрах (= 16 байт). `varstring` — переменной длины с null-терминатором.
+`size` — length in registers (= 16 bytes). `varstring` — variable length with a null terminator.
 
-## `parameters` — настройки прошивки
+## `parameters` — firmware settings
 
-Регистры, которые UI показывает как «настройки устройства» (не телеметрию):
+Registers that the UI shows as "device settings" (not telemetry):
 
 ```json
 "parameters": [
@@ -90,9 +90,9 @@ Modbus байты big-endian, но **порядок слов** (16-битных 
 ]
 ```
 
-`condition` в канале может смотреть на параметр по `id`: `"condition": "in0_mode==3"` — канал виден только если параметр == 3.
+A channel's `condition` can reference a parameter by `id`: `"condition": "in0_mode==3"` — the channel is visible only if the parameter == 3.
 
-## `groups` — группировка в UI
+## `groups` — grouping in the UI
 
 ```json
 "groups": [
@@ -102,7 +102,7 @@ Modbus байты big-endian, но **порядок слов** (16-битных 
 ]
 ```
 
-`group` ссылается на родительский `id`. Web-UI рендерит раскрываемые секции.
+`group` references the parent `id`. The web UI renders collapsible sections.
 
 ## `translations` — i18n
 
@@ -116,44 +116,44 @@ Modbus байты big-endian, но **порядок слов** (16-битных 
 }
 ```
 
-## Workflow создания шаблона
+## Template creation workflow
 
-1. **Документация устройства** — `WebFetch` инструкции производителя (таблица регистров: адреса, типы, scale). Без неё шаблон не делай — гадание = бесконечный дебаг.
+1. **Device documentation** — `WebFetch` the manufacturer's manual (register table: addresses, types, scale). Do not make a template without it — guessing = endless debugging.
 
-2. **Скопируй похожий пакетный шаблон как стартер**:
+2. **Copy a similar packaged template as a starter**:
 
 ```bash
 ssh root@<HOST> 'cp /usr/share/wb-mqtt-serial/templates/config-wb-mr6c.json /etc/wb-mqtt-serial.conf.d/templates/acme-em100.json'
 ```
 
-Минимум: поменяй `device_type`, `device.id`, `device.name`, `title`, потом перепиши `channels` под свою таблицу регистров.
+At minimum: change `device_type`, `device.id`, `device.name`, `title`, then rewrite `channels` to match your register table.
 
-3. **Проверь на одном канале**. Сначала шаблон с **одним** каналом. Добавь устройство в `/etc/wb-mqtt-serial.conf` через confed, проверь публикацию:
+3. **Test on a single channel**. First a template with **one** channel. Add the device to `/etc/wb-mqtt-serial.conf` via confed, verify publishing:
 
 ```bash
 ssh root@<HOST> "mosquitto_sub -t '/devices/<device.id>_<slave_id>/controls/<channel>' -C 1 -W 5"
 ```
 
-Если значение не такое — крути `format`, `scale`, `word_order`. Прямой замер через `modbus_client_rpc` (см. `/wb-troubleshooting-serial`).
+If the value is wrong — tweak `format`, `scale`, `word_order`. A direct reading via `modbus_client_rpc` (see `/wb-troubleshooting-serial`).
 
-4. **Расширяй пачками 5–10** каналов, после каждой — проверка через MQTT.
+4. **Expand in batches of 5–10** channels, with a check via MQTT after each.
 
-5. **Parameters и groups** — после того, как телеметрия работает.
+5. **Parameters and groups** — after the telemetry works.
 
-6. **В git и в `/wb-controller-backup`** — кастомный шаблон не переживает FIT, бэкап подцепляет `/etc/wb-mqtt-serial.conf.d/` сам.
+6. **In git and in `/wb-controller-backup`** — a custom template does not survive FIT; the backup picks up `/etc/wb-mqtt-serial.conf.d/` on its own.
 
-## Применение и логи
+## Applying and logs
 
 ```bash
 ssh root@<HOST> 'systemctl restart wb-mqtt-serial'
 ssh root@<HOST> 'journalctl -u wb-mqtt-serial -n 50 --no-pager | grep -iE "(template|<device.id>)"'
 ```
 
-Ошибки типа `Failed to parse template` / `Unknown register type` — синтаксис.
+Errors like `Failed to parse template` / `Unknown register type` — syntax.
 
-## Пример: 1-фазный счётчик электроэнергии
+## Example: 1-phase electricity meter
 
-| Адрес | Reg | Format | Scale | Что |
+| Address | Reg | Format | Scale | What |
 |---|---|---|---|---|
 | 0–1 | input | u32 | 0.1 | Voltage (mV→V) |
 | 2–3 | input | u32 | 0.001 | Current (mA→A) |
@@ -178,18 +178,18 @@ ssh root@<HOST> 'journalctl -u wb-mqtt-serial -n 50 --no-pager | grep -iE "(temp
 }
 ```
 
-## Грабли
+## Pitfalls
 
-- **Шаблон в `/usr/share/wb-mqtt-serial/templates/`** — перезапишется на апгрейде. Только `/etc/wb-mqtt-serial.conf.d/templates/`.
-- **Endianness** — самая частая ошибка для u32/s32/float. Значение прыгает на множитель 65535 — `word_order: little_endian`.
-- **Scale в обратную сторону** — производитель иногда пишет «raw / 10» вместо «raw × 0.1». Решается тестом на одном канале.
-- **Дубль `device_type`** — если совпал с пакетным, тихо перекрывает. Префикс типа `ACME-` помогает.
-- **Кириллица в `device.id`** — запрещена (попадает в имя топика). Только `[a-z0-9-]`.
-- **0-based vs 1-based адреса** — стандарт Modbus 0-based, многие мануалы пишут 1-based. Сверяйся со спекой устройства.
-- **Без `error_value`** — если устройство возвращает FFFF при «нет данных», MQTT покажет 65535 как валидное значение.
+- **A template in `/usr/share/wb-mqtt-serial/templates/`** — will be overwritten on upgrade. Only `/etc/wb-mqtt-serial.conf.d/templates/`.
+- **Endianness** — the most common error for u32/s32/float. The value jumps by a factor of 65535 — `word_order: little_endian`.
+- **Scale in the wrong direction** — the manufacturer sometimes writes "raw / 10" instead of "raw × 0.1". Resolved by a test on a single channel.
+- **Duplicate `device_type`** — if it matches a packaged one, it silently overrides. A prefix like `ACME-` helps.
+- **Cyrillic in `device.id`** — forbidden (it ends up in the topic name). Only `[a-z0-9-]`.
+- **0-based vs 1-based addresses** — the Modbus standard is 0-based, but many manuals write 1-based. Cross-check with the device spec.
+- **Without `error_value`** — if the device returns FFFF for "no data", MQTT will show 65535 as a valid value.
 
-## Документация
+## Documentation
 
-- Формат шаблона: https://github.com/wirenboard/wb-mqtt-serial/blob/master/docs/template.md
+- Template format: https://github.com/wirenboard/wb-mqtt-serial/blob/master/docs/template.md
 - Modbus FC: https://modbus.org/docs/Modbus_Application_Protocol_V1_1b3.pdf
-- Примеры — `/usr/share/wb-mqtt-serial/templates/` на контроллере (250+ шаблонов).
+- Examples — `/usr/share/wb-mqtt-serial/templates/` on the controller (250+ templates).

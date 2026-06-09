@@ -87,7 +87,7 @@ const ssh = new SshPool({
   password: settings.sshPassword,
   keyPath: settings.sshKeyPath,
 })
-const chats = new ChatStore(db)
+const chats = new ChatStore(db, () => settingsStore.get().uiLanguage)
 function buildLlmClient(s: Settings): LlmClient | null {
   const cur = s.providers[s.provider]
   if (!cur.apiKey) return null
@@ -167,6 +167,7 @@ app.put('/api/settings', async (c) => {
   }
   if (typeof body['discoveryInterval'] === 'number') patch['discoveryInterval'] = body['discoveryInterval']
   if (typeof body['openBrowser'] === 'boolean') patch['openBrowser'] = body['openBrowser']
+  if (body['uiLanguage'] === 'ru' || body['uiLanguage'] === 'en') patch['uiLanguage'] = body['uiLanguage']
   if (typeof body['tlsInsecure'] === 'boolean') patch['tlsInsecure'] = body['tlsInsecure']
   if (typeof body['autoCompact'] === 'boolean') patch['autoCompact'] = body['autoCompact']
   if (typeof body['autoCompactThreshold'] === 'number'
@@ -346,13 +347,14 @@ app.post('/api/chats', async (c) => {
   // сразу пишем предупреждение в этой же строке: иначе про багу сборки никто
   // не узнает (console.error на сервере в Electron-приложении не виден).
   const systemSkills = listSkills(db).filter((s) => s.origin === 'system').length
-  const toolsCount = toolSchemas().length
   const settings = settingsStore.get()
+  const toolsCount = toolSchemas().length
   const providerLabel = PROVIDER_DEFAULTS[settings.provider]?.label ?? settings.provider
+  const en = settings.uiLanguage === 'en'
   const head = llm?.model
-    ? `${providerLabel} · ${llm.model} · инструменты: ${toolsCount} · скиллы: ${systemSkills}`
-    : `${providerLabel} (не настроен) · инструменты: ${toolsCount} · скиллы: ${systemSkills}`
-  const warning = systemSkills === 0 ? ' ⚠ системные скиллы не загружены (бага сборки)' : ''
+    ? `${providerLabel} · ${llm.model} · ${en ? 'tools' : 'инструменты'}: ${toolsCount} · ${en ? 'skills' : 'скиллы'}: ${systemSkills}`
+    : `${providerLabel} (${en ? 'not configured' : 'не настроен'}) · ${en ? 'tools' : 'инструменты'}: ${toolsCount} · ${en ? 'skills' : 'скиллы'}: ${systemSkills}`
+  const warning = systemSkills === 0 ? (en ? ' ⚠ system skills not loaded (build bug)' : ' ⚠ системные скиллы не загружены (бага сборки)') : ''
   chats.appendTurn(chat.id, { role: 'user', content: `[Система] ${head}${warning}` })
   return c.json(chats.get(chat.id))
 })
@@ -466,6 +468,8 @@ app.post('/api/chats/:id/message', async (c) => {
     await send('user', { text: userText })
 
     const agentState: { checkpointSummary?: string } = {}
+    const lang = settingsStore.get().uiLanguage
+    const L = (ru: string, en: string) => (lang === 'en' ? en : ru)
     const ctx = { discovery, mqtt, ssh, contextSns: chat.contextSns, db, sessionId: id, agentState, braveApiKey: process.env['BRAVE_SEARCH_API_KEY'] }
     let assistantText = ''
     const pendingToolCalls: { id: string; name: string; arguments: string }[] = []
@@ -482,6 +486,18 @@ app.post('/api/chats/:id/message', async (c) => {
           agentState,
           modelOverride,
           temperature: temperatureOverride,
+          checkpointMessage: (summary: string) => L(
+            `Чекпоинт — итог предыдущего этапа:\n${summary}\n\n` +
+              'Сделан checkpoint, история сжата. ПРОДОЛЖАЙ выполнение текущей задачи: ' +
+              'следующий шаг по плану через нужный инструмент. Если задача полностью ' +
+              'завершена и больше делать нечего — дай финальный ответ пользователю. ' +
+              'Не пиши «дальше проверю / посмотрю / попробую» как обещание — сразу делай.',
+            `Checkpoint — summary of the previous stage:\n${summary}\n\n` +
+              'Checkpoint done, history compacted. CONTINUE the current task: ' +
+              'the next step of the plan via the appropriate tool. If the task is fully ' +
+              'complete and there is nothing left to do — give the final answer to the user. ' +
+              'Do not write «I will check / look / try next» as a promise — just do it.',
+          ),
           // Vision: при отправке user-сообщения с прикреплёнными
           // картинками llm.ts превратит токены `[file:id:name]` для
           // image-расширений в multi-modal content (image_url + base64).
@@ -497,7 +513,7 @@ app.post('/api/chats/:id/message', async (c) => {
             const skills = listSkills(db)
             const catalog = skills.length
               ? skills.map((s) => `- ${s.name} — ${s.description}`).join('\n')
-              : '(нет доступных скиллов)'
+              : L('(нет доступных скиллов)', '(no skills available)')
             const todos = getTodos(id)
             const loadedSkills = getLoadedSkills(id)
             // Only user uploads are shown to the LLM — assistant-produced files
@@ -507,19 +523,34 @@ app.post('/api/chats/:id/message', async (c) => {
             const runningJobs = sessionJobs.filter((j) => j.state === 'running')
             return [
               chat.contextSns.length
-                ? `Текущий контекст — выбранные контроллеры: ${chat.contextSns.join(', ')}. Когда пользователь говорит «текущий», «этот», «он» про контроллер без явного SN — это эти SN. Если пользователь явно называет другой SN — ориентируйся на него.`
-                : `Контекст не выбран — пользователь не выбрал ни одного контроллера в UI. Если задача требует SN — вызови list_controllers или спроси пользователя.`,
-              `Каталог скиллов (подгружай через load_skill("<name>") ДО действий с контроллером):\n${catalog}`,
+                ? L(
+                    `Текущий контекст — выбранные контроллеры: ${chat.contextSns.join(', ')}. Когда пользователь говорит «текущий», «этот», «он» про контроллер без явного SN — это эти SN. Если пользователь явно называет другой SN — ориентируйся на него.`,
+                    `Current context — selected controllers: ${chat.contextSns.join(', ')}. When the user says «current», «this», «it» about a controller without an explicit SN — these are the SNs. If the user explicitly names a different SN — go with that one.`,
+                  )
+                : L(
+                    `Контекст не выбран — пользователь не выбрал ни одного контроллера в UI. Если задача требует SN — вызови list_controllers или спроси пользователя.`,
+                    `No context selected — the user has not selected any controller in the UI. If the task needs an SN — call list_controllers or ask the user.`,
+                  ),
+              L(
+                `Каталог скиллов (подгружай через load_skill("<name>") ДО действий с контроллером):\n${catalog}`,
+                `Skill catalog (load via load_skill("<name>") BEFORE acting on a controller):\n${catalog}`,
+              ),
               todos.length
-                ? `Текущий план работы (редактируй через todo_write):\n${formatTodos(todos)}`
-                : 'План работы не задан. На задачах в 3+ шага сначала вызови todo_write.',
+                ? L(`Текущий план работы (редактируй через todo_write):\n${formatTodos(todos)}`, `Current work plan (edit via todo_write):\n${formatTodos(todos)}`)
+                : L('План работы не задан. На задачах в 3+ шага сначала вызови todo_write.', 'No work plan set. For tasks of 3+ steps, call todo_write first.'),
               attachments.length
-                ? `Вложения текущего чата (файлы загруженные пользователем):\n${attachments.map(a => `- ${a.id}: ${a.name} (${a.size} байт, ${a.mime})`).join('\n')}\nДля чтения используй read_attachment(fileId). Для загрузки на контроллер — upload_to_controller(sn, fileId, path).`
-                : 'Вложений нет. Если нужно загрузить файл на контроллер — попроси пользователя прикрепить его кнопкой 📎 в UI.',
+                ? L(
+                    `Вложения текущего чата (файлы загруженные пользователем):\n${attachments.map(a => `- ${a.id}: ${a.name} (${a.size} байт, ${a.mime})`).join('\n')}\nДля чтения используй read_attachment(fileId). Для загрузки на контроллер — upload_to_controller(sn, fileId, path).`,
+                    `Attachments in the current chat (files uploaded by the user):\n${attachments.map(a => `- ${a.id}: ${a.name} (${a.size} bytes, ${a.mime})`).join('\n')}\nUse read_attachment(fileId) to read them. To upload to a controller — upload_to_controller(sn, fileId, path).`,
+                  )
+                : L('Вложений нет. Если нужно загрузить файл на контроллер — попроси пользователя прикрепить его кнопкой 📎 в UI.', 'No attachments. If you need to upload a file to a controller — ask the user to attach it with the 📎 button in the UI.'),
               ...(runningJobs.length
-                ? [`⚙ Активные фоновые задачи в этом чате:\n${runningJobs.map((j) => `  jobId=${j.jobId}  sn=${j.sn}  "${j.label}"`).join('\n')}\nИспользуй эти jobId для job_status/job_tail/job_cancel. Не вызывай job_status с jobId="unknown" — только с реальным 8-значным hex.`]
+                ? [L(
+                    `⚙ Активные фоновые задачи в этом чате:\n${runningJobs.map((j) => `  jobId=${j.jobId}  sn=${j.sn}  "${j.label}"`).join('\n')}\nИспользуй эти jobId для job_status/job_tail/job_cancel. Не вызывай job_status с jobId="unknown" — только с реальным 8-значным hex.`,
+                    `⚙ Active background jobs in this chat:\n${runningJobs.map((j) => `  jobId=${j.jobId}  sn=${j.sn}  "${j.label}"`).join('\n')}\nUse these jobIds for job_status/job_tail/job_cancel. Do not call job_status with jobId="unknown" — only a real 8-hex id.`,
+                  )]
                 : []),
-              ...loadedSkills.map((s) => `Инструкции загруженного скилла "${s.name}" (активны в этой сессии):\n${s.content}`),
+              ...loadedSkills.map((s) => L(`Инструкции загруженного скилла "${s.name}" (активны в этой сессии):\n${s.content}`, `Instructions of the loaded skill "${s.name}" (active in this session):\n${s.content}`)),
             ]
           },
         },
@@ -570,7 +601,10 @@ app.post('/api/chats/:id/message', async (c) => {
     // Если агент упёрся в max_turns без финального текста — пишем явное
     // системное сообщение, чтобы пользователь не сидел перед пустым чатом.
     if (finishReason === 'max_turns' && !assistantText) {
-      const hint = 'Агент исчерпал бюджет шагов (20 итераций) и не успел подвести итог. Скажи «продолжай» — я продолжу с того места, или переформулируй задачу.'
+      const hint = L(
+        'Агент исчерпал бюджет шагов (20 итераций) и не успел подвести итог. Скажи «продолжай» — я продолжу с того места, или переформулируй задачу.',
+        'The agent ran out of its step budget (20 iterations) and could not wrap up. Say «continue» — I will pick up from there, or rephrase the task.',
+      )
       chats.appendTurn(id, { role: 'assistant', content: hint }, undefined, turnAttribution)
       await send('text-delta', { text: hint })
     }

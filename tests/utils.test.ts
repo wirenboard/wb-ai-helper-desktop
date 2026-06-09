@@ -1,5 +1,10 @@
 import { describe, test, expect } from 'bun:test'
-import { fmtCost, fmtTok, fmtTime, fmtSize, plural } from '../src/web/utils.ts'
+import { fmtCost, fmtTok, fmtTime, fmtSize } from '../src/web/utils.ts'
+import { plural, setLang } from '../src/web/i18n.ts'
+
+// Tests run in a non-DOM env where i18n defaults to 'ru'; pin it explicitly so
+// fmtSize/fmtTime/plural assertions are stable regardless of test order.
+setLang('ru')
 
 describe('fmtCost', () => {
   // USD
@@ -97,31 +102,50 @@ describe('fmtSize', () => {
 })
 
 describe('plural (Russian grammar)', () => {
+  setLang('ru')
+  // i18n.plurals.file = ['файл', 'файла', 'файлов']
   test('1 → first form', () => {
-    expect(plural(1, ['файл', 'файла', 'файлов'])).toBe('файл')
+    expect(plural(1, 'file')).toBe('файл')
   })
 
   test('2,3,4 → second form', () => {
-    expect(plural(2, ['файл', 'файла', 'файлов'])).toBe('файла')
-    expect(plural(3, ['файл', 'файла', 'файлов'])).toBe('файла')
-    expect(plural(4, ['файл', 'файла', 'файлов'])).toBe('файла')
+    expect(plural(2, 'file')).toBe('файла')
+    expect(plural(3, 'file')).toBe('файла')
+    expect(plural(4, 'file')).toBe('файла')
   })
 
   test('5-20 → third form', () => {
     for (const n of [5, 6, 10, 11, 12, 15, 19, 20]) {
-      expect(plural(n, ['файл', 'файла', 'файлов'])).toBe('файлов')
+      expect(plural(n, 'file')).toBe('файлов')
     }
   })
 
   test('21 → first form', () => {
-    expect(plural(21, ['файл', 'файла', 'файлов'])).toBe('файл')
+    expect(plural(21, 'file')).toBe('файл')
   })
 
   test('22 → second form', () => {
-    expect(plural(22, ['файл', 'файла', 'файлов'])).toBe('файла')
+    expect(plural(22, 'file')).toBe('файла')
   })
 
   test('111 → third form (11-exception)', () => {
-    expect(plural(111, ['файл', 'файла', 'файлов'])).toBe('файлов')
+    expect(plural(111, 'file')).toBe('файлов')
+  })
+})
+
+describe('plural (English grammar)', () => {
+  // i18n.plurals.file = ['file', 'files']
+  test('1 → singular', () => {
+    setLang('en')
+    expect(plural(1, 'file')).toBe('file')
+    setLang('ru')
+  })
+
+  test('0, 2, many → plural', () => {
+    setLang('en')
+    expect(plural(0, 'file')).toBe('files')
+    expect(plural(2, 'file')).toBe('files')
+    expect(plural(21, 'file')).toBe('files')
+    setLang('ru')
   })
 })

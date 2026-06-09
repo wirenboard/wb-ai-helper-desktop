@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import type { ChatItem, ChatItemToolCall, Settings, TrackedJob } from '../api'
-import { fmtSize, plural } from '../utils'
+import { t, plural } from '../i18n'
 import ChatMessage from './ChatMessage.vue'
 
 const props = defineProps<{
@@ -36,11 +36,11 @@ function groupRunningJobs(g: Group): TrackedJob[] {
 }
 const GROUP_THRESHOLD = 3
 
-const SUGGESTIONS = [
-  { label: 'Обзор', items: ['Что подключено на шине RS-485?', 'Какая версия прошивки и есть ли обновления?', 'Оцени состояние контроллера'] },
-  { label: 'Диагностика', items: ['Найди ошибки в логах за последний час', 'Собери и пришли диагностический архив', 'Выполни диагностику Modbus'] },
-  { label: 'Данные', items: ['Пришли график температуры процессора со вчерашнего дня', 'Сделай бэкап контроллера'] },
-]
+const SUGGESTIONS = computed(() => [
+  { label: t('suggestions.overview'), items: [t('suggestions.busDevices'), t('suggestions.firmware'), t('suggestions.controllerStatus')] },
+  { label: t('suggestions.diagnostics'), items: [t('suggestions.logErrors'), t('suggestions.diagArchive'), t('suggestions.modbusDiag')] },
+  { label: t('suggestions.data'), items: [t('suggestions.cpuTemp'), t('suggestions.backup')] },
+])
 
 type Group =
   | { kind: 'single'; key: string; item: ChatItem }
@@ -138,7 +138,7 @@ onBeforeUnmount(() => ro?.disconnect())
         <button class="tool-group-head" @click="toggle(g.key)">
           <span class="caret">{{ expanded[g.key] ? '▾' : '▸' }}</span>
           <span class="tool-group-label">
-            {{ g.items.length }} вызов{{ g.items.length < 5 ? (g.items.length === 1 ? '' : 'а') : 'ов' }} инструментов
+            {{ t('tools.callsLabel', { n: g.items.length, form: plural(g.items.length, 'call') }) }}
           </span>
           <span class="tool-group-names">{{ [...new Set(g.items.map(i => i.name))].join(', ') }}</span>
         </button>
@@ -149,14 +149,14 @@ onBeforeUnmount(() => ro?.disconnect())
       <!-- Inline job indicators for this group -->
       <template v-for="job in groupRunningJobs(g)" :key="'job-' + job.jobId">
         <div v-if="pendingCancels?.[job.jobId]" class="inline-job inline-job--cancelling">
-          <span>⏳ Отмена через {{ pendingCancels![job.jobId]!.remaining }} с — {{ job.label }}</span>
-          <button class="inline-job-cancel ghost small" @click="emit('undoCancelJob', job.jobId)">продолжить</button>
+          <span>{{ t('job.cancelPending', { remaining: pendingCancels![job.jobId]!.remaining, label: job.label }) }}</span>
+          <button class="inline-job-cancel ghost small" @click="emit('undoCancelJob', job.jobId)">{{ t('job.undo') }}</button>
         </div>
         <div v-else class="inline-job">
           <span class="inline-job-spinner">⟳</span>
           <span class="inline-job-label">{{ job.label }}</span>
           <span class="inline-job-sn">{{ job.sn }}</span>
-          <button class="inline-job-cancel ghost small" @click="emit('cancelJob', job.jobId)" title="Отменить (с возможностью отката)">✕</button>
+          <button class="inline-job-cancel ghost small" @click="emit('cancelJob', job.jobId)" :title="t('job.cancelTooltip')">✕</button>
         </div>
       </template>
     </template>

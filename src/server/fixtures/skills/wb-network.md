@@ -1,57 +1,57 @@
 # wb-network
 
-Сетевая подсистема контроллера Wiren Board: **NetworkManager** управляет физическими соединениями (eth0/eth1/wlan0/ppp0/...), **wb-connection-manager** расставляет приоритеты между ними и делает автоматический failover. Конфиг `/etc/wb-connection-manager.conf` (через `confed`) — единый источник правды для веб-UI.
+The networking subsystem of the Wiren Board controller: **NetworkManager** manages physical connections (eth0/eth1/wlan0/ppp0/...), **wb-connection-manager** sets priorities between them and does automatic failover. The config `/etc/wb-connection-manager.conf` (via `confed`) is the single source of truth for the web UI.
 
-Подгружай на: «настрой 4G», «дай интернет через sim1», «WiFi-точка доступа», «нет внешнего ping», «статический IP», «настрой DNS», «eth1 не подключается», «модем не коннектится», «не работает failover», «OpenVPN-клиент», «параметры сети».
+Load on: "set up 4G", "give internet via sim1", "WiFi access point", "no external ping", "static IP", "set up DNS", "eth1 won't connect", "modem won't connect", "failover not working", "OpenVPN client", "network parameters".
 
-**Граница:** общая «что-то сломалось» диагностика — `troubleshooting-general`. Этот скилл — для целевой настройки.
+**Boundary:** general "something is broken" diagnostics — `troubleshooting-general`. This skill is for targeted configuration.
 
-## Архитектура
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────┐
 │  /etc/wb-connection-manager.conf  (confed UI)   │
-│  └─ data:    физические интерфейсы              │
-│  └─ ui:      приоритеты, типы, видно в WebUI    │
+│  └─ data:    physical interfaces                │
+│  └─ ui:      priorities, types, visible in WebUI│
 └────────────────────┬────────────────────────────┘
                      │ wb-connection-manager
                      ▼
 ┌─────────────────────────────────────────────────┐
 │  NetworkManager (nmcli)                         │
 │  └─ /etc/NetworkManager/system-connections/*.nmconnection │
-│  └─ управляет ip / route / dns                  │
+│  └─ manages ip / route / dns                    │
 └─────────────────────────────────────────────────┘
 ```
 
-`wb-connection-manager` переключает: если eth0 упал — переключается на eth1/wifi/4G по приоритетам из конфига. Сам соединения не создаёт — это работа NetworkManager.
+`wb-connection-manager` switches over: if eth0 goes down — it switches to eth1/wifi/4G by the priorities from the config. It does not create the connections itself — that's NetworkManager's job.
 
-## Базовые команды
+## Basic commands
 
-Используй `network_status` — он одним вызовом возвращает интерфейсы (`ip -j addr`), default-маршрут, активные NM-соединения и устройства, опционально ping. Это first-call для диагностики.
+Use `network_status` — in a single call it returns the interfaces (`ip -j addr`), the default route, active NM connections and devices, and optionally a ping. This is the first call for diagnostics.
 
-Для прицельных запросов:
+For targeted queries:
 
 ```bash
-ssh root@<HOST> 'ip -4 route show default | head -1'   # текущий default — какой интерфейс активен как uplink
-ssh root@<HOST> 'cat /etc/resolv.conf'                  # текущий DNS
-ssh root@<HOST> 'nmcli device wifi list ifname wlan1'   # сканировать WiFi-сети
-ssh root@<HOST> 'mmcli -L && mmcli -m 0 --signal-get'   # модемы и сигнал
+ssh root@<HOST> 'ip -4 route show default | head -1'   # current default — which interface is the active uplink
+ssh root@<HOST> 'cat /etc/resolv.conf'                  # current DNS
+ssh root@<HOST> 'nmcli device wifi list ifname wlan1'   # scan WiFi networks
+ssh root@<HOST> 'mmcli -L && mmcli -m 0 --signal-get'   # modems and signal
 ```
 
-**Активный uplink** = соединение в состоянии `activated` с дефолт-маршрутом через него.
+**Active uplink** = a connection in the `activated` state with the default route going through it.
 
-## Подключение к WiFi-сети
+## Connecting to a WiFi network
 
 ```bash
 ssh root@<HOST> 'nmcli device wifi connect "<SSID>" password "<pwd>" ifname wlan1'
 ssh root@<HOST> 'nmcli connection modify "<SSID>" connection.autoconnect yes'
 ```
 
-`wlan1` — внешний USB-донгл, если есть. `wlan0` обычно занят точкой доступа `wb-ap`. Если только один WiFi-чип — на время отключи AP: `nmcli connection down wb-ap`.
+`wlan1` — an external USB dongle, if present. `wlan0` is usually occupied by the `wb-ap` access point. If there's only one WiFi chip — temporarily disable the AP: `nmcli connection down wb-ap`.
 
-## Точка доступа (hotspot)
+## Access point (hotspot)
 
-В контроллере уже есть готовый профиль `wb-ap` (SSID `WirenBoard-<SN>`, IP `192.168.42.1/24`, NAT). Меняем:
+The controller already has a ready-made `wb-ap` profile (SSID `WirenBoard-<SN>`, IP `192.168.42.1/24`, NAT). To change it:
 
 ```bash
 ssh root@<HOST> 'nmcli connection modify wb-ap 802-11-wireless.ssid "MyAP"'
@@ -59,9 +59,9 @@ ssh root@<HOST> 'nmcli connection modify wb-ap 802-11-wireless-security.key-mgmt
 ssh root@<HOST> 'nmcli connection up wb-ap'
 ```
 
-Открытая сеть → `802-11-wireless-security.key-mgmt none`.
+Open network → `802-11-wireless-security.key-mgmt none`.
 
-## Статический IP вместо DHCP
+## Static IP instead of DHCP
 
 ```bash
 ssh root@<HOST> 'nmcli connection modify wb-eth0 \
@@ -72,31 +72,31 @@ ssh root@<HOST> 'nmcli connection modify wb-eth0 \
 ssh root@<HOST> 'nmcli connection up wb-eth0'
 ```
 
-Обратно на DHCP: `ipv4.method auto` + очистить `ipv4.addresses ""`, `ipv4.gateway ""`, `ipv4.dns ""`.
+Back to DHCP: `ipv4.method auto` + clear `ipv4.addresses ""`, `ipv4.gateway ""`, `ipv4.dns ""`.
 
 ## 4G/GSM (sim1/sim2)
 
-WB7/WB8 — встроенный GSM-модем + 2 SIM-слота. Соединения `wb-gsm-sim1`/`wb-gsm-sim2` пред-настроены.
+WB7/WB8 — built-in GSM modem + 2 SIM slots. The `wb-gsm-sim1`/`wb-gsm-sim2` connections are pre-configured.
 
 ```bash
-ssh root@<HOST> 'nmcli connection up wb-gsm-sim1'    # активировать SIM1
-ssh root@<HOST> 'mmcli -m 0'                          # детали модема: signal, IMEI, registration
-ssh root@<HOST> 'mmcli -m 0 --signal-get'            # сила сигнала
+ssh root@<HOST> 'nmcli connection up wb-gsm-sim1'    # activate SIM1
+ssh root@<HOST> 'mmcli -m 0'                          # modem details: signal, IMEI, registration
+ssh root@<HOST> 'mmcli -m 0 --signal-get'            # signal strength
 ```
 
-**APN**, если оператор требует руками: `nmcli connection modify wb-gsm-sim1 gsm.apn "internet"`. PIN: `gsm.pin "1234"`.
+**APN**, if the operator requires it manually: `nmcli connection modify wb-gsm-sim1 gsm.apn "internet"`. PIN: `gsm.pin "1234"`.
 
-`wb-connection-manager` переключает между uplink'ами по приоритетам сам, но руками — через `nmcli connection up <name>`.
+`wb-connection-manager` switches between uplinks by priority on its own, but to do it manually — use `nmcli connection up <name>`.
 
-**Если модем не виден** (`mmcli -L` пуст):
-1. `dmesg | grep -iE 'modem|qmi|cdc-wdm|usbserial' | tail -20` — увидел ли его ядро.
-2. `systemctl status ModemManager` — драйвер жив?
-3. `lsusb` — модем в списке USB?
-4. На WB7/WB8 — питание модема и SIM. См. wiki «WB-MOD-MODEM».
+**If the modem is not visible** (`mmcli -L` is empty):
+1. `dmesg | grep -iE 'modem|qmi|cdc-wdm|usbserial' | tail -20` — did the kernel see it.
+2. `systemctl status ModemManager` — is the driver alive?
+3. `lsusb` — is the modem in the USB list?
+4. On WB7/WB8 — modem and SIM power. See the wiki "WB-MOD-MODEM".
 
-## OpenVPN-клиент
+## OpenVPN client
 
-Файл `<name>.ovpn` от провайдера VPN:
+A `<name>.ovpn` file from the VPN provider:
 
 ```bash
 scp client.ovpn root@<HOST>:/tmp/
@@ -106,59 +106,59 @@ ssh root@<HOST> 'nmcli connection modify <name> +vpn.secrets password=<pwd>'
 ssh root@<HOST> 'nmcli connection up <name>'
 ```
 
-Автоконнект — `connection.autoconnect yes`. Проверка — `ip -4 addr show tun0`, `curl -s ifconfig.me`.
+Autoconnect — `connection.autoconnect yes`. Check — `ip -4 addr show tun0`, `curl -s ifconfig.me`.
 
-`/etc/NetworkManager/system-connections/*.nmconnection` хранит секреты в plaintext — perms `0600`, root-only.
+`/etc/NetworkManager/system-connections/*.nmconnection` stores secrets in plaintext — perms `0600`, root-only.
 
 ## DNS
 
-`/etc/resolv.conf` — обычно symlink на `/run/NetworkManager/resolv.conf`. **Править руками бесполезно**, перезапишется. Через nmcli:
+`/etc/resolv.conf` — usually a symlink to `/run/NetworkManager/resolv.conf`. **Editing it by hand is pointless**, it will be overwritten. Via nmcli:
 
 ```bash
 ssh root@<HOST> 'nmcli connection modify <conn> ipv4.dns "8.8.8.8 1.1.1.1"'
-ssh root@<HOST> 'nmcli connection modify <conn> ipv4.ignore-auto-dns yes'   # игнорить DNS из DHCP
+ssh root@<HOST> 'nmcli connection modify <conn> ipv4.ignore-auto-dns yes'   # ignore DNS from DHCP
 ssh root@<HOST> 'nmcli connection up <conn>'
 ```
 
-Без `ignore-auto-dns` твой DNS добавится **в конец** списка — DHCP-DNS будет первым.
+Without `ignore-auto-dns` your DNS is appended **to the end** of the list — the DHCP DNS will be first.
 
-## wb-connection-manager: приоритеты и failover
+## wb-connection-manager: priorities and failover
 
-Конфиг через `confed/Editor/Load /etc/wb-connection-manager.conf`. В нём `ui.con_switch.connections` — упорядоченный список UUID соединений от наивысшего приоритета к низшему. Failover идёт по нему. Правка через `confed/Editor/Save` (см. `wb-mqtt-serial` — там общий паттерн confed).
+Config via `confed/Editor/Load /etc/wb-connection-manager.conf`. In it, `ui.con_switch.connections` is an ordered list of connection UUIDs from highest priority to lowest. Failover follows it. Edit via `confed/Editor/Save` (see `wb-mqtt-serial` — the common confed pattern is there).
 
-**Логи**: `journalctl -u wb-connection-manager -n 50 --no-pager` — что переключилось и почему.
+**Logs**: `journalctl -u wb-connection-manager -n 50 --no-pager` — what switched and why.
 
-## Диагностика «нет интернета»
+## Diagnosing "no internet"
 
-1. **Link** — есть ли IP на интерфейсе. См. `network_status`.
-2. **Default route** — `ip -4 route show default` существует?
-3. **Pinger** — `ping -c1 -W2 8.8.8.8` (без DNS) и `ping -c1 -W2 google.com` (с DNS). Можно через `network_status pingTarget=8.8.8.8`.
+1. **Link** — is there an IP on the interface. See `network_status`.
+2. **Default route** — does `ip -4 route show default` exist?
+3. **Pinger** — `ping -c1 -W2 8.8.8.8` (without DNS) and `ping -c1 -W2 google.com` (with DNS). Can be done via `network_status pingTarget=8.8.8.8`.
 4. **DNS** — `cat /etc/resolv.conf`, `nslookup google.com`.
-5. **NM logs** — `journalctl -u NetworkManager -n 50 --no-pager` (или `wb_logs unit=NetworkManager`).
-6. **wb-connection-manager logs** — `journalctl -u wb-connection-manager -n 30 --no-pager` — что переключал.
-7. **Если 4G** — `mmcli -m 0 --signal-get`, `mmcli -m 0 | grep -E 'state|registration'`.
+5. **NM logs** — `journalctl -u NetworkManager -n 50 --no-pager` (or `wb_logs unit=NetworkManager`).
+6. **wb-connection-manager logs** — `journalctl -u wb-connection-manager -n 30 --no-pager` — what it switched.
+7. **If 4G** — `mmcli -m 0 --signal-get`, `mmcli -m 0 | grep -E 'state|registration'`.
 
-## NM-профили vs wb-connection-manager.conf
+## NM profiles vs wb-connection-manager.conf
 
-NM-профили лежат в `/etc/NetworkManager/system-connections/*.nmconnection`. **Файлы обновляются автоматически** при `nmcli connection modify`. Прямая правка возможна, но требует `chmod 0600` + `systemctl restart NetworkManager`.
+NM profiles live in `/etc/NetworkManager/system-connections/*.nmconnection`. **The files are updated automatically** on `nmcli connection modify`. Direct editing is possible, but requires `chmod 0600` + `systemctl restart NetworkManager`.
 
-`/etc/wb-connection-manager.conf` — слой над ними для UI и приоритетов. Если правишь NM напрямую, помни: confed-конфиг не регенерируется, и веб-UI может показывать устаревшие данные.
+`/etc/wb-connection-manager.conf` is a layer above them for the UI and priorities. If you edit NM directly, remember: the confed config is not regenerated, and the web UI may show stale data.
 
-**Рекомендация:** простые изменения (SSID, пароль, static IP) — через `nmcli`. Структурные изменения и приоритеты — через `wb_confed_save /etc/wb-connection-manager.conf`.
+**Recommendation:** simple changes (SSID, password, static IP) — via `nmcli`. Structural changes and priorities — via `wb_confed_save /etc/wb-connection-manager.conf`.
 
-## Грабли
+## Pitfalls
 
-- **Не проверил link перед DNS** — типичная ошибка. Сначала `ip addr`, потом `ping IP`, потом `ping name`.
-- **Правка `/etc/resolv.conf` руками** — перезаписывается NM. Только через `nmcli ipv4.dns`.
-- **Поднимаем VPN — теряем доступ к WB-AP** — если VPN ставит default через себя, локальная сеть отваливается. `connection.autoconnect-priority` или ручной старт.
-- **`wlan0` под AP** — нельзя одновременно использовать как client. Для WiFi-клиента — второй адаптер (USB).
-- **APN провайдера** — без правильного `gsm.apn` модем не получит IP. Уточни у оператора.
-- **PIN** — некоторые операторы требуют. Без PIN модем `Locked`.
-- **Failover «прыгает»** — слабый GSM-сигнал, плохой WiFi. Лог `wb-connection-manager` покажет где застряло.
-- **NM не стартует** — `systemctl status NetworkManager`, kernel mismatch (см. `troubleshooting-general`).
-- **Custom .nmconnection не переживёт FIT** — бэкап через `controller-backup`.
+- **Didn't check the link before DNS** — a typical mistake. First `ip addr`, then `ping IP`, then `ping name`.
+- **Editing `/etc/resolv.conf` by hand** — overwritten by NM. Only via `nmcli ipv4.dns`.
+- **Bringing up the VPN — losing access to WB-AP** — if the VPN sets the default route through itself, the local network drops out. `connection.autoconnect-priority` or a manual start.
+- **`wlan0` is under the AP** — it can't be used as a client at the same time. For a WiFi client — a second adapter (USB).
+- **Provider's APN** — without the correct `gsm.apn` the modem won't get an IP. Check with the operator.
+- **PIN** — some operators require it. Without a PIN the modem is `Locked`.
+- **Failover "jumps"** — weak GSM signal, poor WiFi. The `wb-connection-manager` log will show where it got stuck.
+- **NM won't start** — `systemctl status NetworkManager`, kernel mismatch (see `troubleshooting-general`).
+- **A custom .nmconnection won't survive a FIT** — back up via `controller-backup`.
 
-## Документация
+## Documentation
 
 - NetworkManager: https://networkmanager.dev/docs/
 - nmcli reference: `man nmcli`

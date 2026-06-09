@@ -354,6 +354,7 @@ export type Settings = {
   sshKeyPath: string
   discoveryInterval: number
   openBrowser: boolean
+  uiLanguage: 'ru' | 'en'
   mqttPasswordConfigured: boolean
   sshPasswordConfigured: boolean
   storagePath: string
@@ -375,6 +376,7 @@ export type SettingsPatch = Partial<{
   sshKeyPath: string
   discoveryInterval: number
   openBrowser: boolean
+  uiLanguage: 'ru' | 'en'
   priceInput: number | null
   priceOutput: number | null
   priceCached: number | null

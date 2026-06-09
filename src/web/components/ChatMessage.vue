@@ -14,7 +14,8 @@ import yaml from 'highlight.js/lib/languages/yaml'
 import ini from 'highlight.js/lib/languages/ini'
 import type { ChatItem, ChatItemToolCall, Settings } from '../api'
 import { api, calcCost, PROVIDER_INFO } from '../api'
-import { fmtCost, fmtSize, fmtTime, plural } from '../utils'
+import { fmtCost, fmtSize, fmtTime } from '../utils'
+import { t, plural } from '../i18n'
 
 hljs.registerLanguage('bash', bash); hljs.registerLanguage('sh', bash)
 hljs.registerLanguage('json', json)
@@ -176,7 +177,7 @@ async function downloadViaFetch(url: string, name: string) {
           </a>
           <button
             class="user-attach-del"
-            title="Удалить файл из чата"
+            :title="t('file.removeFromChat')"
             @click="deleteFileFromChat(a.id)"
           >×</button>
           <div class="user-attach-meta">
@@ -197,12 +198,12 @@ async function downloadViaFetch(url: string, name: string) {
           </a>
           <button
             class="user-attach-del"
-            title="Удалить файл из чата"
+            :title="t('file.removeFromChat')"
             @click="deleteFileFromChat(a.id)"
           >×</button>
         </div>
         <div v-else class="user-attach-deleted">
-          📎 {{ a.name }} <code class="user-attach-id">{{ a.id }}</code> — удалено
+          📎 {{ a.name }} <code class="user-attach-id">{{ a.id }}</code> — {{ t('file.deleted') }}
         </div>
       </template>
     </div>
@@ -210,7 +211,7 @@ async function downloadViaFetch(url: string, name: string) {
       {{ item.text }}
       <button
         class="user-copy"
-        :title="userCopied ? 'Скопировано!' : 'Копировать'"
+        :title="userCopied ? t('common.copied') : t('common.copy')"
         @click="copyUser"
       >{{ userCopied ? '✓' : '⎘' }}</button>
     </div>
@@ -221,7 +222,7 @@ async function downloadViaFetch(url: string, name: string) {
     <div class="bubble markdown">
       <button
         class="copy-btn"
-        :title="copied ? 'Скопировано!' : 'Копировать'"
+        :title="copied ? t('common.copied') : t('common.copy')"
         @click="copyText"
       >{{ copied ? '✓' : '⎘' }}</button>
       <div ref="bubbleEl" v-html="assistantHtml" />
@@ -233,7 +234,7 @@ async function downloadViaFetch(url: string, name: string) {
           class="footer-tokens"
           v-if="item.tokensPrompt || item.tokensCompletion || messageCost || item.toolCallsCount"
         ><template v-if="item.toolCallsCount"
-          ><span :title="`Перед этим ответом было ${item.toolCallsCount} ${plural(item.toolCallsCount, ['LLM-вызов с инструментом', 'LLM-вызова с инструментами', 'LLM-вызовов с инструментами'])} — стоимость рядом включает их.`">🔧 {{ item.toolCallsCount }}</span> · </template
+          ><span :title="t('tools.beforeAnswerTooltip', { n: item.toolCallsCount, form: plural(item.toolCallsCount, 'llmCall') })">🔧 {{ item.toolCallsCount }}</span> · </template
         >↑{{ item.tokensPrompt ?? 0 }} ↓{{ item.tokensCompletion ?? 0 }}<template v-if="item.tokensCached"> ⊙{{ item.tokensCached }}</template><template v-if="messageCost"> · {{ fmtCost(messageCost) }}</template></span>
         <span v-if="item.createdAt" class="footer-time">{{ fmtTime(item.createdAt) }}</span>
       </div>
@@ -250,13 +251,13 @@ async function downloadViaFetch(url: string, name: string) {
     </button>
     <div v-if="expanded && item.result" class="tool-result-wrap">
       <div class="tool-result-actions">
-        <button class="result-copy-btn" :title="resultCopied ? 'Скопировано!' : 'Копировать'" @click="copyResult">
-          {{ resultCopied ? '✓ скопировано' : '⎘ копировать' }}
+        <button class="result-copy-btn" :title="resultCopied ? t('common.copied') : t('common.copy')" @click="copyResult">
+          {{ resultCopied ? t('tools.copiedBtn') : t('tools.copyBtn') }}
         </button>
       </div>
       <pre class="tool-result" :class="{ err: item.result.isError, truncated: isLongResult && !resultExpanded }">{{ truncatedResult }}</pre>
       <button v-if="isLongResult" class="result-toggle" @click="resultExpanded = !resultExpanded">
-        {{ resultExpanded ? '▲ свернуть' : `▼ показать всё (${resultContent.split('\n').length} строк)` }}
+        {{ resultExpanded ? t('tools.collapseAll') : t('tools.expandAll', { n: resultContent.split('\n').length }) }}
       </button>
     </div>
   </div>
@@ -264,14 +265,14 @@ async function downloadViaFetch(url: string, name: string) {
   <!-- File from controller -->
   <div v-else-if="item.type === 'assistant_file'" class="msg assistant">
     <div v-if="deletedAttachments.has(item.attachmentId)" class="file-deleted">
-      📎 {{ item.name }} — удалено
+      📎 {{ item.name }} — {{ t('file.deleted') }}
     </div>
     <template v-else>
       <div v-if="item.mime?.startsWith('image/')" class="file-image-wrap">
         <img :src="item.url" :alt="item.name" class="file-image" />
         <div class="row" style="gap:6px">
-          <a href="#" @click.prevent="downloadViaFetch(item.url, item.name)" class="file-image-dl">Скачать</a>
-          <button class="file-image-dl danger" @click="deleteFileFromChat(item.attachmentId)">Удалить</button>
+          <a href="#" @click.prevent="downloadViaFetch(item.url, item.name)" class="file-image-dl">{{ t('file.download') }}</a>
+          <button class="file-image-dl danger" @click="deleteFileFromChat(item.attachmentId)">{{ t('common.delete') }}</button>
         </div>
       </div>
       <div v-else class="file-card-wrap">
@@ -282,13 +283,13 @@ async function downloadViaFetch(url: string, name: string) {
             <div class="file-sub">
               <span>{{ fmtSize(item.size) }}</span>
               <span v-if="item.sourcePath" class="file-src" :title="item.sourcePath">
-                · с контроллера{{ item.sourceSn ? ` ${item.sourceSn}` : '' }}
+                · {{ t('file.fromController', { sn: item.sourceSn ? ` ${item.sourceSn}` : '' }) }}
               </span>
             </div>
           </div>
-          <span class="file-dl">Скачать</span>
+          <span class="file-dl">{{ t('file.download') }}</span>
         </a>
-        <button class="file-delete" title="Удалить вложение" @click="deleteFileFromChat(item.attachmentId)">×</button>
+        <button class="file-delete" :title="t('file.deleteAttachment')" @click="deleteFileFromChat(item.attachmentId)">×</button>
       </div>
     </template>
   </div>

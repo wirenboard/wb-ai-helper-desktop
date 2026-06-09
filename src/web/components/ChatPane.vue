@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
+import { t } from '../i18n'
 import { type ChatTurn, type Settings, turnsToItems, type TrackedJob } from '../api'
 import ChatMessageList from './ChatMessageList.vue'
 import ChatInputArea from './ChatInputArea.vue'
@@ -71,7 +72,7 @@ function onSuggest(text: string) {
 
     <Teleport to="body">
       <div v-if="selPopup" class="sel-popup" :style="{ left: selPopup.x + 'px', top: selPopup.y + 'px' }">
-        <button @mousedown.prevent="quoteSelection">Спросить →</button>
+        <button @mousedown.prevent="quoteSelection">{{ t('chat.askSelection') }}</button>
       </div>
     </Teleport>
 

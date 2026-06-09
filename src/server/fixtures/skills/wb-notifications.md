@@ -1,29 +1,29 @@
 # wb-notifications
 
-Отправка уведомлений с контроллера во внешние каналы — Telegram, email, SMS — из `wb-rules` (`Notify.*`) или через сервис alarms (`alarms.conf`).
+Sending notifications from the controller to external channels — Telegram, email, SMS — from `wb-rules` (`Notify.*`) or via the alarms service (`alarms.conf`).
 
-Подгружай на: «отправь Telegram при ...», «настрой email», «SMS на тревогу», «уведомления не приходят», «alarms.conf», «Notify.sendTelegramMessage», «email relay», «Telegram-бот для контроллера».
+Load on: "send Telegram when ...", "set up email", "SMS on alarm", "notifications not arriving", "alarms.conf", "Notify.sendTelegramMessage", "email relay", "Telegram bot for the controller".
 
-## Каналы
+## Channels
 
-| Канал | wb-rules API | Требует |
+| Channel | wb-rules API | Requires |
 |---|---|---|
-| Telegram | `Notify.sendTelegramMessage(token, chatId, text)` | Bot-токен от `@BotFather`, chat_id (свой, группы или канала) |
-| Email | `Notify.sendEmail(to, subject, body)` | Локальный MTA (`exim4`/`msmtp`) с настроенным relay |
-| SMS | `Notify.sendSMS(phone, body)` | Встроенный GSM-модем + SIM с балансом + работающий ModemManager |
+| Telegram | `Notify.sendTelegramMessage(token, chatId, text)` | Bot token from `@BotFather`, chat_id (your own, of a group, or of a channel) |
+| Email | `Notify.sendEmail(to, subject, body)` | A local MTA (`exim4`/`msmtp`) with a configured relay |
+| SMS | `Notify.sendSMS(phone, body)` | Built-in GSM modem + SIM with balance + working ModemManager |
 
-`Notify.*` синхронный с точки зрения wb-rules: вызвал — забыл. Доставка асинхронная, **проверки доставки нет** — для критичных уведомлений добавляй retry/fallback в код правила.
+`Notify.*` is synchronous from the wb-rules point of view: called — forgotten. Delivery is asynchronous, **there is no delivery check** — for critical notifications add retry/fallback in the rule code.
 
 ## Telegram
 
-### Создание бота
+### Creating a bot
 
-1. В Telegram → `@BotFather` → `/newbot` → имя/username → получаешь **bot token** (`123456:ABC...`).
-2. **chat_id для личных** — отправь боту любое сообщение, потом `curl https://api.telegram.org/bot<TOKEN>/getUpdates | jq '.result[].message.chat.id'`. Число — твой chat_id.
-3. **Для группы** — добавь бота в группу, отправь сообщение, дальше через `getUpdates`. chat_id группы будет отрицательным (`-123456`).
-4. **Для канала** — добавь бота как админа, попроси кого-то написать в канал (или forward), `getUpdates`.
+1. In Telegram → `@BotFather` → `/newbot` → name/username → you get a **bot token** (`123456:ABC...`).
+2. **chat_id for personal chats** — send the bot any message, then `curl https://api.telegram.org/bot<TOKEN>/getUpdates | jq '.result[].message.chat.id'`. The number is your chat_id.
+3. **For a group** — add the bot to the group, send a message, then go through `getUpdates`. The group chat_id will be negative (`-123456`).
+4. **For a channel** — add the bot as an admin, ask someone to post in the channel (or forward), `getUpdates`.
 
-### Из wb-rules
+### From wb-rules
 
 ```js
 defineRule("alert_on_overheat", {
@@ -32,53 +32,53 @@ defineRule("alert_on_overheat", {
     Notify.sendTelegramMessage(
       "123456:ABC...",
       "987654321",
-      "Перегрев: " + dev["wb-msw-v4_20/Temperature"] + "°C"
+      "Overheat: " + dev["wb-msw-v4_20/Temperature"] + "°C"
     );
   }
 });
 ```
 
-**НЕ хардкодь токен** в продакшне. Лучше через PersistentStorage:
+**DO NOT hardcode the token** in production. Better via PersistentStorage:
 
 ```js
 var ps = new PersistentStorage("notify_creds", {global: true});
-// один раз через консоль или init-скрипт:
+// once, via the console or an init script:
 // ps["telegram_token"] = "123456:ABC...";
 // ps["telegram_chat"] = "987654321";
 
 defineRule("alert", {
   whenChanged: "wb-mwac_25/F1",
   then: function (newValue) {
-    if (newValue) Notify.sendTelegramMessage(ps["telegram_token"], ps["telegram_chat"], "Протечка!");
+    if (newValue) Notify.sendTelegramMessage(ps["telegram_token"], ps["telegram_chat"], "Leak!");
   }
 });
 ```
 
-### Прямой curl (без wb-rules)
+### Direct curl (without wb-rules)
 
-Для скриптов, таймеров, systemd-юнитов:
+For scripts, timers, systemd units:
 
 ```bash
 ssh root@<HOST> 'curl -s -m10 -X POST "https://api.telegram.org/bot<TOKEN>/sendMessage" \
   -d "chat_id=<CHAT_ID>" \
-  -d "text=Сообщение от контроллера"'
+  -d "text=Message from the controller"'
 ```
 
-Ответ `{"ok":true,"result":...}` — успех.
+A `{"ok":true,"result":...}` response means success.
 
 ## Email
 
-### Локальный MTA через msmtp (рекомендую)
+### Local MTA via msmtp (recommended)
 
-`msmtp-mta` — лёгкий, ставится через apt:
+`msmtp-mta` — lightweight, installed via apt:
 
 ```bash
 ssh root@<HOST> 'apt-get install msmtp-mta'
 ```
 
-(сервер сам добавит `-y` при ssh_exec_async — не пиши руками)
+(the server itself will add `-y` on ssh_exec_async — don't write it by hand)
 
-Конфиг `/etc/msmtprc`:
+Config `/etc/msmtprc`:
 
 ```bash
 ssh root@<HOST> 'cat > /etc/msmtprc' <<'EOF'
@@ -98,56 +98,56 @@ EOF
 ssh root@<HOST> 'chmod 0600 /etc/msmtprc'
 ```
 
-Для Gmail нужен **App Password** (не обычный пароль аккаунта); включи 2FA и сгенери app password.
+For Gmail you need an **App Password** (not the regular account password); enable 2FA and generate an app password.
 
-Тест:
+Test:
 
 ```bash
 ssh root@<HOST> 'echo -e "Subject: test\n\nbody" | msmtp recipient@example.com'
 ```
 
-### Из wb-rules
+### From wb-rules
 
 ```js
-Notify.sendEmail("user@example.com", "Тревога", "В подвале не выключается свет");
+Notify.sendEmail("user@example.com", "Alarm", "The basement light won't turn off");
 ```
 
-`Notify.sendEmail` использует системный `sendmail`/`mail` — msmtp-mta перехватывает.
+`Notify.sendEmail` uses the system `sendmail`/`mail` — msmtp-mta intercepts it.
 
 ## SMS
 
-Через встроенный GSM-модем (`mmcli`) — нужна SIM с балансом. На WB7/WB8 — встроенный модем, на старых — внешний WB-MOD-MODEM.
+Via the built-in GSM modem (`mmcli`) — a SIM with balance is needed. On WB7/WB8 — a built-in modem, on older ones — an external WB-MOD-MODEM.
 
-### Из wb-rules
+### From wb-rules
 
 ```js
-Notify.sendSMS("+71234567890", "Текст до 70 символов на одну SMS в кириллице");
+Notify.sendSMS("+71234567890", "Up to 70 Cyrillic chars per single SMS");
 ```
 
-### Прямой mmcli
+### Direct mmcli
 
 ```bash
 ssh root@<HOST> 'mmcli -m 0 --messaging-create-sms="text=\"Hello\",number=\"+71234567890\""'
-# возвращает путь типа /org/freedesktop/ModemManager1/SMS/123
+# returns a path like /org/freedesktop/ModemManager1/SMS/123
 ssh root@<HOST> 'mmcli -s /org/freedesktop/ModemManager1/SMS/123 --send'
 ```
 
-**Кириллица в SMS** = 70 символов на одно сообщение, латиница = 160. Длинные SMS бьются на части (multipart) — каждая часть тарифицируется отдельно.
+**Cyrillic in SMS** = 70 characters per single message, Latin = 160. Long SMS are split into parts (multipart) — each part is billed separately.
 
-## alarms.conf — централизованные тревоги
+## alarms.conf — centralized alarms
 
-`/etc/wb-rules/alarms.conf` — JSON с декларативным описанием тревог. Загружается из правила:
+`/etc/wb-rules/alarms.conf` — JSON with a declarative description of alarms. Loaded from a rule:
 
 ```js
 Alarms.load("/etc/wb-rules/alarms.conf");
 ```
 
-Формат:
+Format:
 
 ```json
 {
   "deviceName": "alarms",
-  "deviceTitle": "Тревоги",
+  "deviceTitle": "Alarms",
   "recipients": [
     {"type": "telegram", "token": "<TOKEN>", "chatId": "<CHAT_ID>"},
     {"type": "email", "to": "user@example.com"},
@@ -158,32 +158,32 @@ Alarms.load("/etc/wb-rules/alarms.conf");
       "name": "leak",
       "cell": "wb-mwac_25/F1",
       "expectedValueParameter": false,
-      "alarmMessage": "Протечка в подвале!",
-      "noAlarmMessage": "Протечка устранена",
+      "alarmMessage": "Basement leak!",
+      "noAlarmMessage": "Leak resolved",
       "interval": 600
     }
   ]
 }
 ```
 
-`interval` — секунды между повторными уведомлениями пока тревога активна. Без него — одно уведомление при возникновении.
+`interval` — seconds between repeated notifications while the alarm is active. Without it — a single notification when it occurs.
 
-`expectedValueParameter` — нормальное значение, тревога когда **не равно** ему. Альтернативно `minValueParameter`/`maxValueParameter` для порогов.
+`expectedValueParameter` — the normal value, the alarm fires when the value is **not equal** to it. Alternatively `minValueParameter`/`maxValueParameter` for thresholds.
 
-После правки `alarms.conf` — `systemctl restart wb-rules`.
+After editing `alarms.conf` — `systemctl restart wb-rules`.
 
-## Грабли
+## Pitfalls
 
-- **Захардкоденный токен** — попадёт в git/бэкап. Используй `PersistentStorage` или `wb_read_file` файла-секрета.
-- **Telegram chat_id для канала** — отрицательный, начинается с `-100`. Не путай с личным.
-- **Gmail без App Password** — обычный пароль не работает с 2FA, нужен app-password.
-- **MTA не настроен** — `Notify.sendEmail` молча проглотит. `journalctl -u wb-rules -p err` (или `wb_logs unit=wb-rules priority=err`) покажет если sendmail не найден.
-- **Кириллица SMS** — 70 символов на одно SMS, превышение = multipart, биллинг ×N.
-- **Нет интернета** — Telegram и email падают. SMS работает (через GSM), но если модем — uplink, пакеты теряются пока SMS отправляется.
-- **alarms.conf без рестарта wb-rules** — изменения не подхватятся.
-- **Несколько тревог без `interval`** — спам.
+- **Hardcoded token** — will end up in git/backup. Use `PersistentStorage` or `wb_read_file` of a secret file.
+- **Telegram chat_id for a channel** — negative, starts with `-100`. Don't confuse it with a personal one.
+- **Gmail without an App Password** — the regular password doesn't work with 2FA, an app password is needed.
+- **MTA not configured** — `Notify.sendEmail` will silently swallow it. `journalctl -u wb-rules -p err` (or `wb_logs unit=wb-rules priority=err`) will show if sendmail is not found.
+- **Cyrillic SMS** — 70 characters per single SMS, exceeding it = multipart, billing ×N.
+- **No internet** — Telegram and email fail. SMS works (via GSM), but if the modem is the uplink, packets are lost while the SMS is being sent.
+- **alarms.conf without restarting wb-rules** — changes won't be picked up.
+- **Several alarms without `interval`** — spam.
 
-## Документация
+## Documentation
 
 - Telegram Bot API: https://core.telegram.org/bots/api
 - msmtp: https://marlam.de/msmtp/

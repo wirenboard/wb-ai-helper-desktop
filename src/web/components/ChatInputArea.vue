@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, watch } from 'vue'
 import { useAttachments } from '../composables/useAttachments'
-import { fmtSize, plural } from '../utils'
+import { t, plural, fmtSize } from '../i18n'
 
 const props = defineProps<{
   disabled: boolean
@@ -64,7 +64,7 @@ function submit() {
   if (!v && !items.value.length) return
   if (props.disabled) {
     // Модель отвечает — не теряем введённый текст, объясняем что делать.
-    flashNotice('Модель ещё отвечает. Дождись её ответа и нажми Enter ещё раз — или нажми «■ Прервать», и можно будет отправить сразу.')
+    flashNotice(t('input.streamingNotice'))
     return
   }
   // Прикреплённые файлы кодируем токенами `[file:id:name]` в начало
@@ -129,24 +129,25 @@ function onFileChange(e: Event) {
     @dragleave="onDragLeave"
     @drop="onDrop"
   >
+    <div v-if="dragOver" class="drag-overlay">{{ t('input.drop') }}</div>
     <!-- Attachment strip -->
     <div v-if="items.length" class="attach-strip">
       <div v-if="items.length > COLLAPSE_AT" class="strip-head">
         <button type="button" class="strip-toggle" @click="stripExpanded = !stripExpanded">
           <span>📎</span>
-          <span class="strip-count">{{ items.length }} {{ plural(items.length, ['файл', 'файла', 'файлов']) }}</span>
+          <span class="strip-count">{{ items.length }} {{ plural(items.length, 'file') }}</span>
           <span class="strip-size">{{ fmtSize(totalSize) }}</span>
           <span class="caret">{{ stripExpanded ? '▾' : '▸' }}</span>
         </button>
-        <button type="button" class="strip-action" title="Скачать все" @click="downloadAll">⬇ все</button>
-        <button type="button" class="strip-action danger" title="Удалить все" @click="removeAll">× все</button>
+        <button type="button" class="strip-action" :title="t('input.downloadAllTitle')" @click="downloadAll">{{ t('input.downloadAll') }}</button>
+        <button type="button" class="strip-action danger" :title="t('input.removeAllTitle')" @click="removeAll">{{ t('input.removeAll') }}</button>
       </div>
       <div v-if="!stripCollapsed" class="strip-chips">
         <a v-for="a in items" :key="a.id" class="chip" :href="downloadUrl(a.id)" :download="a.name" :title="`${a.name} · ${fmtSize(a.size)}`">
           <span>📎</span>
           <span class="chip-name">{{ a.name }}</span>
           <span class="chip-size">{{ fmtSize(a.size) }}</span>
-          <button type="button" class="chip-remove" :aria-label="`Удалить ${a.name}`" @click.stop.prevent="remove(a.id)">×</button>
+          <button type="button" class="chip-remove" :aria-label="t('input.removeOne', { name: a.name })" @click.stop.prevent="remove(a.id)">×</button>
         </a>
       </div>
     </div>
@@ -162,7 +163,7 @@ function onFileChange(e: Event) {
     <textarea
       ref="textareaRef"
       v-model="text"
-      :placeholder="llmConfigured ? 'Спросите ассистента… (Enter — отправить, Shift+Enter — перенос)' : 'API-ключ не настроен — откройте Настройки'"
+      :placeholder="llmConfigured ? t('input.ask') : t('input.noKey')"
       :disabled="!llmConfigured"
       rows="2"
       @keydown="onKey"
@@ -174,15 +175,15 @@ function onFileChange(e: Event) {
 
     <div class="buttons">
       <input ref="fileInputRef" type="file" multiple hidden @change="onFileChange" />
-      <button type="button" class="attach" :disabled="uploading" :title="uploading ? 'Загрузка…' : 'Прикрепить файл'" @click="fileInputRef?.click()">📎</button>
+      <button type="button" class="attach" :disabled="uploading" :title="uploading ? t('input.uploading') : t('input.attach')" @click="fileInputRef?.click()">📎</button>
       <span
         v-if="runningJobsCount && runningJobsCount > 0"
         class="bg-jobs-indicator"
-        :title="`${runningJobsCount} ${plural(runningJobsCount, ['фоновая задача', 'фоновые задачи', 'фоновых задач'])} продолжают выполняться на контроллере. Модель закончила, но ssh_exec_async/wb_bus_scan/serial_debug_collect ещё работают — спроси через job_status или дождись.`"
+        :title="t('input.bgJobsTooltip', { n: runningJobsCount, form: plural(runningJobsCount, 'job') })"
       >⏳ {{ runningJobsCount }}</span>
-      <span class="downloads-hint" title="В Chrome Ctrl+J открывает список скачанных файлов с пунктом «Показать в папке»"><kbd>Ctrl+J</kbd> — скачанные файлы</span>
-      <button v-if="disabled" type="button" class="abort" @click="emit('abort')">■ Прервать</button>
-      <button type="submit" class="send" :disabled="disabled || !llmConfigured || (!text.trim() && !items.length)">Отправить</button>
+      <span class="downloads-hint" :title="t('input.downloadsHintTooltip')"><kbd>Ctrl+J</kbd> — {{ t('input.downloadsHint') }}</span>
+      <button v-if="disabled" type="button" class="abort" @click="emit('abort')">{{ t('input.stop') }}</button>
+      <button type="submit" class="send" :disabled="disabled || !llmConfigured || (!text.trim() && !items.length)">{{ t('input.send') }}</button>
     </div>
   </form>
 </template>
@@ -193,8 +194,7 @@ function onFileChange(e: Event) {
   border-top: 1px solid var(--border); padding: 10px 12px;
   background: var(--bg-soft); position: relative;
 }
-.input-area.drag-over::after {
-  content: 'Отпустите файл для загрузки';
+.input-area .drag-overlay {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   background: rgba(var(--accent-rgb, 31,122,236), 0.08); border: 2px dashed var(--accent);
   color: var(--accent); font-weight: 700; font-size: 0.875rem; z-index: 1; pointer-events: none;

@@ -60,6 +60,10 @@ const EMPTY_PROVIDER: ProviderConfig = {
   minRequestIntervalMs: null,
 }
 
+/** UI / assistant language. Drives both the frontend chrome and server-side
+ * strings (system prompt, welcome, tool descriptions, skills). */
+export type Lang = 'ru' | 'en'
+
 export type Settings = {
   provider: LlmProvider
   /** Per-provider configs — switching provider swaps every LLM setting. */
@@ -72,6 +76,7 @@ export type Settings = {
   sshKeyPath: string
   discoveryInterval: number
   openBrowser: boolean
+  uiLanguage: Lang
 }
 
 export const PROVIDER_DEFAULTS: Record<LlmProvider, { baseURL: string; label: string; apiFormat: ApiFormat }> = {
@@ -116,6 +121,7 @@ export type PublicSettings = {
   sshKeyPath: string
   discoveryInterval: number
   openBrowser: boolean
+  uiLanguage: Lang
   mqttPasswordConfigured: boolean
   sshPasswordConfigured: boolean
   storagePath: string
@@ -143,6 +149,7 @@ const DEFAULTS: Settings = {
   sshKeyPath: '',
   discoveryInterval: 15000,
   openBrowser: true,
+  uiLanguage: 'ru',
 }
 
 export class SettingsStore {
@@ -218,6 +225,7 @@ export class SettingsStore {
       sshKeyPath: this.cache.sshKeyPath,
       discoveryInterval: this.cache.discoveryInterval,
       openBrowser: this.cache.openBrowser,
+      uiLanguage: this.cache.uiLanguage ?? 'ru',
       mqttPasswordConfigured: !!this.cache.mqttPassword,
       sshPasswordConfigured: !!this.cache.sshPassword,
       storagePath: this.file,
@@ -294,7 +302,7 @@ const PROVIDER_FIELDS = [
 const SHARED_FIELDS = [
   'mqttUser', 'mqttPassword',
   'sshUser', 'sshPassword', 'sshKeyPath',
-  'discoveryInterval', 'openBrowser',
+  'discoveryInterval', 'openBrowser', 'uiLanguage',
 ] as const
 
 function isLlmProvider(v: unknown): v is LlmProvider {
@@ -413,6 +421,9 @@ function envOverrides(): Partial<Settings> & Partial<ProviderConfig> {
     out.discoveryInterval = Number(process.env['WB_HELPER_DISCOVERY_INTERVAL'])
   }
   if (process.env['WB_HELPER_OPEN_BROWSER']) out.openBrowser = process.env['WB_HELPER_OPEN_BROWSER'] !== '0'
+  if (process.env['WB_HELPER_LANGUAGE']) {
+    out.uiLanguage = process.env['WB_HELPER_LANGUAGE'] === 'en' ? 'en' : 'ru'
+  }
   return out
 }
 

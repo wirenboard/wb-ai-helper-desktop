@@ -78,6 +78,9 @@ export class LlmClient {
       modelOverride?: string
       /** Sampling temperature (0..2). Undefined → omit, provider chooses default. */
       temperature?: number
+      /** Builds the post-checkpoint «continue» system message from the summary.
+       * Caller supplies it so the text follows the UI/assistant language. */
+      checkpointMessage?: (summary: string) => string
       /** Loader для image-вложений: id → buffer/mime. Если задан — `[file:id:name]`
        * токены в user-сообщениях для image-расширений преобразуются в
        * multi-modal content (`type: 'image_url'`), модель получает картинку
@@ -286,11 +289,13 @@ export class LlmClient {
         // удерживает агентный цикл живым без user-input'а.
         messages.push({
           role: 'system',
-          content: `Чекпоинт — итог предыдущего этапа:\n${summary}\n\n` +
-            'Сделан checkpoint, история сжата. ПРОДОЛЖАЙ выполнение текущей задачи: ' +
-            'следующий шаг по плану через нужный инструмент. Если задача полностью ' +
-            'завершена и больше делать нечего — дай финальный ответ пользователю. ' +
-            'Не пиши «дальше проверю / посмотрю / попробую» как обещание — сразу делай.',
+          content: opts?.checkpointMessage
+            ? opts.checkpointMessage(summary)
+            : `Чекпоинт — итог предыдущего этапа:\n${summary}\n\n` +
+              'Сделан checkpoint, история сжата. ПРОДОЛЖАЙ выполнение текущей задачи: ' +
+              'следующий шаг по плану через нужный инструмент. Если задача полностью ' +
+              'завершена и больше делать нечего — дай финальный ответ пользователю. ' +
+              'Не пиши «дальше проверю / посмотрю / попробую» как обещание — сразу делай.',
         })
         messages.push(...thisRound)
       }

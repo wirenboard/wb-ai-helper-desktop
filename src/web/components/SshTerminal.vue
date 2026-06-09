@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch, nextTick } from 'vue'
+import { t } from '../i18n'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -109,12 +110,12 @@ onBeforeUnmount(() => {
       <span class="ssh-icon">▷_</span>
       <span class="ssh-title">SSH: {{ sn }}</span>
       <span class="ssh-status" :class="status">
-        {{ status === 'connecting' ? 'подключение…'
-          : status === 'ready' ? 'онлайн'
-          : status === 'closed' ? 'закрыт'
-          : 'ошибка' }}
+        {{ status === 'connecting' ? t('ssh.connecting')
+          : status === 'ready' ? t('ssh.online')
+          : status === 'closed' ? t('ssh.closed')
+          : t('ssh.errorStatus') }}
       </span>
-      <button class="ssh-close" @click="emit('close')" title="Закрыть">×</button>
+      <button class="ssh-close" @click="emit('close')" :title="t('common.close')">×</button>
     </div>
     <div ref="containerEl" class="ssh-body" />
     <div v-if="status === 'error'" class="ssh-error">⚠ {{ errorMsg }}</div>

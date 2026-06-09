@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { api, calcCost, contextWindowOf, type Chat, type ChatTurn, type Controller, type Health, type Settings, type TokenStats, type TrackedJob } from './api'
 import { fmtCost, fmtTok } from './utils'
+import { t, plural } from './i18n'
 import ChatList from './components/ChatList.vue'
 import ChatPane from './components/ChatPane.vue'
 import ControllerList from './components/ControllerList.vue'
@@ -15,7 +16,7 @@ type Theme = 'auto' | 'light' | 'dark'
 const THEME_KEY = 'wb-theme'
 const themeOrder: Theme[] = ['auto', 'light', 'dark']
 const themeIcon: Record<Theme, string> = { auto: '◑', light: '☀', dark: '☾' }
-const themeLabel: Record<Theme, string> = { auto: 'Авто', light: 'Светлая', dark: 'Тёмная' }
+const themeLabel = computed<Record<Theme, string>>(() => ({ auto: t('theme.auto'), light: t('theme.light'), dark: t('theme.dark') }))
 
 const theme = ref<Theme>((localStorage.getItem(THEME_KEY) as Theme) ?? 'auto')
 
@@ -284,17 +285,7 @@ const HARD_COMPACT_RATIO = 0.9
 function compactContext(softReason: 'soft' | 'hard-warning' = 'soft') {
   // Просим модель сжать историю — вызвать tool `checkpoint`.
   // `compact: true` — backend подменит модель на configured compactModel.
-  const msg =
-    softReason === 'hard-warning'
-      ? 'Контекст уже превысил 90% лимита окна. ' +
-        'Вызови СЕЙЧАС checkpoint(summary=...) с кратким итогом этапа — это твой последний шанс ' +
-        'сохранить важные детали (tool-results, наблюдения, план). ' +
-        'Если не вызовешь — на следующем сообщении мы принудительно обрежем историю, ' +
-        'и всё кроме system-promt и последнего обмена будет потеряно.'
-      : 'Контекст приближается к лимиту окна. ' +
-        'Вызови checkpoint(summary=...) сейчас, пока не поздно. ' +
-        'ВАЖНО: если не вызовешь сам, при достижении 90% мы обрежем историю принудительно — ' +
-        'tool-results и детали могут потеряться. Твой summary безопаснее автоматической обрезки.'
+  const msg = softReason === 'hard-warning' ? t('compact.hardWarning') : t('compact.soft')
   void sendMessage(msg, { compact: true })
 }
 
@@ -309,7 +300,7 @@ async function forceCompact(reason: string) {
     delete liveTurns[id]
     resetAutoCompactGate()
   } catch (e: any) {
-    errorBanner.value = `force-compact failed: ${e?.message ?? String(e)}`
+    errorBanner.value = t('error.forceCompactFailed', { msg: e?.message ?? String(e) })
   }
 }
 
@@ -377,7 +368,7 @@ async function loadInitial() {
     settings.value = s
     if (!h.llmConfigured) settingsOpen.value = true
   } catch (e: any) {
-    errorBanner.value = `Бэкенд недоступен: ${e.message}`
+    errorBanner.value = t('rescan.backendDown', { msg: e.message })
     return
   }
   await refreshControllers()
@@ -413,14 +404,14 @@ async function refreshControllers() {
 
 async function rescan() {
   scanning.value = true
-  showToast('Сканирую сеть…')
+  showToast(t('rescan.scanning'))
   try {
     const r = await api.refresh()
     controllers.value = r.controllers
     const n = r.controllers.length
-    showToast(n ? `Нашёл ${n} контроллер${n === 1 ? '' : n < 5 ? 'а' : 'ов'}` : 'Ничего не нашли')
+    showToast(n ? t('rescan.foundN', { n, form: plural(n, 'controller') }) : t('rescan.nothing'))
   } catch (e: any) {
-    showToast(`Ошибка сканирования: ${e?.message ?? String(e)}`)
+    showToast(t('rescan.error', { msg: e?.message ?? String(e) }))
   } finally {
     scanning.value = false
   }
@@ -659,7 +650,7 @@ function handleStreamEvent(chatId: string, event: string, data: any) {
     const sec = Math.round((data.delayMs ?? 0) / 1000)
     buf.push({
       role: 'user',
-      content: `[Система] ⏳ Провайдер вернул 429 (rate limit). Попытка ${data.attempt}/${data.max}, жду ${sec}с…`,
+      content: t('system.retry429', { attempt: data.attempt, max: data.max, sec }),
     })
     return
   }
@@ -787,7 +778,7 @@ async function refreshJobs() {
       }, 8000)
       // Auto-send to model only if not currently streaming
       if (!streaming.value && activeChatId.value) {
-        await sendMessage(`[Система] Фоновая задача завершена: jobId=${job.jobId}, "${job.label}", контроллер ${job.sn}. Проверь результат через job_tail и сообщи пользователю итог.`)
+        await sendMessage(t('system.jobDone', { id: job.jobId, label: job.label, sn: job.sn }))
       }
     }
 
@@ -871,7 +862,7 @@ async function cancelJob(jobId: string) {
     await api.cancelJob(activeChatId.value, jobId)
     await refreshJobs()
   } catch (e: any) {
-    showToast(`Ошибка отмены задачи: ${e?.message ?? String(e)}`)
+    showToast(t('job.cancelError', { msg: e?.message ?? String(e) }))
   }
 }
 
@@ -930,7 +921,7 @@ const visibleTurns = computed<ChatTurn[]>(() => {
       <div class="chat-header" v-if="activeChat">
         <div class="chat-title" :title="activeChat.title">{{ activeChat.title }}</div>
         <div class="chat-context small">
-          <span v-if="!activeChat.contextSns.length" class="muted">Контекст: все/выбрать справа →</span>
+          <span v-if="!activeChat.contextSns.length" class="muted">{{ t('chat.contextHint') }}</span>
           <span v-else class="context-chips">
             <span class="chip" v-for="sn in activeChat.contextSns" :key="sn">{{ sn }}</span>
           </span>
@@ -938,30 +929,30 @@ const visibleTurns = computed<ChatTurn[]>(() => {
         <div
           v-if="currentChatTokens.prompt + currentChatTokens.completion"
           class="chat-tokens small muted"
-          :title="`Сколько потратили токенов в чате (биллинг): ↑${fmtTok(currentChatTokens.prompt)} prompt${currentChatTokens.cached ? ` (⊙${fmtTok(currentChatTokens.cached)} кэш)` : ''} / ↓${fmtTok(currentChatTokens.completion)} completion`"
+          :title="t('chat.headerTokenTooltip', { prompt: fmtTok(currentChatTokens.prompt), completion: fmtTok(currentChatTokens.completion), cached: currentChatTokens.cached ? t('chat.headerCachedSuffix', { n: fmtTok(currentChatTokens.cached) }) : '' })"
         >↑{{ fmtTok(currentChatTokens.prompt) }} ↓{{ fmtTok(currentChatTokens.completion) }}<template v-if="currentChatTokens.cached"> ⊙{{ fmtTok(currentChatTokens.cached) }}</template><template v-if="currentChatCost != null"> · {{ fmtCost(currentChatCost) }}</template></div>
         <div
           v-if="currentContextUsage && settings?.autoCompact"
           class="ctx-meter small"
           :class="{ warn: currentContextUsage.ratio >= 0.8, crit: currentContextUsage.ratio >= 0.95 }"
-          :title="`Текущий активный контекст ${fmtTok(currentContextUsage.used)} из ${fmtTok(currentContextUsage.total)} (${Math.round(currentContextUsage.ratio * 100)}%)`"
+          :title="t('context.usageTooltip', { used: fmtTok(currentContextUsage.used), total: fmtTok(currentContextUsage.total), pct: Math.round(currentContextUsage.ratio * 100) })"
         >
           <span class="ctx-bar"><span class="ctx-fill" :style="{ width: Math.min(100, Math.round(currentContextUsage.ratio * 100)) + '%' }"/></span>
           {{ fmtTok(currentContextUsage.used) }} / {{ fmtTok(currentContextUsage.total) }}
           <span
             v-if="autoCompactPending"
             class="ctx-pending"
-            title="Модель попрошена вызвать checkpoint(summary=…), ждём ответа. Если не вызовет — при 90% контекст будет обрезан принудительно (детали могут потеряться)."
-          >🗜 ждём checkpoint…</span>
+            :title="t('context.pendingTooltip')"
+          >{{ t('context.pendingBadge') }}</span>
           <button
             v-if="currentContextUsage.ratio >= 0.5 && !streaming"
             class="ctx-compact ghost small"
-            title="Сжать историю — модель вызовет checkpoint и заменит старые tool-results кратким суммари"
+            :title="t('context.compactTooltip')"
             @click="() => compactContext('soft')"
-          >📦 сжать</button>
+          >{{ t('context.compactBtn') }}</button>
         </div>
-        <button class="ghost" :title="`Тема: ${themeLabel[theme]}`" @click="cycleTheme">{{ themeIcon[theme] }}</button>
-        <button class="ghost" title="Настройки" @click="settingsOpen = true">⚙</button>
+        <button class="ghost" :title="t('theme.tooltip', { label: themeLabel[theme] })" @click="cycleTheme">{{ themeIcon[theme] }}</button>
+        <button class="ghost" :title="t('common.settings')" @click="settingsOpen = true">⚙</button>
       </div>
       <div v-if="errorBanner" class="error-banner">
         <span class="error-icon">⚠</span>
@@ -972,10 +963,10 @@ const visibleTurns = computed<ChatTurn[]>(() => {
         <button
           v-if="lastSentMessage && !streaming"
           class="error-retry"
-          title="Повторить отправку с теми же параметрами"
+          :title="t('error.retryTooltip')"
           @click="retryLastMessage"
-        >↻ Повторить</button>
-        <button class="error-close ghost small" @click="errorBanner = null" title="Скрыть">×</button>
+        >{{ t('error.retry') }}</button>
+        <button class="error-close ghost small" @click="errorBanner = null" :title="t('common.hide')">×</button>
       </div>
       <!-- Running/done jobs are rendered inline next to the tool group that
            started them (see ChatMessageList) — no need to duplicate here. -->
@@ -995,11 +986,11 @@ const visibleTurns = computed<ChatTurn[]>(() => {
         @undo-cancel-job="undoCancelJob"
       />
       <div v-else class="welcome">
-        <h2>WB AI Helper</h2>
-        <p>Помощник интегратора Wiren Board. Создайте чат слева — справа выберите контроллеры из локальной сети.</p>
+        <h2>{{ t('welcome.brand') }}</h2>
+        <p>{{ t('welcome.desc') }}</p>
         <div style="display:flex;gap:8px;justify-content:center">
-          <button class="primary" @click="settingsOpen = true">Настройки</button>
-          <button @click="cycleTheme" :title="`Тема: ${themeLabel[theme]}`">{{ themeIcon[theme] }} {{ themeLabel[theme] }}</button>
+          <button class="primary" @click="settingsOpen = true">{{ t('common.settings') }}</button>
+          <button @click="cycleTheme" :title="t('theme.tooltip', { label: themeLabel[theme] })">{{ themeIcon[theme] }} {{ themeLabel[theme] }}</button>
         </div>
       </div>
     </div>

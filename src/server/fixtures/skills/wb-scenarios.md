@@ -1,19 +1,19 @@
 # wb-scenarios
 
-`wb-scenarios` — отдельный движок поверх `wb-rules`, который генерирует JS-правила из декларативного JSON в `/etc/wb-scenarios.conf`. Это «no-code» слой для типовых задач: групповое управление устройствами, свет по движению, термостат, расписание.
+`wb-scenarios` is a separate engine on top of `wb-rules` that generates JS rules from declarative JSON in `/etc/wb-scenarios.conf`. It is a "no-code" layer for common tasks: group device control, light by motion, thermostat, schedule.
 
-Подгружай на: «сделай сценарий», «настрой термостат», «свет по датчику движения», «выключение по расписанию», `wb-scenarios.conf`, «сценарии в web UI».
+Load on: "make a scenario", "set up a thermostat", "light by motion sensor", "turn off on schedule", `wb-scenarios.conf`, "scenarios in the web UI".
 
-**Граница:** полный JS со сложной логикой — `wb-rules` (defineRule, ES5). Сценарии — упрощённая надстройка для типичных кейсов. Если задача нестандартная или нужны вычисления — иди в wb-rules.
+**Boundary:** full JS with complex logic — `wb-rules` (defineRule, ES5). Scenarios are a simplified layer for typical cases. If the task is non-standard or requires computation — go to wb-rules.
 
-## Архитектура
+## Architecture
 
 ```
-/etc/wb-scenarios.conf   (через confed, JSON)
+/etc/wb-scenarios.conf   (via confed, JSON)
        │
        ▼
 wb-scenarios-reloader.service
-       │ (генерит .js под капотом)
+       │ (generates .js under the hood)
        ▼
 /etc/wb-rules/<generated rules>
        │
@@ -21,20 +21,20 @@ wb-scenarios-reloader.service
 wb-rules engine
 ```
 
-Сервис: `wb-scenarios-reloader` (НЕ `wb-scenarios.service` — такого нет).
+Service: `wb-scenarios-reloader` (NOT `wb-scenarios.service` — that one does not exist).
 
-Schema: `/usr/share/wb-mqtt-confed/schemas/wb-scenarios.schema.json` — описывает 4 типа сценариев и UI.
+Schema: `/usr/share/wb-mqtt-confed/schemas/wb-scenarios.schema.json` — describes the 4 scenario types and the UI.
 
-## Четыре типа сценариев
+## Four scenario types
 
-### 1. `devicesControl` — групповое управление
+### 1. `devicesControl` — group control
 
-«Когда контрол A меняется → выставить контролы B и C». Базовая автоматизация.
+"When control A changes → set controls B and C". Basic automation.
 
 ```json
 {
   "scenarioType": "devicesControl",
-  "name": "Свет в коридоре",
+  "name": "Hallway light",
   "id_prefix": "corridor_light",
   "enable": true,
   "inControls": [
@@ -46,16 +46,16 @@ Schema: `/usr/share/wb-mqtt-confed/schemas/wb-scenarios.schema.json` — опи�
 }
 ```
 
-`inControls` — триггеры (изменение значения), `outControls` — что выставить с каким значением.
+`inControls` — triggers (value change), `outControls` — what to set and with what value.
 
-### 2. `lightControl` — свет
+### 2. `lightControl` — light
 
-Включение по датчику движения с off-таймером, ночной режим, диммирование.
+Turn on by motion sensor with an off-timer, night mode, dimming.
 
 ```json
 {
   "scenarioType": "lightControl",
-  "name": "Свет в санузле",
+  "name": "Bathroom light",
   "id_prefix": "wc_light",
   "enable": true,
   "motionSensor": {"deviceId": "wb-msw-v4_20", "controlId": "Motion"},
@@ -66,14 +66,14 @@ Schema: `/usr/share/wb-mqtt-confed/schemas/wb-scenarios.schema.json` — опи�
 }
 ```
 
-### 3. `thermostat` — термостат
+### 3. `thermostat` — thermostat
 
-Включение нагревателя по разнице setpoint−current с гистерезисом.
+Turn on the heater based on the setpoint−current difference with hysteresis.
 
 ```json
 {
   "scenarioType": "thermostat",
-  "name": "Гостиная",
+  "name": "Living room",
   "id_prefix": "living_room",
   "enable": true,
   "temperatureSensor": {"deviceId": "wb-msw-v4_20", "controlId": "Temperature"},
@@ -83,14 +83,14 @@ Schema: `/usr/share/wb-mqtt-confed/schemas/wb-scenarios.schema.json` — опи�
 }
 ```
 
-### 4. `schedule` — расписание
+### 4. `schedule` — schedule
 
-«Каждый день в HH:MM делать X». Под капотом — wb-rules cron.
+"Every day at HH:MM do X". Under the hood — wb-rules cron.
 
 ```json
 {
   "scenarioType": "schedule",
-  "name": "Полив",
+  "name": "Irrigation",
   "id_prefix": "watering",
   "enable": true,
   "schedule": {"hour": 6, "minute": 30, "days": [1,2,3,4,5,6,7]},
@@ -101,40 +101,40 @@ Schema: `/usr/share/wb-mqtt-confed/schemas/wb-scenarios.schema.json` — опи�
 }
 ```
 
-`days` — `[1..7]` (1=Пн … 7=Вс). `delay` — задержка после предыдущего action (сек).
+`days` — `[1..7]` (1=Mon … 7=Sun). `delay` — delay after the previous action (sec).
 
-## Базовые команды
+## Basic commands
 
 ```bash
-ssh root@<HOST> 'cat /etc/wb-scenarios.conf'                                # текущий
-ssh root@<HOST> 'systemctl status wb-scenarios-reloader --no-pager'         # статус
-ssh root@<HOST> 'journalctl -u wb-scenarios-reloader -n 30 --no-pager'      # логи
-ssh root@<HOST> 'ls /etc/wb-rules/wb-scenario-*.js 2>/dev/null'             # сгенерённые .js
+ssh root@<HOST> 'cat /etc/wb-scenarios.conf'                                # current
+ssh root@<HOST> 'systemctl status wb-scenarios-reloader --no-pager'         # status
+ssh root@<HOST> 'journalctl -u wb-scenarios-reloader -n 30 --no-pager'      # logs
+ssh root@<HOST> 'ls /etc/wb-rules/wb-scenario-*.js 2>/dev/null'             # generated .js
 ```
 
-После правки конфига `wb-scenarios-reloader` пересоздаёт правила и рестартит `wb-rules`. Через `mqtt_rpc confed/Editor/Save` (см. `wb-mqtt-serial` — там общий confed-паттерн) — рестарт автоматический; через `write_file` — нужно `systemctl restart wb-scenarios-reloader` руками.
+After editing the config, `wb-scenarios-reloader` regenerates the rules and restarts `wb-rules`. Via `mqtt_rpc confed/Editor/Save` (see `wb-mqtt-serial` — the shared confed pattern is there) the restart is automatic; via `write_file` you need to run `systemctl restart wb-scenarios-reloader` manually.
 
-## Когда сценария мало — иди в wb-rules
+## When a scenario is not enough — go to wb-rules
 
-- Условие зависит от нескольких контролов одновременно с логикой.
-- Нужно вычисляемое значение (среднее, ассиметричный гистерезис, ПИД).
-- Нужно состояние (счётчики, триггер «N раз подряд»).
-- Нужны таймеры кроме расписания (interval, exponential delay).
-- Виртуальные устройства.
+- The condition depends on several controls at once with logic.
+- A computed value is needed (average, asymmetric hysteresis, PID).
+- State is needed (counters, "N times in a row" trigger).
+- Timers other than schedule are needed (interval, exponential delay).
+- Virtual devices.
 
-Сценарии хороши для «нажал кнопку → включил реле» и «по таймеру включил/выключил». За пределами этого — wb-rules.
+Scenarios are good for "pressed a button → turned on a relay" and "turned on/off by timer". Beyond that — wb-rules.
 
-## Грабли
+## Pitfalls
 
-- **`wb-scenarios.service` не существует** — сервис называется `wb-scenarios-reloader`.
-- **Дублирование `id_prefix`** — два сценария с одинаковым `id_prefix` сгенерят пересекающиеся имена правил, конфликт.
-- **Прямая правка `/etc/wb-rules/wb-scenario-*.js`** — перезаписывается при следующем reload'е. Только через `wb-scenarios.conf`.
-- **Кириллица в `id_prefix`** — schema запрещает (regex `^[0-9a-zA-Z_]+$`). В `name` — можно.
-- **Сценарий не появился в веб-UI** — проверь `journalctl -u wb-scenarios-reloader` на parse errors. Битый конфиг — UI ничего не показывает.
-- **Сценарий и аналогичное wb-rules-правило** — конфликт (оба пишут в один контрол). Не дублируй.
-- **`schedule` без timezone** — использует системный (`timedatectl`). После апгрейда tz сценарии могут «сдвинуться».
+- **`wb-scenarios.service` does not exist** — the service is called `wb-scenarios-reloader`.
+- **Duplicate `id_prefix`** — two scenarios with the same `id_prefix` will generate overlapping rule names, causing a conflict.
+- **Editing `/etc/wb-rules/wb-scenario-*.js` directly** — it is overwritten on the next reload. Only via `wb-scenarios.conf`.
+- **Cyrillic in `id_prefix`** — forbidden by the schema (regex `^[0-9a-zA-Z_]+$`). In `name` it is allowed.
+- **Scenario did not appear in the web UI** — check `journalctl -u wb-scenarios-reloader` for parse errors. A broken config means the UI shows nothing.
+- **A scenario and an analogous wb-rules rule** — conflict (both write to the same control). Do not duplicate.
+- **`schedule` without a timezone** — uses the system one (`timedatectl`). After a tz upgrade, scenarios may "shift".
 
-## Документация
+## Documentation
 
-- WB wiki — сценарии: https://wirenboard.com/wiki/Wb-scenarios
-- Schema: `/usr/share/wb-mqtt-confed/schemas/wb-scenarios.schema.json` на контроллере.
+- WB wiki — scenarios: https://wirenboard.com/wiki/Wb-scenarios
+- Schema: `/usr/share/wb-mqtt-confed/schemas/wb-scenarios.schema.json` on the controller.

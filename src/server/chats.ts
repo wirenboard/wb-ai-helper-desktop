@@ -1,5 +1,6 @@
 import type { ChatTurn, AssistantToolCall } from './llm.ts'
 import type { DbHandle } from './db.ts'
+import type { Lang } from './settings.ts'
 
 export type Chat = {
   id: string
@@ -69,8 +70,27 @@ const SYSTEM_PROMPT = `Ты — десктопный помощник интег
   2. GitHub Wiren Board для исходников и шаблонов через \`web_fetch\`.
   3. \`web_search\` — только в крайнем случае, макс. 3 вызова за диалог. Если первый поиск вернул 0 результатов — НЕ повторяй с другой формулировкой, переключись на \`web_fetch\` напрямую.
 - **Специализированные скиллы** — подгружай через \`load_skill("<name>")\` СТРОГО ДО действий с контроллером. Если задача касается wb-mqtt-serial, wbrules, confed, hardware, zigbee, обновлений — сначала найди и загрузи подходящий скилл, только потом действуй. Не начинай выполнение пока не убедился, что нужный скилл загружен или его нет. После завершения задачи — \`unload_skill("<name>")\`. Каталог доступных скиллов виден в системном промпте каждого хода.
-- **Если нет нужного скилла и нет уверенности в деталях** (путь файла, имя RPC-метода, формат конфига): сначала загрузи подходящий скилл → если скилла нет, сходи в документацию (\`web_fetch\` вики/GitHub) → если документация не дала ответа, **уточни у пользователя**. Не угадывай и не пробуй наугад — одна ошибочная операция может сломать конфиг.
-- Отвечай по-русски, кратко, без лишнего форматирования.`
+- **Если нет нужного скилла и нет уверенности в деталях** (путь файла, имя RPC-метода, формат конфига): сначала загрузи подходящий скилл → если скилла нет, сходи в документацию (\`web_fetch\` вики/GitHub) → если документация не дала ответа, **уточни у пользователя**. Не угадывай и не пробуй наугад — одна ошибочная операция может сломать конфиг.`
+
+// Языковая директива выбирается по uiLanguage, но в любом случае велит
+// модели ЗЕРКАЛИТЬ язык пользователя — даже если он сменит язык посреди чата.
+// Персона-промпт остаётся на русском (это инструкции модели, не текст для
+// пользователя); язык ответов полностью задаёт эта директива.
+const LANG_DIRECTIVE: Record<Lang, string> = {
+  ru: '- **Язык ответа = язык пользователя.** Пишет по-русски — отвечай по-русски, по-английски — по-английски. По умолчанию русский. Кратко, без лишнего форматирования.',
+  en: '- **Reply in the user’s language.** If they write in English, answer in English; if in Russian, answer in Russian. Default to English. Be concise, without unnecessary formatting.',
+}
+
+const CONTEXT_SUFFIX: Record<Lang, { none: string; selected: (sns: string[]) => string }> = {
+  ru: {
+    none: 'Контекст чата: контроллеры не выбраны. Если запрос требует конкретики — попроси выбрать контроллер(ы) или сделай list_controllers.',
+    selected: (sns) => `Контекст чата (выбранные контроллеры): ${sns.join(', ')}. По умолчанию все операции — на этих SN.`,
+  },
+  en: {
+    none: 'Chat context: no controllers selected. If the request needs specifics — ask the user to pick controller(s) or run list_controllers.',
+    selected: (sns) => `Chat context (selected controllers): ${sns.join(', ')}. By default all operations target these SNs.`,
+  },
+}
 
 type ChatRow = {
   id: string
@@ -99,7 +119,10 @@ type TurnRow = {
 }
 
 export class ChatStore {
-  constructor(private db: DbHandle) {}
+  // `getLang` resolves the current UI/assistant language so the system prompt
+  // (and default chat title) follow the user's choice without threading lang
+  // through every call site.
+  constructor(private db: DbHandle, private getLang: () => Lang = () => 'ru') {}
 
   list(): Chat[] {
     const rows = this.db
@@ -143,8 +166,8 @@ export class ChatStore {
         `INSERT INTO chats (id, title, created_at, updated_at, context_sns)
          VALUES (?, ?, ?, ?, ?)`,
       )
-      .run(id, title ?? 'Новый чат', now, now, JSON.stringify(contextSns))
-    this.appendTurn(id, { role: 'system', content: this.systemPromptFor(contextSns) })
+      .run(id, title ?? (this.getLang() === 'en' ? 'New chat' : 'Новый чат'), now, now, JSON.stringify(contextSns))
+    this.appendTurn(id, { role: 'system', content: this.systemPromptFor(contextSns, this.getLang()) })
     return this.get(id)!
   }
 
@@ -168,7 +191,7 @@ export class ChatStore {
     if (sys) {
       this.db
         .query(`UPDATE turns SET content = ? WHERE id = ?`)
-        .run(this.systemPromptFor(sns), sys.id)
+        .run(this.systemPromptFor(sns, this.getLang()), sys.id)
     }
     return this.get(id)
   }
@@ -285,11 +308,11 @@ export class ChatStore {
     return { totalPromptTokens: r?.p ?? 0, totalCompletionTokens: r?.c ?? 0, totalCachedTokens: r?.k ?? 0, totalCost: r?.cost ?? 0 }
   }
 
-  systemPromptFor(sns: string[]): string {
-    if (!sns.length) {
-      return `${SYSTEM_PROMPT}\n\nКонтекст чата: контроллеры не выбраны. Если запрос требует конкретики — попроси выбрать контроллер(ы) или сделай list_controllers.`
-    }
-    return `${SYSTEM_PROMPT}\n\nКонтекст чата (выбранные контроллеры): ${sns.join(', ')}. По умолчанию все операции — на этих SN.`
+  systemPromptFor(sns: string[], lang: Lang = 'ru'): string {
+    const ctx = sns.length
+      ? CONTEXT_SUFFIX[lang].selected(sns)
+      : CONTEXT_SUFFIX[lang].none
+    return `${SYSTEM_PROMPT}\n\n${LANG_DIRECTIVE[lang]}\n\n${ctx}`
   }
 
   private loadTurns(chatId: string): ChatTurn[] {
