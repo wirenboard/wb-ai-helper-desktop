@@ -74,7 +74,7 @@ describe('normalizeAptCommand: -y auto-add', () => {
   })
 
   test('apt install с уже-y в названии пакета не путается', () => {
-    // Например `apt install python3-yaml` — `-y` тут часть имени, не флаг
+    // e.g. `apt install python3-yaml` — `-y` is part of the name, not a flag
     expect(normalizeAptCommand('apt-get install python3-yaml')).toBe(
       'DEBIAN_FRONTEND=noninteractive apt-get install -y python3-yaml',
     )
@@ -89,12 +89,11 @@ describe('normalizeAptCommand: edge cases', () => {
   test('chained apt commands — первое install получает -y', () => {
     // Realistic case: apt-get update && apt-get install pkg
     const out = normalizeAptCommand('apt-get update && apt-get install pkg')
-    // DEBIAN_FRONTEND добавляется один раз в начало (purpose: всё что после
-    // в той же строке его наследует через env). Это чуть имперфектно: только
-    // ПЕРВОЕ apt-get install получит -y, потому что regex non-global. Если
-    // junior напишет `apt-get install a && apt-get install b` — второй останется
-    // без -y. Не страшно для практики (модель пишет одну команду на jobStart),
-    // но фиксируем как поведение.
+    // DEBIAN_FRONTEND is prepended once (everything after it on the same line
+    // inherits it via env). Slightly imperfect: only the FIRST apt-get install
+    // gets -y, because the regex is non-global. So `apt-get install a &&
+    // apt-get install b` leaves the second without -y. Fine in practice (model
+    // writes one command per jobStart), but documented as behavior.
     expect(out).toContain('DEBIAN_FRONTEND=noninteractive')
     expect(out).toContain('apt-get install -y pkg')
   })

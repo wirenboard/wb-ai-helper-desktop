@@ -1,6 +1,6 @@
-// Unit tests на парсеры error-флагов и билдер inventory-снимка для tool'а
-// `mqtt_inventory`. Сам tool-handler дёргает MqttPool.listTopics — без
-// mock'а MQTT-брокера не запустить, парсеры покрывают всю интересную логику.
+// Unit tests for the error-flag parsers and the inventory-snapshot builder of
+// the `mqtt_inventory` tool. The tool handler itself calls MqttPool.listTopics
+// and needs a MQTT-broker mock; the parsers cover all the interesting logic.
 import { describe, test, expect } from 'bun:test'
 import { parseErrorFlags, buildInventory } from '../src/server/mqtt-inventory.ts'
 
@@ -69,8 +69,8 @@ describe('buildInventory', () => {
       ['/devices/dev/controls/B', '0'],
       ['/devices/dev/controls/A/meta/order', '1'],
       ['/devices/dev/controls/A', '0'],
-      ['/devices/dev/controls/Z', '0'], // без order → 999
-      ['/devices/dev/controls/Y', '0'], // без order → 999
+      ['/devices/dev/controls/Z', '0'], // no order -> 999
+      ['/devices/dev/controls/Y', '0'], // no order -> 999
     ]
     const inv = buildInventory(topics)
     const names = inv.devices[0]!.controls.map((c) => c.name)
@@ -87,7 +87,7 @@ describe('buildInventory', () => {
     const inv = buildInventory(topics)
     expect(inv.errors).toHaveLength(1)
     expect(inv.errors[0]).toEqual({ device: 'sensor', control: 'Temp', flags: expect.objectContaining({ read: true }) as any })
-    // Value сохраняется — это last-known-good per WB Conventions, важная семантика для модели.
+    // Value is kept — last-known-good per WB Conventions, important semantics for the model.
     expect(inv.devices[0]!.controls[0]!.value).toBe('23.5')
   })
 

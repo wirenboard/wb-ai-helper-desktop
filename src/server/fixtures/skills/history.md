@@ -1,35 +1,35 @@
 # history
 
-История данных и графики для контроллеров Wiren Board. Подгружай когда пользователь спрашивает про историю, тренды, графики, показатели за период: «покажи температуру за неделю», «пришли график напряжения», «как менялась нагрузка», «средняя температура за сутки», «построй график», «было ли превышение».
+Data history and charts for Wiren Board controllers. Load this when the user asks about history, trends, charts, or metrics over a period: "show me temperature for the week", "send a voltage chart", "how did the load change", "average temperature over 24 hours", "build a chart", "was there an over-limit event".
 
-## Архитектура
+## Architecture
 
-- **wb-mqtt-db** — сервис на контроллере, логирует все MQTT-каналы в SQLite
-- **db_logger** — RPC-сервис для запроса истории: `/rpc/v1/db_logger/history/get_values/{clientId}`
-- **Инструменты:**
-  - `get_history` — данные + статистика (точки и min/max/avg в теле ответа; ограничение 1000 точек/канал для экономии токенов)
-  - `get_history_chart` — PNG-график как вложение
-  - `get_history_table` — CSV-таблица как вложение (до 100 000 точек/канал) для выгрузки в Excel/Google Sheets
+- **wb-mqtt-db** — a service on the controller that logs all MQTT channels to SQLite
+- **db_logger** — an RPC service for querying history: `/rpc/v1/db_logger/history/get_values/{clientId}`
+- **Tools:**
+  - `get_history` — data + statistics (points and min/max/avg in the response body; limited to 1000 points/channel to save tokens)
+  - `get_history_chart` — PNG chart as an attachment
+  - `get_history_table` — CSV table as an attachment (up to 100,000 points/channel) for export into Excel/Google Sheets
 
-## Шаг 1 — найди нужные каналы (ОБЯЗАТЕЛЬНО перед любым запросом истории)
+## Step 1 — find the right channels (MANDATORY before any history query)
 
-**Никогда не угадывай имена каналов.** Примеры в этом скилле — иллюстративные, **не копируй их буквально**: `device_id` зависит от контроллера и собранной аппаратной конфигурации. Сначала получи точные пары `[device_id, control_name]` из MQTT именно этого SN.
+**Never guess channel names.** The examples in this skill are illustrative, **do not copy them literally**: `device_id` depends on the controller and its assembled hardware configuration. First obtain the exact `[device_id, control_name]` pairs from the MQTT of this specific SN.
 
-### Два обязательных вызова — оба, не один
+### Two mandatory calls — both, not just one
 
 ```
-# 1. Список всех устройств — найди подходящий device_id
+# 1. List all devices — find the right device_id
 mqtt_list_topics(sn, prefix="/devices/+/meta/name")
 
-# 2. Список каналов выбранного устройства — подтверди что control_name там есть
+# 2. List the channels of the selected device — confirm the control_name is there
 mqtt_list_topics(sn, prefix="/devices/<device_id>/controls/+")
 ```
 
-**Не зови `get_history_chart` / `get_history` / `get_history_table` без обоих вызовов.** Тулзы делают pre-flight через MQTT и вернут ошибку с подсказкой если `device_id` или `control_name` не найдён — не трать круг на это, сделай валидацию сам и зови с правильными именами.
+**Do not call `get_history_chart` / `get_history` / `get_history_table` without both calls.** The tools do a pre-flight check via MQTT and will return an error with a hint if `device_id` or `control_name` is not found — don't waste a turn on this, validate it yourself and call with the correct names.
 
-Ищи по смыслу в полных именах. Имена каналов часто содержат пробелы — используй их ДОСЛОВНО.
+Search by meaning within the full names. Channel names often contain spaces — use them VERBATIM.
 
-**Пример:** для hwmon топики вернут:
+**Example:** for hwmon the topics will return:
 ```
 /devices/hwmon/controls/CPU Temperature
 /devices/hwmon/controls/Board Temperature
@@ -37,69 +37,69 @@ mqtt_list_topics(sn, prefix="/devices/<device_id>/controls/+")
 ```
 → channels = `[["hwmon", "CPU Temperature"], ["hwmon", "Board Temperature"]]`
 
-**Частая ошибка:** обрезать имя канала. `"CPU"` — это НЕВЕРНО, правильно `"CPU Temperature"`.
+**Common mistake:** truncating the channel name. `"CPU"` is WRONG, the correct value is `"CPU Temperature"`.
 
-### Если не нашёл однозначного совпадения
+### If you didn't find an unambiguous match
 
-Покажи кандидатов пользователю и попроси выбрать:
+Show the candidates to the user and ask them to choose:
 ```
-Нашёл несколько похожих каналов:
+Found several similar channels:
 1. wb-system / CPU Temperature
 2. wb-msw-v4_42 / Temperature 1
 3. wb-msw-v4_42 / Temperature 2
 
-Какой из них вас интересует?
+Which one are you interested in?
 ```
 
-## Шаг 2 — определи временной диапазон
+## Step 2 — determine the time range
 
-**Всегда используй `period` — сервер сам вычислит корректные unix-timestamps.** Не вычисляй `from` вручную.
+**Always use `period` — the server will compute the correct unix timestamps itself.** Don't compute `from` manually.
 
-| Описание пользователя | period |
+| User's description | period |
 |-----------------------|--------|
-| за час | `1h` |
-| за 6 часов | `6h` |
-| за сутки / за день | `24h` |
-| за неделю | `7d` |
-| за месяц | `30d` |
+| for an hour | `1h` |
+| for 6 hours | `6h` |
+| for 24 hours / for a day | `24h` |
+| for a week | `7d` |
+| for a month | `30d` |
 
-## Шаг 3 — запроси данные или график
+## Step 3 — request data or a chart
 
-### Только данные (статистика):
+### Data only (statistics):
 ```
 get_history(sn=SN, channels=[["hwmon", "CPU Temperature"]], period="24h")
 ```
 
-Ответ по каждому каналу: массив точек `{v, t}`, статистика `{min, max, avg}`, а также поля `units` и `precision` (если они опубликованы драйвером в `/meta`). **Всегда смотри `units` перед интерпретацией значений в таблице/сообщении пользователю.** Если `units` нет — не додумывай единицы (особенно «°C»); спроси пользователя или явно напиши «без единиц».
+The response per channel: an array of points `{v, t}`, statistics `{min, max, avg}`, and also the fields `units` and `precision` (if the driver published them in `/meta`). **Always check `units` before interpreting values in a table/message to the user.** If there are no `units` — don't make up the units (especially "°C"); ask the user or explicitly write "no units".
 
-Пример: `Board Temperature` с `units = "°C"` → `43.2 → 72.6 °C`. Если `units` отсутствует и значения вида `307 → 1313` — это **не градусы**, скорее сырое значение hwmon (мили-°C или ADC-код); пометь «единицы не заданы».
+Example: `Board Temperature` with `units = "°C"` → `43.2 → 72.6 °C`. If `units` is missing and the values look like `307 → 1313` — these are **not degrees**, more likely a raw hwmon value (milli-°C or an ADC code); mark them "units not set".
 
-### График PNG (когда пользователь просит «покажи», «пришли», «нарисуй»):
+### PNG chart (when the user asks "show", "send", "draw"):
 ```
 get_history_chart(sn=SN, channels=[["hwmon", "CPU Temperature"]], period="24h",
-  title="CPU Temperature за сутки", ylabel="°C")
+  title="CPU Temperature over 24 hours", ylabel="°C")
 ```
 
-График автоматически появится в чате как вложение — пользователь увидит и скачает.
+The chart will automatically appear in the chat as an attachment — the user will see it and can download it.
 
-### CSV-таблица (когда пользователь просит «выгрузи», «сохрани», «скинь в Excel», «таблицу»):
+### CSV table (when the user asks "export", "save", "drop into Excel", "a table"):
 ```
 get_history_table(sn=SN, channels=[["hwmon", "CPU Temperature"], ["hwmon", "Board Temperature"]], period="7d")
 ```
 
-Вернёт CSV-вложение с колонками `timestamp_unix, timestamp_iso, <device/control> (<units>), ...`. По умолчанию — до 10 000 точек на канал без прореживания; для больших дампов можно поднять `limit` до 100 000 и задать `min_interval`. Модель получит только метаданные (кол-во точек, размер файла) — сами значения в контекст не попадают.
+Returns a CSV attachment with columns `timestamp_unix, timestamp_iso, <device/control> (<units>), ...`. By default — up to 10,000 points per channel without downsampling; for large dumps you can raise `limit` up to 100,000 and set `min_interval`. The model receives only metadata (number of points, file size) — the values themselves don't enter the context.
 
-## Прореживание (автоматически)
+## Downsampling (automatic)
 
-| Диапазон | min_interval | limit |
+| Range | min_interval | limit |
 |----------|-------------|-------|
-| ≤ 1 час | 0 (все точки) | 200 |
-| ≤ 24 часа | 60 с | 500 |
-| > 24 часа | 600 с | 1000 |
+| ≤ 1 hour | 0 (all points) | 200 |
+| ≤ 24 hours | 60 s | 500 |
+| > 24 hours | 600 s | 1000 |
 
-## Несколько каналов на одном графике
+## Multiple channels on one chart
 
-Можно запросить несколько каналов сразу — попадут на один график:
+You can request several channels at once — they'll land on a single chart:
 ```
 get_history_chart(sn=SN,
   channels=[
@@ -107,17 +107,17 @@ get_history_chart(sn=SN,
     ["wb-msw-v4_42", "Temperature 1"]
   ],
   period="7d",
-  title="Температуры за неделю", ylabel="°C")
+  title="Temperatures over the week", ylabel="°C")
 ```
 
-## Если wb-mqtt-db не установлен
+## If wb-mqtt-db is not installed
 
-Проверь: `ssh_exec(sn, "systemctl is-active wb-mqtt-db")`. Если inactive/not-found — история недоступна, предложи установить: `apt install wb-mqtt-db`.
+Check: `ssh_exec(sn, "systemctl is-active wb-mqtt-db")`. If inactive/not-found — history is unavailable, suggest installing it: `apt install wb-mqtt-db`.
 
-## Грабли
+## Pitfalls
 
-- **Нет данных за период** — канал мог не логироваться (wb-mqtt-db недавно установлен или канал не активен).
-- **Слишком много точек** — используй большой `min_interval`. Инструмент выбирает автоматически, но если запрашиваешь вручную через mqtt_rpc — ограничь.
-- **device_id и control_name** — бери ТОЧНО из MQTT-топиков (`/devices/<device>/controls/<control>`), не угадывай. Имена часто содержат пробелы: `"CPU Temperature"`, `"Board Temperature"`, `"Supply Voltage"` — обрезать нельзя.
-- **Пустой график (ось 0–1)** — значит каналы не найдены в db_logger. Проверь channel names через mqtt_list_topics и убедись что используешь полное имя канала.
-- **Разные единицы** — не мешай на одном графике °C и В. Используй `ylabel` по основной единице или делай отдельные графики.
+- **No data for the period** — the channel may not have been logged (wb-mqtt-db was recently installed or the channel is not active).
+- **Too many points** — use a large `min_interval`. The tool selects it automatically, but if you request manually via mqtt_rpc — set a limit.
+- **device_id and control_name** — take them EXACTLY from the MQTT topics (`/devices/<device>/controls/<control>`), don't guess. Names often contain spaces: `"CPU Temperature"`, `"Board Temperature"`, `"Supply Voltage"` — they can't be truncated.
+- **Empty chart (axis 0–1)** — means the channels were not found in db_logger. Check the channel names via mqtt_list_topics and make sure you use the full channel name.
+- **Different units** — don't mix °C and V on one chart. Use `ylabel` for the primary unit or make separate charts.

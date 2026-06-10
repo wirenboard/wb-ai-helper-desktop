@@ -1,14 +1,14 @@
-// Чистые парсеры для diagnostic-tool'ов. Вынесены сюда, чтобы покрыть
-// unit-тестами без mock'а ssh — handler'ы в tools.ts вытаскивают только
-// сырой stdout из ssh.exec и прогоняют его через эти функции.
+// Pure parsers for diagnostic tools. Extracted here to unit-test without
+// mocking ssh — handlers in tools.ts just pull raw stdout from ssh.exec and
+// feed it through these functions.
 
-/** Разбить вывод на секции, помеченные `===LABEL===` маркерами на отдельных
- *  строках. Возвращает trim'нутое содержимое запрошенной секции (без
- *  завершающего перевода строки). Если маркер не найден — пустая строка.
+/** Split output into sections marked by `===LABEL===` markers on their own
+ *  lines. Returns the trimmed content of the requested section (no trailing
+ *  newline). Empty string if the marker isn't found.
  *
- *  Парные `===` маркеры используются handler'ами `network_status`,
- *  `cloud_status`, `systemd_unit`-status — один shell-вызов выводит N
- *  секций друг за другом, потом TS-сторона нарезает по ярлыкам. */
+ *  `===` marker pairs are used by `network_status`, `cloud_status`,
+ *  `systemd_unit`-status handlers — one shell call emits N sections back to
+ *  back, then the TS side slices by label. */
 export function readMarkedSection(stdout: string, label: string): string {
   const marker = `===${label}===`
   const start = stdout.indexOf(marker)
@@ -18,18 +18,17 @@ export function readMarkedSection(stdout: string, label: string): string {
   return stdout.slice(after, next < 0 ? undefined : next).trim()
 }
 
-/** Пинг от `ping -c1 -W2 <host> 2>&1 | tail -2` — в выводе есть строка вида
- *  `1 packets transmitted, 0 received, 100% packet loss, time 0ms`. Возвращает
- *  процент потерь (0..100), либо null если строки нет. */
+/** Ping from `ping -c1 -W2 <host> 2>&1 | tail -2` — output has a line like
+ *  `1 packets transmitted, 0 received, 100% packet loss, time 0ms`. Returns
+ *  loss percent (0..100), or null if the line is absent. */
 export function parsePingLossPct(raw: string): number | null {
   const m = raw.match(/(\d+)% packet loss/)
   return m ? Number(m[1]) : null
 }
 
-/** Нормализовать одну запись из `ip -j addr show` в компактный объект
- *  {name, state, mtu, ipv4[]}. Принимает `any` потому что схема `ip -j`
- *  не зафиксирована — выкручиваемся out-of-the-box, защищаемся от полей
- *  которые могут отсутствовать. */
+/** Normalize one entry from `ip -j addr show` into a compact object
+ *  {name, state, mtu, ipv4[]}. Takes `any` because the `ip -j` schema isn't
+ *  fixed — we guard against fields that may be missing. */
 export function normalizeInterface(raw: unknown): {
   name: string
   state: string
@@ -53,9 +52,9 @@ export function normalizeInterface(raw: unknown): {
   }
 }
 
-/** Дефолт-маршрут от `ip -j route show default` — массив записей с полями
- *  {gateway, dev}. Берём первый (на практике контроллеры с несколькими
- *  default-маршрутами редкость; nm/wb-connection-manager обычно держит один). */
+/** Default route from `ip -j route show default` — array of {gateway, dev}
+ *  entries. Takes the first (in practice controllers with multiple default
+ *  routes are rare; nm/wb-connection-manager usually keeps one). */
 export function pickDefaultRoute(routes: unknown): { gateway: string; dev: string } | null {
   if (!Array.isArray(routes) || routes.length === 0) return null
   const r = (routes[0] ?? {}) as Record<string, unknown>
@@ -63,10 +62,10 @@ export function pickDefaultRoute(routes: unknown): { gateway: string; dev: strin
   return { gateway: r['gateway'] as string, dev: r['dev'] as string }
 }
 
-/** Распарсить вывод `nmcli -t -f F1,F2,... <subcommand>` — колонки разделены
- *  `:`, строки `\n`. fields — имена колонок в том же порядке, в каком они
- *  переданы в `-f`. Возвращает массив объектов с этими именами. Пустые
- *  строки игнорируются. */
+/** Parse `nmcli -t -f F1,F2,... <subcommand>` output — columns split by `:`,
+ *  rows by `\n`. `fields` are the column names in the same order as passed to
+ *  `-f`. Returns an array of objects keyed by those names. Empty lines are
+ *  ignored. */
 export function parseNmcliColons<F extends string>(
   out: string,
   fields: readonly F[],
@@ -84,14 +83,14 @@ export function parseNmcliColons<F extends string>(
     })
 }
 
-// Распарсить вывод `mosquitto_sub -F '%t\t%p'` отфильтрованный по
-// `/devices/system__wb-cloud-agent__<id>/controls/<name>` в структуру
-// `{provider: {control: payload}}`. Игнорирует `meta` топики (значения
-// контролов хранятся отдельно от их meta).
+// Parse `mosquitto_sub -F '%t\t%p'` output filtered to
+// `/devices/system__wb-cloud-agent__<id>/controls/<name>` into a
+// `{provider: {control: payload}}` structure. Ignores `meta` topics (control
+// values are stored separately from their meta).
 //
-// Используется handler'ом `cloud_status` — wb-cloud-agent публикует под
-// каждый bound provider (system__wb-cloud-agent__<provider_id>) набор
-// контролов: status, activation_link, cloud_base_url.
+// Used by the `cloud_status` handler — wb-cloud-agent publishes a set of
+// controls per bound provider (system__wb-cloud-agent__<provider_id>):
+// status, activation_link, cloud_base_url.
 export function parseCloudMqttControls(
   raw: string,
 ): Record<string, Record<string, string>> {

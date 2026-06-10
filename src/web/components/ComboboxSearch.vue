@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
+import { t } from '../i18n'
 
 const props = defineProps<{
   modelValue: string
@@ -111,7 +112,7 @@ onBeforeUnmount(() => window.removeEventListener('mousedown', onDocClick))
         <span v-if="badges?.[o]" class="cb-badge">{{ badges[o] }}</span>
       </li>
     </ul>
-    <div v-else-if="open" class="cb-empty">ничего не найдено</div>
+    <div v-else-if="open" class="cb-empty">{{ t('combobox.empty') }}</div>
   </div>
 </template>
 

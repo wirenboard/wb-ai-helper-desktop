@@ -1,6 +1,6 @@
-// Unit-тесты на парсеры/форматтеры шаблонов wb-mqtt-serial. Сами tool-handler'ы
-// ходят через mqttRpc + readFile — без mock'а MQTT не запустить, парсеры
-// покрывают всю интересную логику.
+// Unit tests for wb-mqtt-serial template parsers/formatters. The tool handlers
+// go through mqttRpc + readFile and need a MQTT mock; the parsers cover all the
+// interesting logic.
 import { describe, test, expect } from 'bun:test'
 import {
   parseTemplatesList,
@@ -194,7 +194,7 @@ describe('renderTemplate', () => {
     expect(Array.isArray(out['channels'])).toBe(true)
     const chs = out['channels'] as any[]
     expect(chs[0]).toEqual({ name: 'K1', reg_type: 'coil', address: 0, format: 'u8', type: 'switch' })
-    // disabled flag сохраняется в summary
+    // disabled flag is preserved in summary
     expect(chs[2]).toMatchObject({ name: 'Uptime', enabled: false })
   })
 
@@ -208,7 +208,7 @@ describe('renderTemplate', () => {
     const dev = (out as any).device
     expect(dev.channels.map((c: any) => c.name)).toEqual(['K1', 'K2'])
     expect(dev.parameters).toEqual(tmpl.device.parameters)
-    // Не мутируем исходник
+    // Don't mutate the source
     expect(tmpl.device.channels).toHaveLength(3)
   })
 

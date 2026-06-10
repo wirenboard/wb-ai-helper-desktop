@@ -1,3 +1,5 @@
+import { fmtSize as i18nFmtSize, lang } from './i18n'
+
 type Cost = { value: number; currency: 'USD' | 'RUB' }
 
 export function fmtCost(cost: Cost | number): string {
@@ -33,18 +35,10 @@ export function fmtTime(ts: number | undefined): string {
   if (sameDay(d, now)) return `${hh}:${mm}`
   const dd = String(d.getDate()).padStart(2, '0')
   const mo = String(d.getMonth() + 1).padStart(2, '0')
-  return `${dd}.${mo} ${hh}:${mm}`
+  // EN expects month-first; RU day-first.
+  const date = lang.value === 'en' ? `${mo}/${dd}` : `${dd}.${mo}`
+  return `${date} ${hh}:${mm}`
 }
 
-export function fmtSize(n: number): string {
-  if (n < 1024) return `${n} Б`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} КБ`
-  return `${(n / 1024 / 1024).toFixed(1)} МБ`
-}
-
-export function plural(n: number, forms: [string, string, string]): string {
-  const n10 = n % 10, n100 = n % 100
-  if (n10 === 1 && n100 !== 11) return forms[0]
-  if (n10 >= 2 && n10 <= 4 && (n100 < 10 || n100 >= 20)) return forms[1]
-  return forms[2]
-}
+// Locale-aware byte-size formatter; delegates to the i18n module so units switch with the UI language.
+export const fmtSize = i18nFmtSize

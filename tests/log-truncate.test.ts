@@ -27,7 +27,7 @@ describe('truncateLog', () => {
   test('over threshold triggers truncation', () => {
     const over = makeLines(500)
     const result = truncateLog(over)
-    expect(result).toContain('пропущено')
+    expect(result).toContain('skipped')
     expect(result.length).toBeLessThan(over.length)
   })
 
@@ -47,9 +47,9 @@ describe('truncateLog', () => {
 
   test('no errors in middle produces single gap marker', () => {
     const result = truncateLog(makeLines(500))
-    const gaps = result.match(/пропущено/g)
+    const gaps = result.match(/skipped/g)
     expect(gaps).toHaveLength(1)
-    expect(result).toContain('без ошибок')
+    expect(result).toContain('without errors')
   })
 
   test('error in middle is preserved with context', () => {
@@ -81,7 +81,7 @@ describe('truncateLog', () => {
     lines[100] = 'error at 100'
     lines[500] = 'error at 500'
     const result = truncateLog(lines.join('\n'))
-    const gaps = result.match(/пропущено/g)
+    const gaps = result.match(/skipped/g)
     // head → gap → error-100-block → gap → error-500-block → gap → tail (up to 3 gaps)
     expect(gaps!.length).toBeGreaterThanOrEqual(2)
   })

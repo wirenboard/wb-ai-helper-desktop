@@ -1,20 +1,20 @@
 # wb-services
 
-systemd-сервисы и таймеры на контроллере Wiren Board: управление существующими unit'ами, override-конфиги для пакетных, создание своих сервисов и таймеров. Подгружай на: «сделай сервис из скрипта», «таймер на бэкап», «override на ExecStart», «после apt upgrade override пропал», «таймер не срабатывает», «как запустить X на загрузке», «mask/unmask юнит».
+systemd services and timers on a Wiren Board controller: managing existing units, override configs for packaged ones, creating your own services and timers. Load on: "make a service from a script", "timer for a backup", "override on ExecStart", "the override disappeared after apt upgrade", "the timer does not fire", "how to run X on boot", "mask/unmask a unit".
 
-**Граница:** упавшие сервисы / диагностика — `troubleshooting-general`. Обновление пакетов — `controller-update`.
+**Boundary:** failed services / diagnostics — `troubleshooting-general`. Package updates — `controller-update`.
 
-## Базовые команды
+## Basic commands
 
-Используй tool `systemd_unit` (`action: status/start/stop/restart/reload/enable/disable/mask/unmask/cat/list-deps`) — он одним вызовом возвращает структурированный объект `{active, sub, load, unitFileState, exitCode, mainPid, since, statusTail}`. Для read-only-проверок (status/cat/list-deps) подтверждение не нужно. Для start/stop/restart/enable/disable/mask/unmask — HITL.
+Use the `systemd_unit` tool (`action: status/start/stop/restart/reload/enable/disable/mask/unmask/cat/list-deps`) — in a single call it returns a structured object `{active, sub, load, unitFileState, exitCode, mainPid, since, statusTail}`. For read-only checks (status/cat/list-deps), no confirmation is needed. For start/stop/restart/enable/disable/mask/unmask — HITL.
 
-Если нужен журнал — `wb_logs` или `ssh_exec("journalctl -u <unit> -n 50 --no-pager")`. Полный список упавших — `failed_units`.
+If you need the journal — `wb_logs` or `ssh_exec("journalctl -u <unit> -n 50 --no-pager")`. The full list of failed units — `failed_units`.
 
-`systemctl status <unit>` для упавшего юнита возвращает exit 3 — это **код состояния, не ошибка ssh**.
+`systemctl status <unit>` for a failed unit returns exit 3 — this is a **status code, not an ssh error**.
 
-## Override-конфиг (drop-in) — правильный способ менять пакетный юнит
+## Override config (drop-in) — the correct way to change a packaged unit
 
-Никогда не редактируй `/lib/systemd/system/<unit>.service` напрямую — apt перезапишет на upgrade. Используй drop-in:
+Never edit `/lib/systemd/system/<unit>.service` directly — apt will overwrite it on upgrade. Use a drop-in:
 
 ```bash
 ssh root@<HOST> 'mkdir -p /etc/systemd/system/<unit>.service.d'
@@ -26,7 +26,7 @@ EOF
 ssh root@<HOST> 'systemctl daemon-reload && systemctl restart <unit>'
 ```
 
-**Чтобы стереть директиву из основного файла, переобъяви её пустой:**
+**To erase a directive from the main file, redeclare it empty:**
 
 ```ini
 [Service]
@@ -34,11 +34,11 @@ ExecStart=
 ExecStart=/usr/local/bin/my-wrapped-service
 ```
 
-Без сброса первой пустой строкой systemd добавит вторую к первой, а не заменит. После — `daemon-reload`, `restart`, проверь `systemctl cat <unit>` (виден ли drop-in) и `systemctl show <unit> -p ExecStart`.
+Without the first empty-line reset, systemd will append the second to the first instead of replacing it. After that — `daemon-reload`, `restart`, and check `systemctl cat <unit>` (is the drop-in visible) and `systemctl show <unit> -p ExecStart`.
 
-### Пример: fix `fstrim.service` со `status=64/USAGE`
+### Example: fix `fstrim.service` with `status=64/USAGE`
 
-Типичный кейс — `/etc/fstab` ссылается на `/mnt/sdcard` без вставленной SD-карты, fstrim падает.
+A typical case — `/etc/fstab` references `/mnt/sdcard` without an inserted SD card, and fstrim fails.
 
 ```bash
 ssh root@<HOST> 'mkdir -p /etc/systemd/system/fstrim.service.d'
@@ -50,12 +50,12 @@ EOF
 ssh root@<HOST> 'systemctl daemon-reload && systemctl reset-failed fstrim.service'
 ```
 
-`--quiet-unsupported` пропускает физически отсутствующие точки монтирования.
+`--quiet-unsupported` skips physically absent mount points.
 
-## Свой сервис из скрипта
+## Your own service from a script
 
-1. **Скрипт** в `/usr/local/bin/<name>.sh`, owner root, `chmod 0755`.
-2. **Юнит** в `/etc/systemd/system/<name>.service`:
+1. **Script** in `/usr/local/bin/<name>.sh`, owner root, `chmod 0755`.
+2. **Unit** in `/etc/systemd/system/<name>.service`:
 
 ```ini
 [Unit]
@@ -70,13 +70,13 @@ StandardOutput=journal
 StandardError=journal
 ```
 
-`Type=oneshot` — для одноразовых задач (типичный кейс — под таймером). Для долгоживущих сервисов — `Type=simple` (default) или `Type=notify` (если бинарь умеет sd_notify).
+`Type=oneshot` — for one-shot tasks (typical case — under a timer). For long-lived services — `Type=simple` (default) or `Type=notify` (if the binary can do sd_notify).
 
-3. После создания — `systemctl daemon-reload`, потом проверь `systemctl start my-task && systemctl status my-task`.
+3. After creating it — `systemctl daemon-reload`, then check `systemctl start my-task && systemctl status my-task`.
 
-## Таймер
+## Timer
 
-Таймер — отдельный юнит `<name>.timer`, который запускает одноимённый `<name>.service`:
+A timer is a separate unit `<name>.timer` that launches the same-named `<name>.service`:
 
 ```ini
 [Unit]
@@ -91,53 +91,53 @@ RandomizedDelaySec=2min
 WantedBy=timers.target
 ```
 
-После — `systemctl daemon-reload && systemctl enable --now my-task.timer`.
+After that — `systemctl daemon-reload && systemctl enable --now my-task.timer`.
 
-- **`OnCalendar=hourly`** — раз в час. Полный синтаксис: `OnCalendar=*-*-* 03:00:00` (ежедневно 03:00), `Mon..Fri 08:00`, `*-*-1 12:00` (1-е число в 12:00). Проверка выражения: `systemd-analyze calendar 'Mon..Fri 08:00'`.
-- **`Persistent=true`** — если контроллер был выключен в момент срабатывания, таймер сработает сразу при загрузке.
-- **`RandomizedDelaySec`** — рандомизирует старт (полезно когда несколько контроллеров стучатся в один сервер).
+- **`OnCalendar=hourly`** — once per hour. Full syntax: `OnCalendar=*-*-* 03:00:00` (daily at 03:00), `Mon..Fri 08:00`, `*-*-1 12:00` (the 1st day of the month at 12:00). Test an expression: `systemd-analyze calendar 'Mon..Fri 08:00'`.
+- **`Persistent=true`** — if the controller was off at the moment of firing, the timer fires right at boot.
+- **`RandomizedDelaySec`** — randomizes the start (useful when several controllers hit a single server).
 
-Альтернативы: `OnBootSec=2min` (через X после загрузки) / `OnUnitActiveSec=10min` (каждые X после предыдущего).
+Alternatives: `OnBootSec=2min` (X after boot) / `OnUnitActiveSec=10min` (every X after the previous run).
 
-Список таймеров и следующее срабатывание — `systemctl list-timers --no-pager`.
+The list of timers and their next firing — `systemctl list-timers --no-pager`.
 
 ## wb-rules cron vs systemd timer
 
-| Кейс | Что выбрать |
+| Case | What to choose |
 |---|---|
-| Условие зависит от MQTT-state, dev[], таймеров и других правил | wb-rules `cron(...)` или `setInterval` (см. `wb-rules`) |
-| Простая shell-команда по расписанию | systemd timer (этот скилл) |
-| Бэкап, синхронизация, мониторинг — задача не привязана к шине | systemd timer |
-| Нужно запустить задачу при загрузке + потом ежедневно | systemd timer (`OnBootSec=` + `OnCalendar=`) |
-| Реакция на изменение control'а / событие шины | wb-rules `whenChanged` (cron не нужен) |
+| The condition depends on MQTT state, dev[], timers, and other rules | wb-rules `cron(...)` or `setInterval` (see `wb-rules`) |
+| A simple shell command on a schedule | systemd timer (this skill) |
+| Backup, sync, monitoring — a task not tied to the bus | systemd timer |
+| Need to run a task at boot + then daily | systemd timer (`OnBootSec=` + `OnCalendar=`) |
+| Reaction to a control change / bus event | wb-rules `whenChanged` (no cron needed) |
 
 ## Enable / disable / mask
 
-- `enable` — добавить в автозапуск; `--now` дополнительно стартует сразу.
-- `disable` — убрать из автозапуска (юнит остаётся, можно стартовать вручную).
-- `mask` — запретить запуск (даже по зависимостям) — symlink в `/dev/null`. Сильнее `disable`. Используй для отключения пакетного сервиса который другие сервисы могли бы стартовать (например `bluetooth.service` на headless-контроллерах).
-- `unmask` — отменить mask.
-- `reset-failed <unit>` — очистить failed-статус без рестарта.
+- `enable` — add to autostart; `--now` additionally starts it immediately.
+- `disable` — remove from autostart (the unit remains, can be started manually).
+- `mask` — forbid starting (even via dependencies) — a symlink to `/dev/null`. Stronger than `disable`. Use it to disable a packaged service that other services might start (e.g. `bluetooth.service` on headless controllers).
+- `unmask` — undo the mask.
+- `reset-failed <unit>` — clear the failed status without a restart.
 
-## После apt upgrade
+## After apt upgrade
 
-Override и custom-юниты в `/etc/systemd/system/` **переживают** apt upgrade — пакет может изменить `/lib/systemd/system/<unit>.service`, но drop-in остаётся в действии. Если после upgrade пакетный юнит не подхватил override — `systemctl daemon-reload && systemctl restart <unit>`.
+Override and custom units in `/etc/systemd/system/` **survive** apt upgrade — a package may change `/lib/systemd/system/<unit>.service`, but the drop-in stays in effect. If after the upgrade the packaged unit did not pick up the override — `systemctl daemon-reload && systemctl restart <unit>`.
 
-**Custom-юниты в `/etc/systemd/system/` НЕ переживают FIT-прошивку** (она перезаписывает rootfs). Для бэкапа — `controller-backup`, секция «Custom systemd units».
+**Custom units in `/etc/systemd/system/` do NOT survive a FIT firmware flash** (it overwrites the rootfs). For a backup — `controller-backup`, section "Custom systemd units".
 
-## Грабли
+## Pitfalls
 
-- **Прямая правка `/lib/systemd/system/<unit>.service`** — apt переписывает. Только drop-ins.
-- **`ExecStart=` в drop-in без сброса** — добавляет вторую команду к первой. Сначала пустой `ExecStart=`, потом новый.
-- **Забыли `daemon-reload`** — systemd не видит изменений. После любой правки .service/.timer.
-- **`enable` без `--now`** — юнит включён, но не стартанул в этой сессии. `enable --now` или отдельный `start`.
-- **`OnCalendar` некорректный** — проверь через `systemd-analyze calendar '<expr>'` ДО деплоя.
-- **`Type=oneshot` без `RemainAfterExit=yes`** — после успешного выполнения юнит «inactive (dead)», не active. Для таймера это норма; если ждёшь active — добавь `RemainAfterExit=yes`.
-- **Custom-юнит без секции `[Install]`** — `enable` упадёт с «No installation information found».
-- **`mask` без последующего `unmask`** — забытый mask ломает сервисы на следующем апгрейде.
+- **Editing `/lib/systemd/system/<unit>.service` directly** — apt overwrites it. Only drop-ins.
+- **`ExecStart=` in a drop-in without a reset** — appends a second command to the first. First an empty `ExecStart=`, then the new one.
+- **Forgot `daemon-reload`** — systemd does not see the changes. After any edit to a .service/.timer.
+- **`enable` without `--now`** — the unit is enabled but did not start in this session. `enable --now` or a separate `start`.
+- **Incorrect `OnCalendar`** — check via `systemd-analyze calendar '<expr>'` BEFORE deploying.
+- **`Type=oneshot` without `RemainAfterExit=yes`** — after a successful run the unit is "inactive (dead)", not active. For a timer this is normal; if you expect active — add `RemainAfterExit=yes`.
+- **A custom unit without an `[Install]` section** — `enable` will fail with "No installation information found".
+- **`mask` without a subsequent `unmask`** — a forgotten mask breaks services on the next upgrade.
 
-## Документация
+## Documentation
 
 - systemd unit: https://www.freedesktop.org/software/systemd/man/systemd.unit.html
 - systemd timer: https://www.freedesktop.org/software/systemd/man/systemd.timer.html
-- OnCalendar формат: https://www.freedesktop.org/software/systemd/man/systemd.time.html
+- OnCalendar format: https://www.freedesktop.org/software/systemd/man/systemd.time.html

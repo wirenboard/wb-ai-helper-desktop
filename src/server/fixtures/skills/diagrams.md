@@ -1,83 +1,83 @@
-# Диаграммы и визуализация
+# Diagrams and visualization
 
-Подгружай на ЛЮБУЮ просьбу нарисовать диаграмму, схему, граф связей, архитектуру, flow или mermaid: «нарисуй диаграмму», «построй схему», «покажи зависимости», «mermaid», «flowchart», «диаграмма зависимостей zigbee2mqtt», «схема связей», «архитектура», «sequence», «state machine», «визуализируй». Веб-чат поддерживает рендеринг Mermaid-диаграмм — используй их чтобы показать **как работает** автоматизация / связи / архитектура до написания кода.
+Load this for ANY request to draw a diagram, schematic, relationship graph, architecture, flow, or mermaid: "draw a diagram", "build a schematic", "show dependencies", "mermaid", "flowchart", "zigbee2mqtt dependency diagram", "relationship diagram", "architecture", "sequence", "state machine", "visualize". The web chat supports rendering Mermaid diagrams — use them to show **how** an automation / relationships / architecture work before writing code.
 
-## Когда использовать диаграмму
+## When to use a diagram
 
-- **Перед написанием правила** — покажи логику до кода: что проверяется, что происходит
-- **При конфликте правил** — покажи, в каком состоянии какое правило «победит»
-- **Для объяснения состояний** — если устройство проходит несколько состояний
-- **Для цепочек событий** — если одно правило публикует в MQTT, другое на это реагирует
+- **Before writing a rule** — show the logic before the code: what is checked, what happens
+- **On a rule conflict** — show which rule "wins" in which state
+- **To explain states** — if a device goes through several states
+- **For event chains** — if one rule publishes to MQTT and another reacts to it
 
-## Выбор типа
+## Choosing a type
 
-| Ситуация | Тип |
+| Situation | Type |
 |---|---|
-| Переходы между состояниями, флаги, режимы | `stateDiagram-v2` |
-| Логика «если X то Y» с ветками | `flowchart TD` |
-| Взаимодействие нескольких правил/устройств | `sequenceDiagram` |
-| Простая таблица состояний | Markdown-таблица |
+| Transitions between states, flags, modes | `stateDiagram-v2` |
+| "If X then Y" logic with branches | `flowchart TD` |
+| Interaction of several rules/devices | `sequenceDiagram` |
+| Simple state table | Markdown table |
 
-**Правило выбора:** если понятнее объяснить таблицей — используй таблицу, если нужно показать «поток» или переходы — диаграмму. Не используй диаграмму ради диаграммы.
+**Selection rule:** if it's clearer to explain with a table — use a table; if you need to show a "flow" or transitions — use a diagram. Don't use a diagram for the sake of a diagram.
 
-## Примеры
+## Examples
 
-### Логика нового правила (flowchart)
+### Logic of a new rule (flowchart)
 
 ```mermaid
 flowchart TD
-    A[IN1 изменился] --> B{Датчик протечки\nactive?}
-    B -- да --> C[Кран закрыт, уведомление]
-    B -- нет --> D{Кнопка включена?}
-    D -- да --> E[Открыть кран]
-    D -- нет --> F[Закрыть кран]
+    A[IN1 changed] --> B{Leak sensor\nactive?}
+    B -- yes --> C[Valve closed, notification]
+    B -- no --> D{Button enabled?}
+    D -- yes --> E[Open valve]
+    D -- no --> F[Close valve]
 ```
 
-### Переходы состояний устройства (stateDiagram)
+### Device state transitions (stateDiagram)
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Ожидание
-    Ожидание --> Активен : кнопка нажата
-    Активен --> Ожидание : таймер истёк
-    Активен --> Заблокирован : протечка
-    Заблокирован --> Ожидание : сброс вручную
+    [*] --> Idle
+    Idle --> Active : button pressed
+    Active --> Idle : timer expired
+    Active --> Locked : leak
+    Locked --> Idle : manual reset
 ```
 
-### Взаимодействие правил (sequenceDiagram)
+### Rule interaction (sequenceDiagram)
 
 ```mermaid
 sequenceDiagram
-    participant Кнопка
+    participant Button
     participant wb-la-light
     participant wb-la-timer
-    participant Реле
+    participant Relay
 
-    Кнопка->>wb-la-light: IN1 изменился
-    wb-la-light->>Реле: включить
+    Button->>wb-la-light: IN1 changed
+    wb-la-light->>Relay: turn on
     wb-la-light->>wb-la-timer: startTimer("off", 300)
-    wb-la-timer-->>Реле: выключить (через 5 мин)
+    wb-la-timer-->>Relay: turn off (after 5 min)
 ```
 
-### Таблица конфликтов (Markdown)
+### Conflict table (Markdown)
 
 ```
-Вход A        | Датчик B    | Правило 1 хочет | Правило 2 хочет | Результат
+Input A       | Sensor B    | Rule 1 wants    | Rule 2 wants    | Result
 ──────────────────────────────────────────────────────────────────────────────
-OFF → ON      | inactive    | реле вкл        | —               | реле вкл ✓
-OFF → ON      | active      | реле вкл        | реле выкл       | КОНФЛИКТ ✗
-ON → OFF      | active      | реле выкл       | реле выкл       | реле выкл ✓
+OFF → ON      | inactive    | relay on        | —               | relay on ✓
+OFF → ON      | active      | relay on        | relay off       | CONFLICT ✗
+ON → OFF      | active      | relay off       | relay off       | relay off ✓
 ```
 
-## Ограничения
+## Limitations
 
-- Кириллица в узлах поддерживается.
-- Кавычки внутри меток: используй `"` или `'`, не смешивай.
-- Сложные диаграммы (много узлов) могут быть нечитаемы — упрощай.
+- Cyrillic in nodes is supported.
+- Quotes inside labels: use `"` or `'`, don't mix them.
+- Complex diagrams (many nodes) can be unreadable — simplify them.
 
-## Формат ответа при проектировании правила
+## Response format when designing a rule
 
-1. **Таблица каналов** — что читает, что пишет, тип (switch/value/etc)
-2. **Диаграмма или таблица состояний** — логика нового правила
-3. **Таблица конфликтов** — только если есть существующие правила на тех же каналах
-4. Вопрос «такое поведение?» — дождись подтверждения, потом пиши код
+1. **Channel table** — what it reads, what it writes, type (switch/value/etc)
+2. **Diagram or state table** — the logic of the new rule
+3. **Conflict table** — only if there are existing rules on the same channels
+4. The question "is this the behavior you want?" — wait for confirmation, then write the code

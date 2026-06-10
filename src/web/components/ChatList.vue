@@ -2,6 +2,7 @@
 import { nextTick, ref } from 'vue'
 import { calcCost, type Cost, type Chat, type Settings, type TokenStats } from '../api'
 import { fmtCost, fmtTok } from '../utils'
+import { t } from '../i18n'
 
 const props = defineProps<{
   chats: Chat[]
@@ -61,27 +62,27 @@ function onRenameKey(e: KeyboardEvent, id: string) {
   <aside class="sidebar" :class="{ collapsed: !open }">
     <div class="sidebar-header">
       <template v-if="open">
-        <span class="title">Чаты</span>
-        <button class="icon-btn" @click="emit('new')" title="Новый чат" aria-label="Новый чат">+</button>
+        <span class="title">{{ t('chat.list') }}</span>
+        <button class="icon-btn" @click="emit('new')" :title="t('chat.new')" :aria-label="t('chat.new')">+</button>
         <button
           v-if="chats.length > 1 && !pendingDeleteAll"
           class="icon-btn danger"
           @click="emit('deleteAll')"
-          title="Удалить все чаты"
-          aria-label="Удалить все чаты"
+          :title="t('chat.deleteAll')"
+          :aria-label="t('chat.deleteAll')"
         >🗑</button>
       </template>
-      <button class="ghost collapse-btn" :title="open ? 'Свернуть' : 'Развернуть'" @click="emit('toggle')">
+      <button class="ghost collapse-btn" :title="open ? t('common.collapse') : t('common.expand')" @click="emit('toggle')">
         {{ open ? '‹' : '›' }}
       </button>
     </div>
     <template v-if="open">
       <div v-if="pendingDeleteAll" class="banner-undo">
-        <span>⏳ Все чаты будут удалены через {{ pendingDeleteAll.remaining }} с</span>
-        <button class="ghost small" @click="emit('undoDeleteAll')">отмена</button>
+        <span>{{ t('chat.deleteAllPending', { remaining: pendingDeleteAll.remaining }) }}</span>
+        <button class="ghost small" @click="emit('undoDeleteAll')">{{ t('chat.undo') }}</button>
       </div>
       <div class="sidebar-body">
-        <div v-if="!chats.length" class="empty">Чатов пока нет</div>
+        <div v-if="!chats.length" class="empty">{{ t('chat.empty') }}</div>
         <div
           v-for="c in chats"
           :key="c.id"
@@ -99,7 +100,7 @@ function onRenameKey(e: KeyboardEvent, id: string) {
               @keydown="onRenameKey($event, c.id)"
               @click.stop
             />
-            <span v-else class="label" @dblclick="startRename(c, $event)" :title="'Двойной клик — переименовать'">{{ c.title }}</span>
+            <span v-else class="label" @dblclick="startRename(c, $event)" :title="t('chat.doubleClickRename')">{{ c.title }}</span>
             <span
               v-if="c.tokensPrompt || c.tokensCompletion"
               class="chat-toks"
@@ -108,13 +109,13 @@ function onRenameKey(e: KeyboardEvent, id: string) {
           <span class="badge" v-if="c.contextSns.length" :title="c.contextSns.join(', ')">
             {{ c.contextSns.length }}
           </span>
-          <button class="ghost" title="Удалить" @click.stop="emit('delete', c.id)">×</button>
+          <button class="ghost" :title="t('common.delete')" @click.stop="emit('delete', c.id)">×</button>
         </div>
       </div>
       <div class="sidebar-footer">
-        <div>Каждый чат — отдельная задача со своим контекстом контроллеров</div>
+        <div>{{ t('chat.eachIsTask') }}</div>
         <div v-if="totalStats && (totalStats.totalPromptTokens || totalStats.totalCompletionTokens)" class="token-total">
-          всего: ↑{{ fmtTok(totalStats.totalPromptTokens) }} ↓{{ fmtTok(totalStats.totalCompletionTokens) }}<template v-if="totalStats.totalCachedTokens"> ⊙{{ fmtTok(totalStats.totalCachedTokens) }}</template><template v-if="totalCost != null"> · {{ fmtCost(totalCost) }}</template>
+          {{ t('chat.total') }}: ↑{{ fmtTok(totalStats.totalPromptTokens) }} ↓{{ fmtTok(totalStats.totalCompletionTokens) }}<template v-if="totalStats.totalCachedTokens"> ⊙{{ fmtTok(totalStats.totalCachedTokens) }}</template><template v-if="totalCost != null"> · {{ fmtCost(totalCost) }}</template>
         </div>
       </div>
     </template>

@@ -66,7 +66,7 @@ export function truncateLog(raw: string): string {
       // Gap between previous block and this line
       if (lineNum > prevEnd + 1) {
         const skipped = lineNum - prevEnd
-        result.push(`\n... (пропущено ${skipped} строк) ...\n`)
+        result.push(`\n... (${skipped} lines skipped) ...\n`)
       }
       result.push(lines[lineNum]!)
       prevEnd = lineNum + 1
@@ -80,12 +80,12 @@ export function truncateLog(raw: string): string {
     // Gap before tail
     const skippedBeforeTail = middleEnd - prevEnd
     if (skippedBeforeTail > 0) {
-      result.push(`\n... (пропущено ${skippedBeforeTail} строк) ...\n`)
+      result.push(`\n... (${skippedBeforeTail} lines skipped) ...\n`)
     }
   } else {
     // No errors in middle — just note the gap
     const skipped = middleEnd - middleStart
-    result.push(`\n... (пропущено ${skipped} строк без ошибок и предупреждений; для поиска в них используй grep/sed/awk) ...\n`)
+    result.push(`\n... (${skipped} lines without errors or warnings skipped; to search within them use grep/sed/awk) ...\n`)
   }
 
   // Tail

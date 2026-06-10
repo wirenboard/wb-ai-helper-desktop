@@ -1,749 +1,790 @@
 # Changelog
 
-Все заметные изменения проекта документируются в этом файле.
+All notable changes to the project are documented in this file.
 
-Формат: [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/),
-версионирование: [Semantic Versioning](https://semver.org/lang/ru/).
+Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+
+### Changed
+- **Model-facing text is now English-first (single language).** The persona
+  system prompt and the other strings the model reads — the force-compaction
+  notice, the last-iteration nudge, log-truncation markers, RPC error messages,
+  the job-tail hint, the empty-todo placeholder, the chat-context suffix — were
+  translated from Russian to English. This matches the documented i18n principle
+  (model-facing = single-language English; the model bridges languages itself)
+  and removes the Russian language gravity that made weaker models drift to
+  Russian. The reply language is still set solely by `LANG_DIRECTIVE` (driven by
+  the UI language). The internal protocol sentinel was also renamed `[Система]`
+  → `[System]`.
+
+### Added
+- **English language (RU/EN).** Toggle in Settings → «Interface»,
+  auto-detection by browser language, env `WB_HELPER_LANGUAGE`. The UI is fully
+  localized via a lightweight module `src/web/i18n.ts` (without vue-i18n).
+  The assistant **replies strictly in the UI language** (directive in the
+  system prompt). Skills and tool descriptions are translated into English as a
+  single set — they are model-facing instructions, so there is no per-language
+  duplication (the model bridges languages in its reply to the user).
+
+### Fixed
+- **SSH dialed an IPv6 link-local address → ECONNREFUSED, while the controller
+  was reachable over HTTP.** `discovery.resolveKnown()` resolves the `.local`
+  hostname with `dns.lookup(..., {family: 0})`, which returns both IPv4 and IPv6
+  — including link-local `fe80::` addresses that mDNS announces. `SshPool`
+  dialed `addresses[0]`, and when that happened to be the link-local IPv6, the
+  connection was refused (it needs a zone id and sshd doesn't listen there).
+  Added `preferredSshHost()`: prefer an IPv4 literal → a routable IPv6 → the
+  hostname (let the OS resolve) → never a bare link-local. `SshPool.baseConfig`
+  uses it. (+14 unit tests for `isIPv4`/`isLinkLocalIPv6`/`preferredSshHost`.)
+- **The model replied in the wrong language.** Two causes: (1) the system prompt
+  with the language directive was baked once at chat creation — after switching
+  the language in Settings, existing chats kept the old language; now the leading
+  system turn is regenerated to the current language on every send. (2) The
+  language directive was a single line at the tail of the huge Russian system
+  prompt, and weaker models ignored it, anchoring on Russian. The directive is
+  moved to the front of the prompt as a separate top-priority block and rewritten
+  firmly: «reply strictly in the UI language, this overrides the language of the
+  instructions below».
 
 ## [0.13.22] — 2026-05-13
 
 ### Fixed
-- **Регрессия 0.13.21: SSH стучался не в 22, а в порт mDNS-announce от
-  `_workstation._tcp` (9) или `_http._tcp` (80).** В 0.13.21 поле
-  `Controller.port` стало использоваться в `SshPool.baseConfig`, но
-  `Discovery.onService` принимал `svc.port` от любого типа сервиса.
-  Симптом: после mDNS-сканирования все авто-обнаруженные контроллеры
-  падали в SSH-таймаут. Фикс: `port` берётся только из `_ssh._tcp`
-  announcements; и только если он отличается от 22 (дефолт). Ручные
-  записи с явным `host:port` не затрагиваются.
-- В `avahiBrowse` теперь парсится поле service-type (`p[4]`) и
-  передаётся в `onService` — раньше тоже фильтровалось «по факту»,
-  потому что игнорировался `port` в baseConfig.
+- **Regression in 0.13.21: SSH was knocking not on port 22 but on the mDNS-announce
+  port from `_workstation._tcp` (9) or `_http._tcp` (80).** In 0.13.21 the
+  `Controller.port` field started being used in `SshPool.baseConfig`, but
+  `Discovery.onService` accepted `svc.port` from any service type.
+  Symptom: after an mDNS scan all auto-discovered controllers
+  fell into an SSH timeout. Fix: `port` is taken only from `_ssh._tcp`
+  announcements, and only if it differs from 22 (default). Manual
+  entries with an explicit `host:port` are not affected.
+- In `avahiBrowse` the service-type field (`p[4]`) is now parsed and
+  passed into `onService` — previously it was also filtered "by accident",
+  because `port` in baseConfig was ignored.
 
 ## [0.13.21] — 2026-05-13
 
 ### Added
-- **Подключение к контроллеру по IP/hostname и нестандартному SSH-порту.**
-  Поле «добавить вручную» в правой панели теперь принимает синтаксис
-  `host[:port]` — например `192.168.1.10`, `192.168.1.10:2222`,
-  `wirenboard-abc.local:8022`. Порт сохраняется в `manual_controllers`
-  (миграция `ALTER TABLE … ADD COLUMN port INTEGER`, идемпотентная) и
-  используется `SshPool` вместо дефолтного 22. Если порт не указан —
-  поведение прежнее (порт 22). В карточке контроллера рядом с хостом
-  показывается `:<port>`, когда он отличается от 22.
-- **Ad-hoc контроллер по IP[:port] из tool-вызова.** Если LLM передаёт в
-  `sn` IP или hostname (опционально с `:port`), которого нет в реестре —
-  `adHocController` собирает временный `Controller` с этим хостом и
-  портом, и SSH-вызов проходит без предварительного «добавь в список».
-  Раньше порт молча игнорировался → попытка подключиться на 22 висла.
-- **Параметр `host` во всех тулах рядом с `sn`.** Каждая тул-схема,
-  которая принимала `sn`, теперь также принимает `host` (IP, hostname
-  или host:port). `resolve1`/`resolveTargets` обрабатывают оба:
-  если задан `host` — он выигрывает (явное намерение адресовать ad-hoc);
-  иначе `sn`; иначе fallback на `ctx.contextSns`. Старые вызовы с `sn`
-  работают как раньше — параметр `host` дополнительный.
-  В системный промпт добавлено правило выбора: `sn` для серийников из
-  `list_controllers`, `host` для упомянутых в чате IP/hostname.
-- **`get_controller` отдаёт `hardwareSn` из `/var/lib/wirenboard/short_sn`.**
-  Авторитетный наклеечный SN — не суффикс hostname (тот настраивается
-  пользователем). Если файла нет (старая прошивка / не-WB железо) —
-  поле приходит пустым. Промпт явно запрещает выводить SN из hostname.
-- Удалена мёртвая функция `notFound`; 8 тулов (`probe_controller`,
+- **Connecting to a controller by IP/hostname and a non-standard SSH port.**
+  The "add manually" field in the right panel now accepts the syntax
+  `host[:port]` — e.g. `192.168.1.10`, `192.168.1.10:2222`,
+  `wirenboard-abc.local:8022`. The port is stored in `manual_controllers`
+  (migration `ALTER TABLE … ADD COLUMN port INTEGER`, idempotent) and
+  used by `SshPool` instead of the default 22. If no port is given —
+  behavior is unchanged (port 22). On the controller card, next to the host,
+  `:<port>` is shown when it differs from 22.
+- **Ad-hoc controller by IP[:port] from a tool call.** If the LLM passes an
+  IP or hostname (optionally with `:port`) in `sn` that is not in the registry —
+  `adHocController` assembles a temporary `Controller` with that host and
+  port, and the SSH call goes through without a prior "add it to the list".
+  Previously the port was silently ignored → an attempt to connect on 22 hung.
+- **A `host` parameter in all tools alongside `sn`.** Every tool schema
+  that accepted `sn` now also accepts `host` (IP, hostname,
+  or host:port). `resolve1`/`resolveTargets` handle both:
+  if `host` is given — it wins (an explicit intent to address ad-hoc);
+  otherwise `sn`; otherwise a fallback to `ctx.contextSns`. Old calls with `sn`
+  work as before — the `host` parameter is additional.
+  A selection rule was added to the system prompt: `sn` for serials from
+  `list_controllers`, `host` for IPs/hostnames mentioned in the chat.
+- **`get_controller` returns `hardwareSn` from `/var/lib/wirenboard/short_sn`.**
+  The authoritative sticker SN — not the hostname suffix (which the
+  user configures). If the file is missing (old firmware / non-WB hardware) —
+  the field comes back empty. The prompt explicitly forbids deriving the SN from the hostname.
+- Removed the dead function `notFound`; 8 tools (`probe_controller`,
   `list_controls`, `mqtt_read`, `ssh_read_file`, `ssh_read_logs`,
   `read_file`, `fetch_from_controller`, `upload_to_controller`)
-  переведены на единый `resolve1` вместо встроенного
+  switched to a unified `resolve1` instead of the inline
   `discovery.get→getOrCreate→adHocController`.
 
 ## [0.13.20] — 2026-05-09
 
 ### Fixed
-- **SSH-сессии: лимит на параллельные channels.** Симптом: запрос истории
-  на 6+ каналов (внутри `get_history`/`get_history_chart`/`get_history_table`)
-  упирался в `MaxSessions` контроллера — `mqttRpc` под капотом делает
-  `mosquitto_sub`/`_pub` через ssh exec, и `Promise.all` по каналам открывал
-  по одному channel на каждый. Аналогично — pre-flight через
-  `mqtt_list_topics` (по уникальным device) и фоновый job-tracker с 5+
-  running-задачами на одном контроллере.
-- В `SshPool` добавлен per-controller семафор `MAX_PARALLEL_CHANNELS = 7`
-  (sshd на WB настроен `MaxSessions=10`; ~3 слота оставлены пользователю
-  на ручные ssh-подключения). Семафор оборачивает `exec`, `writeFile`,
-  `writeFileBuffer`, `downloadFile`, `openShell`. `connect()` вне
-  семафора — handshake не ест слот. Очередь FIFO, новые вызовы не
-  обходят ожидающих. Интерактивный shell держит слот всё время сессии.
+- **SSH sessions: a limit on parallel channels.** Symptom: a history request
+  for 6+ channels (inside `get_history`/`get_history_chart`/`get_history_table`)
+  hit the controller's `MaxSessions` — `mqttRpc` under the hood does
+  `mosquitto_sub`/`_pub` via ssh exec, and `Promise.all` over channels opened
+  one channel each. Likewise — pre-flight via
+  `mqtt_list_topics` (per unique device) and the background job-tracker with 5+
+  running jobs on a single controller.
+- A per-controller semaphore `MAX_PARALLEL_CHANNELS = 7` was added to `SshPool`
+  (sshd on WB is configured with `MaxSessions=10`; ~3 slots are left for the user
+  for manual ssh connections). The semaphore wraps `exec`, `writeFile`,
+  `writeFileBuffer`, `downloadFile`, `openShell`. `connect()` is outside
+  the semaphore — the handshake does not eat a slot. The queue is FIFO, new calls do not
+  jump ahead of those waiting. An interactive shell holds a slot for the whole session.
 
 ### Changed
-- **`controller-update.md`: зонтичное согласие.** Раньше скилл требовал
-  HITL перед каждым шагом сценария A (apt upgrade → kept back? →
-  dist-upgrade → ядро обновилось? → reboot), даже если пользователь уже
-  сказал «обнови всё, не спрашивай». Добавлен раздел «Зонтичное согласие»:
-  фразы «обнови всё», «сделай это и всё остальное», «делай», «доведи до
-  конца», «не спрашивай каждый раз», «мне нужна самая свежая» —
-  разрешение на ВСЕ шаги сценария A. Не покрывает смену релиза
-  (`wb-release -t`), `wb-release -p/-r` и destructive-команды вне
-  сценария A — там HITL остаётся.
+- **`controller-update.md`: umbrella consent.** Previously the skill required
+  HITL before each step of scenario A (apt upgrade → kept back? →
+  dist-upgrade → kernel updated? → reboot), even if the user had already
+  said "update everything, don't ask". An "Umbrella consent" section was added:
+  phrases like "update everything", "do this and all the rest", "go", "see it
+  through", "don't ask every time", "I need the latest" —
+  permission for ALL steps of scenario A. It does not cover a release change
+  (`wb-release -t`), `wb-release -p/-r`, or destructive commands outside
+  scenario A — HITL remains there.
 
 ## [0.13.19] — 2026-05-08
 
 ### Fixed
-- **Pre-flight валидация в history-тулзах.** Симптом: модель звала
-  `get_history_chart` с выдуманным `device_id` (`wb-system`), тулза
-  успешно сохраняла пустой SVG (db_logger возвращал 0 точек, ошибки нет).
-  Корневая причина — два слоя:
-  1. Скилл `history.md` сам подсказывал ложный пример с `wb-system`
-     в Шаге 3, хотя в Шаге 1 был корректный `hwmon`. Модель копировала
-     пример Шага 3 буквально.
-  2. Тулзы не валидировали существование каналов перед запросом в БД.
-- **`get_history`, `get_history_chart`, `get_history_table`** теперь
-  делают pre-flight через MQTT (`mqtt_list_topics(prefix="/devices/<dev>/controls/+")`,
-  параллельно по уникальным `device_id`). На несуществующий `device_id` —
-  короткая ошибка без перечисления устройств. На несуществующий
-  `control_name` — список только этого одного устройства (5-30 контролов,
-  не сотни). Чистый хелпер `diagnoseHistoryChannels` экспортирован для тестов.
-- В `history.md` все примеры с `wb-system` заменены на правильный `hwmon`
-  (device_id для CPU/Board/GPU Temperature на WB), Шаг 1 усилен явной
-  инструкцией о двух обязательных вызовах `mqtt_list_topics`.
+- **Pre-flight validation in the history tools.** Symptom: the model called
+  `get_history_chart` with a made-up `device_id` (`wb-system`), the tool
+  successfully saved an empty SVG (db_logger returned 0 points, no error).
+  Root cause — two layers:
+  1. The `history.md` skill itself suggested a false example with `wb-system`
+     in Step 3, even though Step 1 had the correct `hwmon`. The model copied
+     the Step 3 example literally.
+  2. The tools did not validate channel existence before querying the DB.
+- **`get_history`, `get_history_chart`, `get_history_table`** now
+  do a pre-flight via MQTT (`mqtt_list_topics(prefix="/devices/<dev>/controls/+")`,
+  in parallel over unique `device_id`s). For a nonexistent `device_id` —
+  a short error without listing devices. For a nonexistent
+  `control_name` — a list of just that one device (5-30 controls,
+  not hundreds). The pure helper `diagnoseHistoryChannels` is exported for tests.
+- In `history.md` all `wb-system` examples were replaced with the correct `hwmon`
+  (the device_id for CPU/Board/GPU Temperature on WB), Step 1 reinforced with an explicit
+  instruction about the two mandatory `mqtt_list_topics` calls.
 
 ### Tests
-- Новый файл `tests/diagnose-history-channels.test.ts` — 8 юнит-тестов
-  на чистый хелпер. Итого 387 pass.
+- New file `tests/diagnose-history-channels.test.ts` — 8 unit tests
+  for the pure helper. Total 387 pass.
 
 ## [0.13.18] — 2026-05-08
 
 ### Changed
-- **Доработки существующих скиллов** (последний батч из бэклога):
-  - `controller-update.md` — добавлен **Сценарий D: factory reset / откат
-    пакетов** через `wb-release -p` (`--reset-packages`) и `-r`
-    (`--regenerate`). Описана разница: `-p` приводит wb-\* пакеты к версиям
-    текущего релиза (downgrade при необходимости, конфиги не трогает),
-    `-r` перегенерирует системные конфиги из шаблонов wb-configs (риск
-    перезаписать кастом → обязательный `controller-backup`). Явное
-    разграничение с аппаратным factory reset (FIT-прошивкой), который мы
-    не запускаем.
-  - `zigbee.md` — расширена секция про **Z2M в Docker**: типичный
-    `docker-compose.yml` с `network_mode: host`, проброс `/dev/ttyMODx`
-    в `devices:`, маунт `./data` для конфига. Адаптеры (`ezsp` для
-    WBE2R-R-ZIGBEE v.2). Грабли: без host network mosquitto не виден,
-    конфиг WB-конвертера ставится на хост (не в контейнер), `docker compose`
-    без дефиса.
-  - `wb-mqtt-serial.md` — добавлен блок про **error-флаги канала
+- **Refinements to existing skills** (the last batch from the backlog):
+  - `controller-update.md` — added **Scenario D: factory reset / package
+    rollback** via `wb-release -p` (`--reset-packages`) and `-r`
+    (`--regenerate`). The difference is described: `-p` brings wb-\* packages to the versions
+    of the current release (downgrade if needed, does not touch configs),
+    `-r` regenerates system configs from wb-configs templates (risk of
+    overwriting customizations → mandatory `controller-backup`). An explicit
+    distinction from the hardware factory reset (FIT firmware), which we
+    do not run.
+  - `zigbee.md` — expanded the **Z2M in Docker** section: a typical
+    `docker-compose.yml` with `network_mode: host`, passing `/dev/ttyMODx`
+    into `devices:`, mounting `./data` for the config. Adapters (`ezsp` for
+    WBE2R-R-ZIGBEE v.2). Gotchas: without host network mosquitto is not visible,
+    the WB converter config installs on the host (not in the container), `docker compose`
+    without the hyphen.
+  - `wb-mqtt-serial.md` — added a block about **channel error flags
     (WB MQTT Conventions)**: `r` (read error), `w` (write error),
-    `p` (period miss). Ключевое: при `r` значение контрола — last-known-good,
-    не свежее → нельзя читать контрол без проверки `meta/error`. Сценарий
-    «проверь живой ли канал» через `mqtt_read` на `meta/error`. Связь
-    с `troubleshooting-serial` для диагностики физики шины при `r`/`rp`.
+    `p` (period miss). Key point: with `r` the control's value is last-known-good,
+    not fresh → you must not read a control without checking `meta/error`. The scenario
+    "check if a channel is alive" via `mqtt_read` on `meta/error`. A link
+    to `troubleshooting-serial` for diagnosing the bus physics on `r`/`rp`.
 
-  Бэкенд-изменений нет — только обновлённые fixtures, которые сидятся
-  в БД при старте через `embed-skills-manifest`.
+  No backend changes — only updated fixtures, which are seeded
+  into the DB at startup via `embed-skills-manifest`.
 
 ### Backlog status
-- ✅ Все 7 system-стек скиллов опубликованы (v0.13.15–v0.13.17).
-- ✅ Доработки существующих скиллов из бэклога (этот релиз).
-- `mqtt_list_topics` пагинация уже есть с предыдущих релизов.
-- `mqtt_write` обрабатывает ошибки через try/catch на mqtt-клиенте.
+- ✅ All 7 system-stack skills published (v0.13.15–v0.13.17).
+- ✅ Refinements to existing skills from the backlog (this release).
+- `mqtt_list_topics` pagination already exists from previous releases.
+- `mqtt_write` handles errors via try/catch on the mqtt client.
 
-Бэклог из `wb-ai-skills/wb-ai-helper-analysis.md` закрыт.
+The backlog from `wb-ai-skills/wb-ai-helper-analysis.md` is closed.
 
 ## [0.13.17] — 2026-05-08
 
 ### Added
-- **`wb-serial-templates`** — последний из 7 system-стек скиллов из бэклога
-  `wb-ai-skills/wb-ai-helper-analysis.md`. Создание собственных Modbus-
-  шаблонов для `wb-mqtt-serial`: где живут шаблоны (`/usr/share/...` пакетные
-  vs `/etc/wb-mqtt-serial.conf.d/templates/` пользовательские, переживают
-  апгрейд), полный набор полей канала (`reg_type`, `format`, `scale`,
-  `word_order`, `condition`, `error_value`, `unsupported_value` и т.п.),
-  `parameters` для firmware-настроек, `groups` для UI-иерархии, `translations`
-  для i18n. Workflow от чтения мануала до бэкапа в `/wb-controller-backup`.
-  Готовый пример 1-фазного счётчика электроэнергии. Грабли:
-  endianness (множитель 65535 при ошибке `word_order`), 0-based vs 1-based
-  адреса, кириллица в `device.id`, дублирующий `device_type`.
+- **`wb-serial-templates`** — the last of the 7 system-stack skills from the backlog
+  `wb-ai-skills/wb-ai-helper-analysis.md`. Creating custom Modbus
+  templates for `wb-mqtt-serial`: where templates live (`/usr/share/...` packaged
+  vs `/etc/wb-mqtt-serial.conf.d/templates/` user-defined, surviving an
+  upgrade), the full set of channel fields (`reg_type`, `format`, `scale`,
+  `word_order`, `condition`, `error_value`, `unsupported_value`, etc.),
+  `parameters` for firmware settings, `groups` for the UI hierarchy, `translations`
+  for i18n. The workflow from reading the manual to a backup in `/wb-controller-backup`.
+  A ready-made example of a single-phase electricity meter. Gotchas:
+  endianness (a 65535 multiplier on a `word_order` error), 0-based vs 1-based
+  addresses, Cyrillic in `device.id`, a duplicate `device_type`.
 
-  Итого 24 системных скилла (было 23 в v0.13.16). Все 7 скиллов из
-  бэклога опубликованы.
+  Total 24 system skills (was 23 in v0.13.16). All 7 skills from
+  the backlog are published.
 
 ## [0.13.16] — 2026-05-08
 
 ### Added
-- **3 новых скилла** в `src/server/fixtures/skills/` (продолжение разбора
-  бэклога из `wb-ai-skills/wb-ai-helper-analysis.md`, на русском):
-  - **`wb-notifications`** — Telegram/email/SMS из wb-rules через `Notify.*`
-    и централизованные тревоги через `alarms.conf`. Создание Telegram-бота
-    через `@BotFather`, получение `chat_id` (личный/группа/канал).
-    Локальный MTA через `msmtp-mta` для email (Gmail App Password). SMS
-    через ModemManager (`mmcli`). Декларативные тревоги с `interval`
-    для повторных уведомлений и `expectedValueParameter`/min/max для
-    порогов. Грабли: захардкоденный токен, кириллица в SMS (70 символов
-    на одно), Gmail без App Password.
-  - **`wb-scenarios`** — декларативный no-code движок поверх `wb-rules`:
-    4 типа сценариев (`devicesControl`, `lightControl`, `thermostat`,
-    `schedule`) описываются JSON в `/etc/wb-scenarios.conf`, под капотом
-    генерируются `.js` правила. Граница "сценарий vs wb-rules": сложные
-    условия / вычисления / счётчики → wb-rules. Сервис называется
-    `wb-scenarios-reloader` (НЕ `wb-scenarios.service`).
-  - **`wb-mqtt-broker`** — администрирование `mosquitto` на контроллере:
-    структура `/etc/mosquitto/conf.d/` (НЕ редактировать `mosquitto.conf`
-    напрямую), пароли (`mosquitto_passwd -c` грабли), ACL per-user, TLS
-    на 8883 (self-signed CA для дома, Let's Encrypt для прода), мосты
-    к чужим брокерам (HA, облако) с `cleansession false`. Принцип:
-    WB-сервисы через Unix-сокет (анонимно), внешние клиенты — 1883/8883
-    с аутентификацией. `per_listener_settings true` ключевой.
+- **3 new skills** in `src/server/fixtures/skills/` (continuing the backlog
+  from `wb-ai-skills/wb-ai-helper-analysis.md`):
+  - **`wb-notifications`** — Telegram/email/SMS from wb-rules via `Notify.*`
+    and centralized alarms via `alarms.conf`. Creating a Telegram bot
+    via `@BotFather`, getting a `chat_id` (personal/group/channel).
+    A local MTA via `msmtp-mta` for email (Gmail App Password). SMS
+    via ModemManager (`mmcli`). Declarative alarms with `interval`
+    for repeated notifications and `expectedValueParameter`/min/max for
+    thresholds. Gotchas: a hardcoded token, Cyrillic in SMS (70 characters
+    per one), Gmail without an App Password.
+  - **`wb-scenarios`** — a declarative no-code engine on top of `wb-rules`:
+    4 scenario types (`devicesControl`, `lightControl`, `thermostat`,
+    `schedule`) described in JSON in `/etc/wb-scenarios.conf`, generating
+    `.js` rules under the hood. The "scenario vs wb-rules" boundary: complex
+    conditions / computations / counters → wb-rules. The service is called
+    `wb-scenarios-reloader` (NOT `wb-scenarios.service`).
+  - **`wb-mqtt-broker`** — administering `mosquitto` on the controller:
+    the structure of `/etc/mosquitto/conf.d/` (do NOT edit `mosquitto.conf`
+    directly), passwords (`mosquitto_passwd -c` gotcha), per-user ACLs, TLS
+    on 8883 (a self-signed CA for home, Let's Encrypt for prod), bridges
+    to external brokers (HA, cloud) with `cleansession false`. The principle:
+    WB services via a Unix socket (anonymous), external clients — 1883/8883
+    with authentication. `per_listener_settings true` is key.
 
-  Все 3 скилла загружаются автоматически при сборке через
-  `embed-skills-manifest` и сидятся в БД на старте. Итого 23 системных
-  скилла (было 20 в v0.13.15).
+  All 3 skills are loaded automatically during the build via
+  `embed-skills-manifest` and seeded into the DB at startup. Total 23 system
+  skills (was 20 in v0.13.15).
 
 ## [0.13.15] — 2026-05-08
 
 ### Added
-- **3 новых system-стек скилла** в `src/server/fixtures/skills/` — компактные
-  (по ~100 строк) версии под стиль существующих fixtures, на русском:
-  - **`wb-services`** — управление systemd-юнитами, override-конфиги
-    (drop-in для пакетных), создание своих сервисов и таймеров. Шпаргалка
-    по `systemd_unit` tool'у + правильный паттерн override (с `ExecStart=`
-    сбросом перед перепереопределением). Пример fix `fstrim.service`
-    с `--quiet-unsupported`. Сравнение wb-rules cron vs systemd timer.
-  - **`wb-network`** — NetworkManager + wb-connection-manager: подключение
-    к WiFi, точка доступа, статический IP, 4G/sim1/sim2, OpenVPN-клиент,
-    DNS, диагностика «нет интернета». Указывает использовать `network_status`
-    как first-call. Описание архитектуры (NM делает соединения, WCM
-    приоретизирует/failover'ит).
-  - **`wb-cloud`** — wb-cloud-agent: активация (привязка к аккаунту),
-    отвязка/сброс, свой бэкенд через `CLOUD_BASE_URL`, диагностика
-    «не подключается к облаку». Указывает использовать `cloud_status`
-    tool. Архитектурный блок про ATECCx08 и MQTT-публикацию состояния.
+- **3 new system-stack skills** in `src/server/fixtures/skills/` — compact
+  (~100 lines each) versions matching the style of the existing fixtures:
+  - **`wb-services`** — managing systemd units, override configs
+    (drop-ins for packaged ones), creating your own services and timers. A cheat sheet
+    for the `systemd_unit` tool + the correct override pattern (with an `ExecStart=`
+    reset before re-overriding). An example fix of `fstrim.service`
+    with `--quiet-unsupported`. A comparison of wb-rules cron vs a systemd timer.
+  - **`wb-network`** — NetworkManager + wb-connection-manager: connecting
+    to WiFi, an access point, a static IP, 4G/sim1/sim2, an OpenVPN client,
+    DNS, diagnosing "no internet". Points to using `network_status`
+    as the first call. A description of the architecture (NM makes connections, WCM
+    prioritizes/fails over).
+  - **`wb-cloud`** — wb-cloud-agent: activation (binding to an account),
+    unbinding/reset, your own backend via `CLOUD_BASE_URL`, diagnosing
+    "not connecting to the cloud". Points to using the `cloud_status`
+    tool. An architecture block about ATECCx08 and MQTT state publishing.
 
-  Скиллы загружаются автоматически при сборке (через `scripts/build.ts`
-  embed-skills-manifest, см. v0.13.6) и сидятся в БД на старте приложения.
-  Параметрический тест `tests/skills-parse.test.ts` валидирует каждый
-  shipping-`.md` через `extractDescription` — все 3 проходят.
+  The skills are loaded automatically during the build (via `scripts/build.ts`
+  embed-skills-manifest, see v0.13.6) and seeded into the DB at app startup.
+  The parametric test `tests/skills-parse.test.ts` validates each
+  shipping `.md` via `extractDescription` — all 3 pass.
 
 ## [0.13.14] — 2026-05-08
 
 ### Added
-- **`modbus_device_info`** — прошивочные параметры конкретного Modbus-устройства:
-  fw, model, текущие значения parameters (debounce, modes, mappings и т.п.).
-  RPC `wb-mqtt-serial/device/LoadConfig`. Это **не** список каналов — для
-  него `modbus_template`. Два режима: (1) по `device_id` (имя в MQTT
-  типа `wb-mr6c_138`) — wb-mqtt-serial сам резолвит остальное; (2) по
-  явным `path + slave_id` (+ опционально device_type/baud_rate/parity/
-  data_bits/stop_bits) — для устройств не в конфиге.
-- **`modbus_probe`** — точечный ping одного Modbus slave-id на указанном
-  порту через `wb-mqtt-serial/device/Probe`. Не меняет конфиг, не
-  перезапускает драйвер. Полезно когда `wb_bus_scan` пропустил
-  устройство (известный кейс с WB-MAP6S — сканер не всегда видит,
-  Probe видит).
-- **`modbus_ports`** — параметры всех настроенных RS-485 портов
+- **`modbus_device_info`** — the firmware parameters of a specific Modbus device:
+  fw, model, current parameter values (debounce, modes, mappings, etc.).
+  RPC `wb-mqtt-serial/device/LoadConfig`. This is **not** a list of channels — for
+  that there is `modbus_template`. Two modes: (1) by `device_id` (the MQTT name
+  like `wb-mr6c_138`) — wb-mqtt-serial resolves the rest itself; (2) by
+  explicit `path + slave_id` (+ optionally device_type/baud_rate/parity/
+  data_bits/stop_bits) — for devices not in the config.
+- **`modbus_probe`** — a point ping of a single Modbus slave-id on the given
+  port via `wb-mqtt-serial/device/Probe`. Does not change the config, does not
+  restart the driver. Useful when `wb_bus_scan` missed a
+  device (a known case with WB-MAP6S — the scanner does not always see it,
+  Probe does).
+- **`modbus_ports`** — the parameters of all configured RS-485 ports
   (path, baud_rate, parity, data_bits, stop_bits, timeouts, enabled).
-  RPC `wb-mqtt-serial/ports/Load`. Возвращает только активные порты
-  из конфига, не все физически существующие `/dev/ttyRS485-*`.
+  RPC `wb-mqtt-serial/ports/Load`. Returns only active ports
+  from the config, not every physically existing `/dev/ttyRS485-*`.
 
 ### Diagnostics
-- При таймауте `wb-mqtt-serial/device/LoadConfig` или `device/Probe`
-  ошибка теперь обогащается hint'ом: «возможно версия драйвера < 2.180,
-  проверь `dpkg -l wb-mqtt-serial`, обнови через `apt install`». Это не
-  костыль — реальный кейс обнаружен на A25NDEMJ (wb7) с устаревшим
-  `wb-mqtt-serial 2.146.0`: эти RPC endpoint'ы не отвечают, в репе stable
-  лежит 2.224.0+ но pending update не применён. На свежей версии (2.180+
-  на wb8) работает out of the box. Hint выдаётся только при таймауте,
-  обычные RPC-ошибки (Port is not defined / bad params) проходят как есть.
+- On a timeout of `wb-mqtt-serial/device/LoadConfig` or `device/Probe`
+  the error is now enriched with a hint: "the driver version may be < 2.180,
+  check `dpkg -l wb-mqtt-serial`, update via `apt install`". This is not a
+  crutch — a real case discovered on A25NDEMJ (wb7) with an outdated
+  `wb-mqtt-serial 2.146.0`: these RPC endpoints don't respond, the stable repo
+  has 2.224.0+ but the pending update wasn't applied. On a fresh version (2.180+
+  on wb8) it works out of the box. The hint is issued only on a timeout,
+  ordinary RPC errors (Port is not defined / bad params) pass through as-is.
 
 ### Fixed
-- **`ssh_exec_async` теперь добавляет `-y` к apt-командам install/upgrade/
-  dist-upgrade/remove/purge** (если не задан `-y`/`--yes`/`--assume-yes`).
-  Раньше сервер добавлял только `DEBIAN_FRONTEND=noninteractive`, и
-  модель забыв `-y` запускала, например, `apt-get install pkg` —
-  dpkg ждал Y/N, default был N, пакет не ставился. Реально воспроизведено
-  при попытке обновить wb-mqtt-serial на A25NDEMJ — пакет завис на
-  2.146.0 и `device/LoadConfig` продолжал не отвечать. Логика
-  нормализации вынесена в `src/server/apt-defaults.ts` (с +19 unit-тестов
-  на edge cases: `-y` уже есть в коротком/длинном виде, имена пакетов
-  с `-y` в названии типа `python3-yaml`, chained команды и т.п.).
-  Скилл `controller-update.md` обновлён с новым правилом.
+- **`ssh_exec_async` now appends `-y` to apt install/upgrade/
+  dist-upgrade/remove/purge commands** (if `-y`/`--yes`/`--assume-yes` is not set).
+  Previously the server only added `DEBIAN_FRONTEND=noninteractive`, and
+  a model forgetting `-y` would run, for example, `apt-get install pkg` —
+  dpkg waited for Y/N, the default was N, the package wasn't installed. Actually reproduced
+  when trying to update wb-mqtt-serial on A25NDEMJ — the package was stuck at
+  2.146.0 and `device/LoadConfig` kept not responding. The
+  normalization logic is extracted into `src/server/apt-defaults.ts` (with +19 unit tests
+  for edge cases: `-y` already present in short/long form, package names
+  with `-y` in the name like `python3-yaml`, chained commands, etc.).
+  The `controller-update.md` skill is updated with the new rule.
 
 ### Tests
-- +7 unit-тестов на `buildLoadConfigParams` (`device_id` приоритет,
-  fallback на `path+slave_id`, валидация null, прокидывание опциональных
-  полей, корректная обработка `slave_id=0`).
-- +4 unit-теста на `enrichSerialRpcError` (таймаут на ru/en распознаётся,
-  hint про 2.180 добавлен; не-таймаут проходит без изменений; обработка
-  не-Error значений).
+- +7 unit tests for `buildLoadConfigParams` (`device_id` priority,
+  fallback to `path+slave_id`, null validation, passing optional
+  fields, correct handling of `slave_id=0`).
+- +4 unit tests for `enrichSerialRpcError` (a timeout in ru/en is recognized,
+  the hint about 2.180 is added; non-timeouts pass unchanged; handling of
+  non-Error values).
 
 ## [0.13.13] — 2026-05-08
 
 ### Added
-- **`modbus_templates_list`** — список Modbus-шаблонов через RPC
-  `wb-mqtt-serial/config/Load.types`. Без `filter` возвращает сводку по
-  группам (на типичной прошивке 250+ шаблонов, плоский список переполнил
-  бы контекст). С `filter` (case-insensitive подстрока по type/mqtt-id/name)
-  — flat list matched. Шаблоны с `deprecated: true` помечаются и считаются
-  отдельно.
-- **`modbus_template`** — содержимое одного шаблона по `device_type`
-  (резолв через Load.types → mqtt-id) или прямо по `mqtt_id`. Читает
+- **`modbus_templates_list`** — a list of Modbus templates via RPC
+  `wb-mqtt-serial/config/Load.types`. Without `filter` it returns a summary by
+  group (on typical firmware 250+ templates, a flat list would overflow
+  the context). With `filter` (a case-insensitive substring over type/mqtt-id/name)
+  — a flat list of matches. Templates with `deprecated: true` are marked and counted
+  separately.
+- **`modbus_template`** — the contents of a single template by `device_type`
+  (resolved via Load.types → mqtt-id) or directly by `mqtt_id`. Reads
   `/usr/share/wb-mqtt-serial/templates/config-<mqtt-id>.json`. Views:
-  `summary` (default — компактный список каналов с reg_type/address/format/
-  type/units), `full` (весь шаблон), `channels-only`, `meta-only`.
-  Опционально фильтрует каналы (`enabledOnly`, `channelFilter`).
+  `summary` (default — a compact list of channels with reg_type/address/format/
+  type/units), `full` (the whole template), `channels-only`, `meta-only`.
+  Optionally filters channels (`enabledOnly`, `channelFilter`).
 
 ### Fixed
-- **MQTT `connack timeout` на холодном коннекте**: лимит `CONNECT_TIMEOUT`
-  в `MqttPool` поднят с 4 сек до 8 сек. На медленных сетях / с mDNS-резолвом
-  4 сек не хватало для TCP+MQTT handshake'а до контроллера на первом вызове
-  `mqtt_inventory`/`list_devices`/etc.; со второго раза работало (соединение
-  в кэше). 8 сек даёт запас, существующее кэширование сохраняет следующие
-  вызовы быстрыми.
+- **MQTT `connack timeout` on a cold connection**: the `CONNECT_TIMEOUT` limit
+  in `MqttPool` raised from 4 s to 8 s. On slow networks / with mDNS resolution
+  4 s was not enough for the TCP+MQTT handshake to the controller on the first
+  `mqtt_inventory`/`list_devices`/etc. call; from the second time it worked (the connection
+  in the cache). 8 s gives headroom, the existing caching keeps subsequent
+  calls fast.
 
 ### Tests
-- +25 unit-тестов в `tests/modbus-templates.test.ts` на парсеры/форматтеры:
-  `parseTemplatesList` (flatten групп, deprecated, mqtt-id fallback,
-  пустые), `filterTemplates` (substring case-insensitive по
+- +25 unit tests in `tests/modbus-templates.test.ts` for the parsers/formatters:
+  `parseTemplatesList` (flattening groups, deprecated, mqtt-id fallback,
+  empty), `filterTemplates` (case-insensitive substring over
   type/mqttId/name), `summarizeByGroup` (count/deprecated counts),
   `filterChannels` (enabledOnly + channelFilter), `renderTemplate`
-  (4 views с фильтрами, не мутирует исходник, gracefully handles
-  missing device).
+  (4 views with filters, does not mutate the source, gracefully handles
+  a missing device).
 
 ## [0.13.12] — 2026-05-08
 
 ### Fixed
-- **Автосжатие копилось и не срабатывало**: `compactContext()` отправлял
-  модели мягкую просьбу «вызови checkpoint», и если модель её игнорировала
-  (отвечала текстом без tool-call'а), gate `autoCompactTriggeredForRatio`
-  залипал, ratio рос пока не вылетал за окно контекста — авто-сжатие
-  больше не пыталось. Теперь два уровня:
-  1. **SOFT (≥ autoCompactThreshold, default 0.85)** — модель просится
-     вызвать `checkpoint(summary=...)`. Промт переписан жёстче: явно
-     предупреждаем, что иначе при 90% мы обрежем историю принудительно
-     и tool-results могут потеряться — её summary безопаснее.
-  2. **HARD (≥ 0.9)** — backend сам обрезает историю в БД через новый
-     endpoint `POST /api/chats/:id/force-compact`: оставляет system-турн
-     и последний user-msg + всё после него; промежуточные turns
-     заменяются одним synthetic `[Система] 🗜 Принудительное сжатие…`
-     уведомлением со счётчиком выкинутого. Деструктивно для tool-results
-     — но без него ratio растёт без ограничений.
-  Gate сбрасывается на каждом юзерском `sendMessage` — каждый новый
-  запрос даёт автосжатию свежий шанс.
-- **Дефолт `autoCompactThreshold` снижен с 0.85 до 0.70** — 0.85 оставляло
-  только 5pp запаса до HARD-сжатия (0.9), модель часто не успевала вызвать
-  checkpoint между soft-просьбой и принудительной обрезкой. 0.70 даёт 20pp
-  для нескольких итераций «попроси → подожди → попроси ещё раз». Существующие
-  юзеры с сохранённым `0.85` (или другим значением) **остаются с прежним**
-  — поменять можно через ⚙ Настройки или вручную в `settings.json`.
+- **Auto-compaction accumulated and didn't fire**: `compactContext()` sent
+  the model a soft request "call checkpoint", and if the model ignored it
+  (replied with text without a tool call), the `autoCompactTriggeredForRatio` gate
+  got stuck, the ratio grew until it flew past the context window — auto-compaction
+  no longer tried. Now there are two levels:
+  1. **SOFT (≥ autoCompactThreshold, default 0.85)** — the model is asked to
+     call `checkpoint(summary=...)`. The prompt is rewritten more firmly: we explicitly
+     warn that otherwise at 90% we will truncate the history forcibly
+     and tool-results may be lost — its summary is safer.
+  2. **HARD (≥ 0.9)** — the backend itself truncates the history in the DB via a new
+     endpoint `POST /api/chats/:id/force-compact`: it keeps the system turn
+     and the last user message + everything after it; intermediate turns
+     are replaced by a single synthetic `[System] 🗜 Forced compaction…`
+     notice with a counter of what was dropped. Destructive for tool-results
+     — but without it the ratio grows without limit.
+  The gate resets on every user `sendMessage` — each new
+  request gives auto-compaction a fresh chance.
+- **The `autoCompactThreshold` default lowered from 0.85 to 0.70** — 0.85 left
+  only 5pp of headroom before HARD compaction (0.9), the model often didn't manage to call
+  checkpoint between the soft request and the forced truncation. 0.70 gives 20pp
+  for several iterations of "ask → wait → ask again". Existing
+  users with a saved `0.85` (or another value) **stay as before**
+  — it can be changed via ⚙ Settings or manually in `settings.json`.
 
 ### Added
-- **UI-индикатор `🗜 ждём checkpoint…`** в шапке чата рядом с context-meter,
-  когда автосжатие отправило просьбу модели, но та ещё не вызвала checkpoint.
-  С анимацией pulse, чтобы было заметно. Tooltip объясняет, что при 90%
-  будет принудительное сжатие.
-- **Счётчик фоновых задач `⏳ N`** в строке `ChatInputArea` рядом с «Ctrl+J
-  — скачанные файлы». Показывается когда модель закончила, но ещё работают
-  `ssh_exec_async`/`wb_bus_scan`/`serial_debug_collect` на контроллере.
-  Tooltip предлагает узнать статус через `job_status`. 0 — индикатор скрыт.
+- **A UI indicator `🗜 waiting for checkpoint…`** in the chat header next to the context meter,
+  when auto-compaction has sent the model a request but it hasn't yet called checkpoint.
+  With a pulse animation, to make it noticeable. The tooltip explains that at 90%
+  there will be forced compaction.
+- **A background-jobs counter `⏳ N`** in the `ChatInputArea` row next to "Ctrl+J
+  — downloaded files". Shown when the model has finished but
+  `ssh_exec_async`/`wb_bus_scan`/`serial_debug_collect` are still running on the controller.
+  The tooltip suggests checking the status via `job_status`. 0 — the indicator is hidden.
 
 ### Tests
-- +3 теста в `tests/db-chats.test.ts` на `ChatStore.forceCompact()`:
-  обрезка middle turns с synthetic notice; noop при отсутствии истории
-  для сжатия; сохранение последнего user-assistant pair при multi-iteration
-  стриме.
+- +3 tests in `tests/db-chats.test.ts` for `ChatStore.forceCompact()`:
+  truncating middle turns with a synthetic notice; a noop when there is no history
+  to compact; preserving the last user-assistant pair on a multi-iteration
+  stream.
 
 ## [0.13.11] — 2026-05-08
 
 ### Added
-- **`mqtt_inventory`** — объединённый снимок MQTT-устройств одним вызовом:
-  для каждого `/devices/<id>/`: id, name, driver, error + список контролов
-  с распакованным `meta` (value, type, units, readonly, order, min/max,
-  precision, error). Заменяет связку `list_devices` + N×`list_controls`.
-  Поле `error` парсится по [WB MQTT Conventions](https://github.com/wirenboard/conventions):
-  флаги `r` (read), `w` (write), `p` (period miss) и комбинации. **При
-  `error.read=true` значение в value-топике — это last-known-good (последний
-  успешно прочитанный), а не текущий live-readout** — без этого знания
-  модель часто делает неверный диагноз. Опции: `device` (фильтр по подстроке),
-  `timeout` (1-15 с), `includeEmpty`, `includeMeta` (raw meta-объект).
-- **`disable_rule`** — отключить правило wb-rules через RPC
-  `wbrules/Editor/ChangeState` (под капотом — переименование
-  `<name>.js` → `<name>.js.disabled`). В отличие от `delete_rule` обратимо.
-  На стабильных прошивках обратный `enabled:true` через тот же RPC возвращает
-  `result:false` (ограничение wb-rules engine) — для включения обратно
-  нужно вручную убрать суффикс `.disabled` и сделать reload.
+- **`mqtt_inventory`** — a combined snapshot of MQTT devices in a single call:
+  for each `/devices/<id>/`: id, name, driver, error + a list of controls
+  with unpacked `meta` (value, type, units, readonly, order, min/max,
+  precision, error). Replaces the combo of `list_devices` + N×`list_controls`.
+  The `error` field is parsed per the [WB MQTT Conventions](https://github.com/wirenboard/conventions):
+  flags `r` (read), `w` (write), `p` (period miss) and combinations. **With
+  `error.read=true` the value in the value topic is last-known-good (the last
+  successfully read one), not the current live readout** — without knowing this the
+  model often makes a wrong diagnosis. Options: `device` (a substring filter),
+  `timeout` (1-15 s), `includeEmpty`, `includeMeta` (the raw meta object).
+- **`disable_rule`** — disable a wb-rules rule via RPC
+  `wbrules/Editor/ChangeState` (under the hood — renaming
+  `<name>.js` → `<name>.js.disabled`). Unlike `delete_rule` it is reversible.
+  On stable firmware the reverse `enabled:true` via the same RPC returns
+  `result:false` (a wb-rules engine limitation) — to enable it back
+  you need to manually remove the `.disabled` suffix and reload.
 
 ### Tests
-- +19 unit-тестов в `tests/mqtt-inventory.test.ts` на чистые `parseErrorFlags`
-  и `buildInventory` — error-flags комбинации (r/w/p/rwp + unknown), сортировка
-  контролов по `order`, фильтр по device-подстроке, `includeMeta`/`includeEmpty`,
-  имена с пробелами (типа `Input 0 counter`), error → last-known-good в
-  errors-сводке, malformed topics не ломают парсер.
-- Парсер inventory вынесен в отдельный модуль `src/server/mqtt-inventory.ts` —
-  чтобы тестировать без mock-MQTT. Сам tool-handler дёргает
+- +19 unit tests in `tests/mqtt-inventory.test.ts` for the pure `parseErrorFlags`
+  and `buildInventory` — error-flag combinations (r/w/p/rwp + unknown), sorting
+  controls by `order`, a device-substring filter, `includeMeta`/`includeEmpty`,
+  names with spaces (like `Input 0 counter`), error → last-known-good in
+  the errors summary, malformed topics don't break the parser.
+- The inventory parser is extracted into a separate module `src/server/mqtt-inventory.ts` —
+  to test it without a mock MQTT. The tool handler itself calls
   `MqttPool.listTopics`.
 
 ## [0.13.10] — 2026-05-08
 
 ### Added
-- **`network_status`** — сетевая сводка контроллера в одном вызове:
-  интерфейсы (`ip -j addr`) с IPv4-адресами и состоянием, default-маршрут
-  (`ip -j route`), активные NetworkManager-соединения и устройства
-  (`nmcli -t -f …`), опционально ping до целевого хоста. Типичный first-call
-  для диагностики «нет интернета» / «отвалился uplink» / «не виден через
-  VPN». Закрывает 3-4 ssh_exec-вызова, которые модель раньше делала вручную.
-- **`cloud_status`** — состояние Wiren Board Cloud agent одним вызовом:
-  активность сервиса `wb-cloud-agent`, наличие device-сертификата, список
-  привязанных провайдеров, retained MQTT-контролы (status / activation_link
-  / cloud_base_url) для каждого. По одному вызову видно, привязан ли
-  контроллер к облаку и в каком статусе.
+- **`network_status`** — a network summary of the controller in a single call:
+  interfaces (`ip -j addr`) with IPv4 addresses and state, the default route
+  (`ip -j route`), active NetworkManager connections and devices
+  (`nmcli -t -f …`), optionally a ping to a target host. The typical first call
+  for diagnosing "no internet" / "the uplink dropped" / "not visible over
+  VPN". Closes the 3-4 ssh_exec calls the model used to make manually.
+- **`cloud_status`** — the state of the Wiren Board Cloud agent in a single call:
+  the activity of the `wb-cloud-agent` service, the presence of a device certificate, the list
+  of bound providers, retained MQTT controls (status / activation_link
+  / cloud_base_url) for each. With one call you can see whether the
+  controller is bound to the cloud and in what state.
 
 ### Tests
-- +23 unit-теста на чистые парсеры в `tests/diagnostics-parsers.test.ts`:
+- +23 unit tests for the pure parsers in `tests/diagnostics-parsers.test.ts`:
   `readMarkedSection`, `parsePingLossPct`, `normalizeInterface`,
-  `pickDefaultRoute`, `parseNmcliColons`, `parseCloudMqttControls`. Сами
-  tool-handler'ы (которые дёргают ssh.exec) тестируются на живом контроллере;
-  парсеры покрывают всю интересную логику.
+  `pickDefaultRoute`, `parseNmcliColons`, `parseCloudMqttControls`. The
+  tool handlers themselves (which call ssh.exec) are tested on a live controller;
+  the parsers cover all the interesting logic.
 
 ## [0.13.9] — 2026-05-08
 
 ### Changed
-- Tooltip у счётчика 🔧 в подвале ассистент-сообщения переформулирован: было
-  «В стоимость рядом входит N LLM-вызовов с инструментами в этом ответе —
-  каждый итерационный вызов биллится отдельно», стало «Перед этим ответом
-  было N LLM-вызовов с инструментами — стоимость рядом включает их.»
-  Чище читается, ту же мысль доносит короче.
+- The tooltip of the 🔧 counter in the footer of an assistant message was reworded: it was
+  "The cost next to it includes N tool-calling LLM calls in this reply —
+  each iterative call is billed separately", it became "Before this reply
+  there were N tool-calling LLM calls — the cost next to it includes them."
+  Reads cleaner, conveys the same idea more briefly.
 
 ## [0.13.8] — 2026-05-08
 
 ### Fixed
-- **Footer ассистент-сообщений показывал не того провайдера/модель/валюту**:
-  поля `provider` / `model` тянулись из текущих глобальных settings, поэтому
-  после переключения провайдера (например AITunnel ₽ → OpenAI $) прошлые
-  сообщения «переезжали» — RUB-сумма становилась USD, имя бренда менялось.
-  Теперь у таблицы `turns` две новые колонки `provider`/`model`, которые
-  пишутся вместе с usage'ом на самом ассистент-турне; `ChatMessage.vue` берёт
-  их оттуда, на легаси-записи без атрибуции остаётся fallback на текущие
-  settings (как было).
-- **`audit.ts`** — section-маркеры через `printf "\n…\n"` вместо `echo`. Файлы,
-  cat'нутые без trailing `\n` (`/usr/lib/wb-release` оканчивается на
-  `REPO_PREFIX=…`), склеивали следующий маркер с последней строкой и
-  `splitSections` молча терял секцию (`manualPackages` в audit'е приходил
-  пустым). Теперь маркер всегда на своей строке.
-- **`serial_debug_collect`** — переписан по trap-protected паттерну:
-  `python3` вместо хрупкого sed (идемпотентен после краша),
-  `trap restore_off EXIT INT TERM` (debug:true не остаётся жить вечно при
-  падении journalctl/systemctl), `START_TS=$(date -u)` до `sleep` (окно
-  больше не сдвигается ретроактивно), без `-n 500` (раньше молча обрезало
-  длинные капчи на нагруженной шине).
-- **`mqtt_write`** — у `writeTopic()` и tool-схемы появились опциональные
-  параметры `qos` (0/1/2) и `retain`. Раньше зашитые `{qos: 1, retain: false}`
-  не давали публиковать retained-конфиги. Дефолты не изменились.
-- **Раздутая live-сумма токенов в шапке чата** — `currentChatTokens` суммирует
-  `tokensPrompt` по всем assistant-турнам в `liveTurns`, а каждый `tool-call`
-  во время agent-loop'а пушит в `liveTurns` новый empty-assistant. На каждый
-  такой пустой ассистент потом писался cumulative-снимок `usage` события, и
-  на промежуточных оставались стейл cumulative-значения от прошлых итераций
-  (одни и те же токены засчитывались по нескольку раз). В итоге шапка чата
-  показывала, например, `$0.29` против `$0.08` в sidebar и per-message подвалах
-  — реальный billing $0.08, а шапка обманывала. Теперь `usage`-handler знает
-  границу текущего стрима (`streamStartIdx`) и обнуляет токены на промежуточных
-  ассистентах стрима, оставляя cumulative только на самом последнем — сумма
-  совпадает с DB.
+- **The footer of assistant messages showed the wrong provider/model/currency**:
+  the `provider` / `model` fields were pulled from the current global settings, so
+  after switching the provider (e.g. AITunnel ₽ → OpenAI $) past
+  messages "moved" — the RUB amount became USD, the brand name changed.
+  Now the `turns` table has two new columns `provider`/`model`, which are
+  written together with usage on the assistant turn itself; `ChatMessage.vue` takes
+  them from there, and legacy records without attribution keep the fallback to current
+  settings (as before).
+- **`audit.ts`** — section markers via `printf "\n…\n"` instead of `echo`. Files
+  cat'd without a trailing `\n` (`/usr/lib/wb-release` ends with
+  `REPO_PREFIX=…`) glued the next marker to the last line and
+  `splitSections` silently lost the section (`manualPackages` in the audit came back
+  empty). Now the marker is always on its own line.
+- **`serial_debug_collect`** — rewritten with a trap-protected pattern:
+  `python3` instead of fragile sed (idempotent after a crash),
+  `trap restore_off EXIT INT TERM` (debug:true doesn't stay alive forever on a
+  crash of journalctl/systemctl), `START_TS=$(date -u)` before `sleep` (the window
+  no longer shifts retroactively), without `-n 500` (previously it silently truncated
+  long captures on a loaded bus).
+- **`mqtt_write`** — `writeTopic()` and the tool schema got optional
+  parameters `qos` (0/1/2) and `retain`. Previously the hardcoded `{qos: 1, retain: false}`
+  prevented publishing retained configs. The defaults are unchanged.
+- **An inflated live token sum in the chat header** — `currentChatTokens` sums
+  `tokensPrompt` over all assistant turns in `liveTurns`, and each `tool-call`
+  during the agent loop pushes a new empty-assistant into `liveTurns`. Onto each
+  such empty assistant a cumulative `usage` snapshot was then written, and
+  on the intermediate ones stale cumulative values from past iterations remained
+  (the same tokens counted multiple times). As a result the chat header
+  showed, for example, `$0.29` against `$0.08` in the sidebar and per-message footers
+  — the real billing was $0.08, and the header lied. Now the `usage` handler knows
+  the boundary of the current stream (`streamStartIdx`) and zeroes the tokens on the intermediate
+  assistants of the stream, keeping the cumulative only on the very last one — the sum
+  matches the DB.
 
 ### Added
-- **В подвале каждого ассистент-сообщения — счётчик 🔧 N**, сколько LLM-вызовов
-  с tool-call'ами было между предыдущим ответом/пользовательским сообщением и
-  этим ответом. По tooltip'у объяснение: «в стоимость рядом входит N
-  LLM-вызовов с инструментами в этом ответе — каждый итерационный вызов
-  биллится отдельно». Юзер видит, что $0.05 на финальном тексте включает не
-  только генерацию текста, но и весь chain tool-iterations стрима, и не задаёт
-  вопросов «а где стоимость инструментов».
-- **Два новых tool'а в категории «Системная диагностика»**:
-  - `failed_units` — `systemctl --failed --no-pager`. Первый шаг диагностики
-    «что-то сломалось» — заменяет 2-3 ssh_exec'а, которые модель делала
-    раньше, чтобы понять *что* упало.
-  - `systemd_unit { unit, action }` — один tool вместо ститчинга `is-active`
+- **In the footer of every assistant message — a 🔧 N counter**, how many LLM calls
+  with tool-calls there were between the previous reply/user message and
+  this reply. With an explanation in the tooltip: "the cost next to it includes N
+  tool-calling LLM calls in this reply — each iterative call is
+  billed separately". The user sees that $0.05 on the final text includes not
+  only text generation but the whole chain of tool iterations of the stream, and doesn't ask
+  "where is the cost of the tools".
+- **Two new tools in the "System diagnostics" category**:
+  - `failed_units` — `systemctl --failed --no-pager`. The first step of "something
+    broke" diagnostics — replaces the 2-3 ssh_execs the model made
+    before to understand *what* fell over.
+  - `systemd_unit { unit, action }` — one tool instead of stitching `is-active`
     / `show` / `status` / `cat` / `list-dependencies`. `action="status"`
-    (default) отдаёт структурированный объект `{active, sub, load,
+    (default) returns a structured object `{active, sub, load,
     unitFileState, exitCode, mainPid, since, statusTail}`. `cat` /
-    `list-deps` read-only. `start`/`stop`/`restart`/`reload`/`enable`/
-    `disable`/`mask`/`unmask` — state-changing с тем же HITL-предупреждением,
-    что у `mqtt_write`/`write_file`. Имя юнита через whitelist-regex до
-    шелла; covers сервисы, templated units (`getty@tty1.service`), таймеры,
-    слайсы и пути.
+    `list-deps` are read-only. `start`/`stop`/`restart`/`reload`/`enable`/
+    `disable`/`mask`/`unmask` — state-changing with the same HITL warning
+    as `mqtt_write`/`write_file`. The unit name goes through a whitelist regex before
+    the shell; covers services, templated units (`getty@tty1.service`), timers,
+    slices and paths.
 
 ## [0.13.7] — 2026-05-08
 
 ### Fixed
-- Регрессия v0.13.6: welcome system_event при создании чата ломал две вещи.
-  (1) Заголовок чата автогенерировался из первого user-турна, и им оказывался
-  `[Система] OpenAI · gpt-5.4-mini · …` — в сайдбаре чатов и в шапке. Теперь
-  `maybeAutoTitle` пропускает турны с префиксом `[Система]`: счётчик и сам
-  title считаются по «настоящим» пользовательским сообщениям. (2) В пустом
-  чате пропадали suggestion-кнопки (Обзор / Диагностика / Данные), потому
-  что welcome-турн делал `items.length` ненулевым; ChatMessageList теперь
-  считает чат пустым, если нет ни одного **не-`system_event`** items.
+- Regression in v0.13.6: the welcome system_event on chat creation broke two things.
+  (1) The chat title was auto-generated from the first user turn, and it turned out to be
+  `[System] OpenAI · gpt-5.4-mini · …` — in the chat sidebar and header. Now
+  `maybeAutoTitle` skips turns with the `[System]` prefix: the counter and the
+  title itself are computed over "real" user messages. (2) In an empty
+  chat the suggestion buttons (Overview / Diagnostics / Data) disappeared, because
+  the welcome turn made `items.length` non-zero; ChatMessageList now
+  considers the chat empty if there is not a single **non-`system_event`** item.
 
 ### Note
-- v0.13.6 был снят с публикации из-за этих регрессий — пользуйтесь v0.13.7.
+- v0.13.6 was unpublished due to these regressions — use v0.13.7.
 
 ## [0.13.6] — 2026-05-08
 
 ### Fixed
-- В скомпилированном бинаре (linux-x64, windows-x64, AppImage) фикстуры
-  системных скиллов не попадали внутрь и `seedSystemSkills` молча выходил
-  по ENOENT — таблица `skills` оставалась пустой, ни один системный скилл
-  нельзя было загрузить через `load_skill`. Теперь `scripts/build.ts`
-  отдельным шагом генерирует `embed-skills-manifest.ts` со статическими
-  `import s0 from './fixtures/skills/X.md' with { type: 'text' }`, и Bun
-  встраивает содержимое в бинарь как строки. В dev-режиме `seedSystemSkills`
-  по-прежнему читает с диска. Молчаливый ENOENT-return заменён на
-  `console.error` — такая регрессия больше не уйдёт незаметно. Параметрический
-  тест `tests/skills-parse.test.ts` теперь прогоняет `extractDescription` на
-  каждом шиппинговом `.md` и ловит скилл с невалидным первым абзацем до
-  коммита.
+- In the compiled binary (linux-x64, windows-x64, AppImage) the system-skill
+  fixtures didn't make it inside and `seedSystemSkills` silently exited
+  on ENOENT — the `skills` table stayed empty, not a single system skill
+  could be loaded via `load_skill`. Now `scripts/build.ts`
+  as a separate step generates `embed-skills-manifest.ts` with static
+  `import s0 from './fixtures/skills/X.md' with { type: 'text' }`, and Bun
+  embeds the contents into the binary as strings. In dev mode `seedSystemSkills`
+  still reads from disk. The silent ENOENT return is replaced with
+  `console.error` — such a regression will no longer slip away unnoticed. The parametric
+  test `tests/skills-parse.test.ts` now runs `extractDescription` on
+  every shipping `.md` and catches a skill with an invalid first paragraph before
+  a commit.
 
 ### Added
-- При создании нового чата сразу пишется ⚙ system_event со сводкой:
-  `Модель: <name> · инструменты: <N> · скиллы: <M>`. Если скиллов 0 — в
-  той же строке ⚠ предупреждение о баге сборки. Юзер видит, что заряжено,
-  до первого сообщения; если бинарь без встроенных fixtures — проблема
-  очевидна, а не закопана в server-stderr.
+- On creating a new chat a ⚙ system_event is immediately written with a summary:
+  `Model: <name> · tools: <N> · skills: <M>`. If there are 0 skills — in
+  the same line a ⚠ warning about a build bug. The user sees what is loaded,
+  before the first message; if the binary lacks embedded fixtures — the problem
+  is obvious, not buried in server stderr.
 
 ## [0.13.5] — 2026-05-08
 
 ### Fixed
-- `job_tail` теперь возвращает поле `state` (`running` / `exited` /
-  `unknown`) и при `running` — ещё и `_hint`, явно говорящий модели, что
-  лог неполный и финальный ответ давать рано. Раньше `job_tail`
-  бесшумно отдавал пустой/частичный хвост незавершённой задачи, и
-  модель, увидев «logs пустые», делала ложный вывод (например,
-  «обновлений нет», когда `apt update` ещё не дописал лог). Защита на
-  уровне инструмента, а не системного промпта — state теперь часть
-  данных, которую нельзя «забыть».
+- `job_tail` now returns a `state` field (`running` / `exited` /
+  `unknown`) and on `running` — also a `_hint`, explicitly telling the model that
+  the log is incomplete and it is too early to give a final answer. Previously `job_tail`
+  silently returned an empty/partial tail of an unfinished job, and
+  the model, seeing "logs empty", drew a false conclusion (e.g.,
+  "no updates", when `apt update` hadn't yet finished writing the log). The protection is at the
+  tool level, not the system prompt — state is now part of the
+  data that cannot be "forgotten".
 
 ## [0.13.4] — 2026-05-08
 
 ### Added
-- **OpenRouter** — пятый провайдер (`openrouter.ai/api/v1`, USD-биллинг
-  через `usage.cost`). 300+ моделей включая Claude, GPT, Gemini, Llama;
-  оплата картой или Alipay (можно пополнить из Сбербанка/ТБанка).
-  В настройках: остаток / куплено / потрачено через `GET /api/openrouter/info`,
-  лимиты ключа, rate-limit, free-tier флаг.
-- **Vision (multi-modal images)** — при отправке user-сообщения с
-  прикреплёнными `.png/.jpg/.gif/.webp` backend конвертирует токены
-  `[file:id:name]` в `image_url` (data URL + base64). Vision-модели
-  (gpt-4o, gpt-5.4-mini, claude-*) видят картинку нативно. У не-vision
-  моделей провайдер вернёт ошибку, которую `formatLlmError` распарсит.
-- **Архивы** (`zip` / `tar` / `tar.gz` / `tgz`) — три новых инструмента
-  с авто-детектом формата по magic-bytes:
-  - `list_archive_contents(fileId)` — листинг файлов внутри.
-  - `read_from_archive(fileId, path, encoding)` — чтение одного файла
-    напрямую (до 200KB).
-  - `extract_archive(fileId, paths?)` — извлечь всё или подмножество в
-    отдельные attachments чата. Работает и с архивами которые сама
-    модель собрала через `fetch_from_controller`.
-- **Per-provider rate-limit и retry** — поле «Минимальный интервал между
-  запросами, мс» в настройках. На 429 backend делает до 3 попыток с
-  backoff 3/8/20с, каждая попытка пишется в чат как system-event
-  «⏳ Провайдер вернул 429 (rate limit). Попытка N/3, жду Xс…».
-- **Кнопка «Повторить»** в баннере ошибки — повторяет запрос без
-  дублирования user-сообщения в DB (флаг `retryLast: true`).
-- **Per-provider `temperature`** — поле в настройках, null = дефолт
-  провайдера.
-- **Превью прикреплённых файлов** в чате: thumbnail для картинок (открывается
-  по клику в новой вкладке), chip с именем + коротким fileId для
-  остальных, кнопка × на hover чтобы удалить из чата. fileId виден в
-  чате — наглядно сопоставить с тем что модель читает.
-- **Real-time tokens / cost** в шапке чата: `usage` event эмитится после
-  каждой итерации agent-loop'а, не только в финале — счётчики
-  обновляются по ходу стрима.
-- **Подсказки про доступность из России** — tooltip и плашка под радио-
-  кнопкой провайдера: AITunnel (без VPN, оплата ₽), OpenRouter (Alipay,
-  пополнение из Сбербанка/ТБанка).
-- **Тесты** на новые функции (+19): парсер архивов, `pickContextLength`,
+- **OpenRouter** — the fifth provider (`openrouter.ai/api/v1`, USD billing
+  via `usage.cost`). 300+ models including Claude, GPT, Gemini, Llama;
+  payment by card or Alipay (can be topped up from Sber/T-Bank).
+  In settings: remaining / purchased / spent via `GET /api/openrouter/info`,
+  key limits, rate-limit, a free-tier flag.
+- **Vision (multi-modal images)** — when sending a user message with
+  attached `.png/.jpg/.gif/.webp` the backend converts the tokens
+  `[file:id:name]` into `image_url` (data URL + base64). Vision models
+  (gpt-4o, gpt-5.4-mini, claude-*) see the image natively. Non-vision
+  models return an error from the provider, which `formatLlmError` parses.
+- **Archives** (`zip` / `tar` / `tar.gz` / `tgz`) — three new tools
+  with auto-detection of the format by magic bytes:
+  - `list_archive_contents(fileId)` — listing the files inside.
+  - `read_from_archive(fileId, path, encoding)` — reading a single file
+    directly (up to 200KB).
+  - `extract_archive(fileId, paths?)` — extract all or a subset into
+    separate chat attachments. Also works with archives the model
+    itself assembled via `fetch_from_controller`.
+- **Per-provider rate-limit and retry** — a "Minimum interval between
+  requests, ms" field in settings. On 429 the backend makes up to 3 attempts with
+  a backoff of 3/8/20s, each attempt written to the chat as a system event
+  "⏳ The provider returned 429 (rate limit). Attempt N/3, waiting Xs…".
+- **A "Retry" button** in the error banner — retries the request without
+  duplicating the user message in the DB (the `retryLast: true` flag).
+- **Per-provider `temperature`** — a field in settings, null = the provider's
+  default.
+- **Previews of attached files** in the chat: a thumbnail for images (opens
+  on click in a new tab), a chip with the name + short fileId for
+  the rest, an × button on hover to remove from the chat. The fileId is visible in
+  the chat — easy to match with what the model reads.
+- **Real-time tokens / cost** in the chat header: the `usage` event is emitted after
+  each iteration of the agent loop, not only at the end — the counters
+  update as the stream goes.
+- **Hints about availability from Russia** — a tooltip and a banner under the radio
+  button of the provider: AITunnel (without a VPN, payment in ₽), OpenRouter (Alipay,
+  top-up from Sber/T-Bank).
+- **Tests** for the new features (+19): the archive parser, `pickContextLength`,
   `formatLlmError`.
-- **Авто-выгрузка скиллов при `checkpoint`** — после сжатия истории все
-  загруженные скиллы снимаются (модель перезагрузит если нужны для
-  следующей фазы). Раньше они продолжали инжектиться в каждый turn и
-  засоряли контекст.
-- Системный промт усилен в нескольких местах:
-  - **«Сказал — сделал в этом же ходу.»** Текст вида «сейчас проверю»,
-    «начну с» обязан сопровождаться tool_call в том же turn'е, иначе
-    стрим зависает на обещании.
-  - **«Запустил фоновую задачу — заверши ход и жди.»** После `ssh_exec_async`
-    не циклить `job_status` — 1 проверка, короткий ответ юзеру, стрим
-    завершить. Сервер автоматически пнёт через `[Система] Фоновая задача
-    завершена…` когда job → `exited`. Это и экономит токены, и не даёт
-    давать ответ на устаревшем кэше (`apt list --upgradable` до
-    завершения `apt update`).
-  - **«Пакет» в контексте контроллера WB = Debian-пакет (apt/dpkg).**
-    Зависимости — через `apt-cache depends`, не через GitHub
+- **Auto-unloading of skills on `checkpoint`** — after compacting the history all
+  loaded skills are unloaded (the model will reload them if needed for the
+  next phase). Previously they kept being injected into every turn and
+  cluttered the context.
+- The system prompt was reinforced in several places:
+  - **"Said it — did it in the same turn."** Text like "I'll check now",
+    "I'll start with" must be accompanied by a tool_call in the same turn, otherwise
+    the stream hangs on a promise.
+  - **"Started a background job — finish the turn and wait."** After `ssh_exec_async`
+    don't loop `job_status` — 1 check, a short reply to the user, finish the stream.
+    The server automatically pings via `[System] The background job
+    is done…` when the job → `exited`. This saves tokens and prevents
+    giving an answer on a stale cache (`apt list --upgradable` before
+    `apt update` finishes).
+  - **"Package" in the WB controller context = Debian package (apt/dpkg).**
+    Dependencies — via `apt-cache depends`, not via GitHub
     `package.json`.
-  - **Описание скилла `diagrams`** триггерится явными ключевыми словами
-    («диаграмма», «схема», «mermaid», «flowchart», «архитектура»…), чтобы
-    модель загружала его при запросах визуализации.
-  - **Пинок после `checkpoint`** — system-msg прямо просит продолжить
-    задачу или дать финальный ответ, не виснуть на «дальше проверю».
+  - **The description of the `diagrams` skill** is triggered by explicit keywords
+    ("diagram", "scheme", "mermaid", "flowchart", "architecture"…), so the
+    model loads it on visualization requests.
+  - **A nudge after `checkpoint`** — a system message explicitly asks to continue
+    the task or give a final answer, not to hang on "I'll check next".
 
 ### Changed
-- При переключении провайдера в настройках авто-сохранение немедленно
-  (как с auto-save API-ключа) — иначе info-эндпоинты возвращали 400.
-  Окно настроек НЕ закрывается на авто-сохранении, только при явном
-  «Сохранить» (новое событие `autoSaved`).
-- Чекбокс «Клиентское авто-сжатие» теперь видим только у провайдеров с
-  серверным сжатием (AITunnel/OpenRouter). У остальных клиентское
-  сжатие принудительно вкл.
-- Для AITunnel и OpenRouter общая логика: одна галочка переключает
-  серверное сжатие провайдера ↔ клиентский checkpoint. Дефолт — серверное.
-- Превью изображений + чипы файлов прижаты вправо (выровнены по
-  user-message). Кнопка копирования у user/assistant — в правом верхнем
-  углу bubble, появляется на hover, с подложкой в цвет соответствующего
-  bubble. Раньше выглядела как квадрат поверх текста.
-- Системный промт усилен: при пустом контексте и вопросе про ОДИН
-  контроллер модель обязана уточнить какой именно (или подтвердить «на
-  любом») — не выбирать первый из `list_controllers` по умолчанию.
+- When switching the provider in settings, auto-save is immediate
+  (like the API-key auto-save) — otherwise the info endpoints returned 400.
+  The settings window does NOT close on auto-save, only on an explicit
+  "Save" (a new `autoSaved` event).
+- The "Client-side auto-compaction" checkbox is now visible only for providers with
+  server-side compaction (AITunnel/OpenRouter). For the rest client-side
+  compaction is forced on.
+- For AITunnel and OpenRouter there is shared logic: a single checkbox toggles
+  the provider's server-side compaction ↔ a client-side checkpoint. The default is server-side.
+- Image previews + file chips are pushed to the right (aligned with the
+  user message). The copy button for user/assistant — in the top-right
+  corner of the bubble, appears on hover, with a backing in the color of the corresponding
+  bubble. Previously it looked like a square on top of the text.
+- The system prompt was reinforced: with an empty context and a question about ONE
+  controller the model is required to clarify which exactly (or confirm "any
+  one") — not to pick the first from `list_controllers` by default.
 
 ### Fixed
-- В dev-сборке Vite не пробрасывал WebSocket на `/api/ssh/<sn>/shell` —
-  SSH-терминал не открывался. `ws: true` в `vite.config.ts`.
-- `selectChat` инициализирует `liveTurns[id]` shallow-копией всей
-  истории — раньше при отправке нового сообщения персистентная история
-  могла исчезнуть из UI (live + 2 новых turns обгоняли persisted).
-- Шапка чата (tokens / cost / context %) не обновлялась после стрима —
-  computed читали `activeChat.turns`, который больше не пересоздаётся
-  при in-place merge. Переключены на live с fallback.
-- `selectChat` не дублирует user-msg при отправке через нажатие Enter
-  на завершении предыдущего стрима (race fix: `streaming = false`
-  снимается только после полной перезагрузки чата).
-- `await nextTick()` после оптимистичной вставки в `liveTurns` — Vue
-  гарантированно перерисует user-message до начала стрима, иначе при
-  мгновенном ответе модели юзер видел всё разом.
-- `runningJobs` обновляется только при реальной смене состава задач —
-  раньше каждые 3 секунды массив пересоздавался и Vue ре-рендерил группы
-  с running-баннером.
-- `GET /api/chats/:id/jobs` больше не делает SSH `jobStatus` синхронно
-  на каждый UI-tick. Состояние задач обновляется фоновым tracker'ом
-  (`startJobTracker` в `jobs.ts`, опрос раз в 5с) — UI не висит на
-  handshake-таймауте недоступного контроллера.
-- SSH `HANDSHAKE_TIMEOUT` 15с (вместо 4с) + retry с backoff 5/10/20с
-  только при handshake-таймауте. Свежезагруженный контроллер больше не
-  выкидывает «Timed out while waiting for handshake».
-- Title чата чистится от `[file:...]` токенов — раньше попадал прямо
-  в название чата.
-- Баннер ошибок: иконка ⚠, жирный заголовок, детали мелким шрифтом, URL
-  кликабельные, кнопки «↻ Повторить» и «×» чтобы скрыть.
+- In the dev build Vite didn't proxy the WebSocket to `/api/ssh/<sn>/shell` —
+  the SSH terminal didn't open. `ws: true` in `vite.config.ts`.
+- `selectChat` initializes `liveTurns[id]` with a shallow copy of the whole
+  history — previously, when sending a new message, persistent history
+  could disappear from the UI (live + 2 new turns overtook persisted).
+- The chat header (tokens / cost / context %) didn't update after a stream —
+  the computeds read `activeChat.turns`, which is no longer recreated
+  on in-place merge. Switched to live with a fallback.
+- `selectChat` doesn't duplicate the user message when sending via pressing Enter
+  at the completion of the previous stream (race fix: `streaming = false`
+  is cleared only after a full chat reload).
+- `await nextTick()` after the optimistic insert into `liveTurns` — Vue
+  is guaranteed to redraw the user message before the stream starts, otherwise on an
+  instant model reply the user saw everything at once.
+- `runningJobs` updates only on a real change of the job set —
+  previously every 3 seconds the array was recreated and Vue re-rendered the groups
+  with the running banner.
+- `GET /api/chats/:id/jobs` no longer does an SSH `jobStatus` synchronously
+  on every UI tick. Job state is updated by a background tracker
+  (`startJobTracker` in `jobs.ts`, polling every 5s) — the UI doesn't hang on
+  the handshake timeout of an unreachable controller.
+- SSH `HANDSHAKE_TIMEOUT` 15s (instead of 4s) + retry with a backoff of 5/10/20s
+  only on a handshake timeout. A freshly booted controller no longer
+  throws "Timed out while waiting for handshake".
+- The chat title is cleaned of `[file:...]` tokens — previously it got straight
+  into the chat name.
+- The error banner: a ⚠ icon, a bold title, details in small font, clickable
+  URLs, "↻ Retry" and "×" buttons to hide it.
 
 ### Fixed
-- В dev-сборке (`bun run dev:web` + `bun run dev:server`) SSH-терминал
-  не открывался — Vite proxy не пробрасывал WebSocket-апгрейд на
-  `/api/ssh/<sn>/shell`, и xterm.js получал «WebSocket error».
-  Добавлен `ws: true` в `vite.config.ts`. На prod-сборке (один процесс)
-  баг не воспроизводился — он касался только dev-окружения.
-- Регресс из 0.13.3: после стрима персистентная история чата могла
-  «исчезнуть» при отправке нового сообщения. `selectChat` инициализировал
-  `liveTurns[id] = []` пустышкой, потом `prevHistory` через `??` брал
-  пустой массив, и новый user-msg + assistant перезаписывали всю
-  накопленную ленту. Теперь при выборе чата `liveTurns[id]` сразу
-  заполняется shallow-копией всей истории (без system) — live становится
-  единственным источником правды для рендера, не зависящим от
+- In the dev build (`bun run dev:web` + `bun run dev:server`) the SSH terminal
+  didn't open — the Vite proxy didn't pass the WebSocket upgrade to
+  `/api/ssh/<sn>/shell`, and xterm.js got a "WebSocket error".
+  Added `ws: true` to `vite.config.ts`. In the prod build (one process) the
+  bug didn't reproduce — it concerned only the dev environment.
+- A regression from 0.13.3: after a stream the persistent chat history could
+  "disappear" when sending a new message. `selectChat` initialized
+  `liveTurns[id] = []` with an empty stub, then `prevHistory` via `??` took
+  the empty array, and the new user message + assistant overwrote the whole
+  accumulated feed. Now on selecting a chat `liveTurns[id]` is immediately
+  filled with a shallow copy of the whole history (without system) — live becomes
+  the single source of truth for rendering, independent of
   `activeChat.turns`.
-- Баннер ошибок в шапке чата стал читаемым: иконка ⚠, жирный
-  заголовок («Недостаточно средств на счёте провайдера (402)»), детали
-  мелким шрифтом, URL в тексте кликабельные, кнопка «×» чтобы скрыть.
-  Раньше всё было одной длинной красной строкой.
+- The error banner in the chat header became readable: a ⚠ icon, a bold
+  title ("Insufficient funds in the provider's account (402)"), details
+  in small font, URLs in the text clickable, an "×" button to hide it.
+  Previously it was all one long red line.
 
 ## [0.13.3] — 2026-05-07
 
 ### Fixed
-- Сообщение, отправленное по Enter в момент окончания ответа модели, больше
-  не «теряется» и не появляется не на своём месте. Race condition в
-  `sendMessage` finally: `streaming.value = false` ставился ДО
-  `await api.getChat(id)` + `delete liveTurns[id]`, и юзер успевал
-  нажать Enter в эту паузу — второй `sendMessage` создавал свой
-  `liveTurns[id]`, который тут же затирался старым finally.
-- User-сообщение могло отрисовываться вместе с первым ответом модели
-  (когда модель отвечает мгновенно). Добавлен `await nextTick()` после
-  оптимистичной вставки в `liveTurns` — Vue гарантированно перерисует
-  баббл с user-message до начала стрим-ответа.
-- Чат «дёргался» периодически в двух местах:
-  - `refreshJobs()` каждые 3 секунды заменял `runningJobs.value` на новый
-    array даже если состав не менялся — теперь обновление только при
-    реальном изменении состояния задач.
-  - После стрима делался полный `patchLocalChat(c)` — `activeChat.value`
-    подменялся новым объектом, ChatMessageList перерендеривал
-    markdown/highlight/mermaid. Теперь in-place обновляются только
-    counters + tokens на последнем assistant turn; live-state остаётся
-    источником правды до переключения чата.
-- SSH handshake-таймаут к свежезагруженному контроллеру:
-  `Timed out while waiting for handshake`. Раньше использовался один
-  `CONNECT_TIMEOUT = 4 с`, на armv7 после reboot RSA-3072 init не
-  успевал. Введён отдельный `HANDSHAKE_TIMEOUT = 15 с` + retry с backoff
-  5/10/20 с (только при handshake-таймауте, auth-ошибки не ретраются).
+- A message sent with Enter at the moment the model's reply finishes no longer
+  "gets lost" and doesn't appear in the wrong place. A race condition in
+  `sendMessage` finally: `streaming.value = false` was set BEFORE
+  `await api.getChat(id)` + `delete liveTurns[id]`, and the user managed
+  to press Enter in that pause — the second `sendMessage` created its own
+  `liveTurns[id]`, which was immediately wiped by the old finally.
+- A user message could be drawn together with the model's first reply
+  (when the model replies instantly). Added `await nextTick()` after
+  the optimistic insert into `liveTurns` — Vue is guaranteed to redraw the
+  bubble with the user message before the stream reply starts.
+- The chat "jittered" periodically in two places:
+  - `refreshJobs()` every 3 seconds replaced `runningJobs.value` with a new
+    array even if the set didn't change — now the update happens only on a
+    real change of job state.
+  - After a stream a full `patchLocalChat(c)` was done — `activeChat.value`
+    was swapped with a new object, ChatMessageList re-rendered
+    markdown/highlight/mermaid. Now only counters + tokens are updated in-place
+    on the last assistant turn; live state stays the
+    source of truth until switching chats.
+- An SSH handshake timeout to a freshly booted controller:
+  `Timed out while waiting for handshake`. Previously a single
+  `CONNECT_TIMEOUT = 4 s` was used, on armv7 after a reboot the RSA-3072 init
+  didn't manage in time. A separate `HANDSHAKE_TIMEOUT = 15 s` was introduced + retry with a backoff
+  of 5/10/20 s (only on a handshake timeout, auth errors are not retried).
 
 ### Changed
-- Textarea ввода НЕ блокируется во время ответа модели — юзер может
-  набирать следующий вопрос. Если нажать Enter пока модель ещё пишет —
-  под полем ввода появляется мягкая подсказка: «Модель ещё отвечает.
-  Дождись её ответа и нажми Enter ещё раз — или нажми «■ Прервать», и
-  можно будет отправить сразу.» Введённый текст сохраняется.
+- The input textarea is NOT blocked during the model's reply — the user can
+  type the next question. If you press Enter while the model is still writing —
+  a soft hint appears under the input field: "The model is still replying.
+  Wait for its reply and press Enter again — or press "■ Interrupt", and
+  you can send right away." The entered text is preserved.
 
 ## [0.13.2] — 2026-05-07
 
 ### Fixed
-- Баннер фоновой задачи больше не мерцает / не пропадает во время длинных
-  ответов модели и пока контроллер недоступен (например, при `apt upgrade`
-  с обновлением ядра и reboot). Две причины:
-  1. `GET /api/chats/:id/jobs` дёргал SSH `jobStatus` для каждой running-job
-     синхронно. На недоступном контроллере запрос висел до handshake-таймаута
-     (~20 с), параллельные UI-poll'ы накладывались, и иногда один из них
-     возвращал устаревший / несогласованный state — баннер исчезал.
-  2. `refreshJobs()` на стороне UI при любой ошибке сбрасывал
-     `runningJobs = []`, и баннер пропадал на 1–2 секунды до следующего
-     успешного polling.
+- The background-job banner no longer flickers / disappears during long
+  model replies and while the controller is unreachable (e.g., during `apt upgrade`
+  with a kernel update and reboot). Two causes:
+  1. `GET /api/chats/:id/jobs` called SSH `jobStatus` for each running job
+     synchronously. On an unreachable controller the request hung until the handshake timeout
+     (~20 s), parallel UI polls overlapped, and sometimes one of them
+     returned a stale / inconsistent state — the banner disappeared.
+  2. `refreshJobs()` on the UI side, on any error, reset
+     `runningJobs = []`, and the banner vanished for 1–2 seconds until the next
+     successful poll.
 
 ### Changed
-- Обновление состояния running-задач вынесено в фоновый tracker
-  (`startJobTracker` в `jobs.ts`): каждые 5 секунд бэкенд опрашивает
-  SSH `jobStatus`, не блокируя UI-endpoint. Транзиентная SSH-ошибка
-  оставляет `state: running` до следующей попытки. UI получает текущий
-  in-memory state мгновенно. Когда задача завершилась — frontend
-  следующим тиком видит `state: exited` и автоматически уведомляет модель.
+- Updating the state of running jobs is moved to a background tracker
+  (`startJobTracker` in `jobs.ts`): every 5 seconds the backend polls
+  SSH `jobStatus` without blocking the UI endpoint. A transient SSH error
+  leaves `state: running` until the next attempt. The UI gets the current
+  in-memory state instantly. When a job finishes — the frontend
+  on the next tick sees `state: exited` and automatically notifies the model.
 
 ## [0.13.1] — 2026-05-07
 
 ### Fixed
-- При создании нового чата (кнопка «+») контекст больше не наследуется
-  от текущего активного чата. Раньше `newChat()` копировал `selectedSns`
-  из открытого чата, и SN «прилипал» — после перезапуска казалось, что
-  приложение само выбрало контроллер. Каждый новый чат теперь стартует
-  с пустым контекстом.
+- When creating a new chat (the "+" button) the context is no longer inherited
+  from the current active chat. Previously `newChat()` copied `selectedSns`
+  from the open chat, and the SN "stuck" — after a restart it looked like
+  the app had picked a controller itself. Every new chat now starts
+  with an empty context.
 
 ## [0.13.0] — 2026-05-07
 
 ### Added
-- **AITunnel** — новый провайдер (api.aitunnel.ru/v1, RUB-биллинг через
-  `usage.cost_rub`). Баланс / 30-дневная статистика / email прямо в
-  настройках через `GET /api/aitunnel/info`; прогноз «хватит на N дней»
-  и подсветка красным когда дней <3.
-- **Per-provider контекст**: `contextWindow`, `compactModel`, `autoCompact`,
-  `autoCompactThreshold`, `temperature` теперь у каждого провайдера свои.
-- **Авто-определение контекстного окна** из `/v1/models` (поля
+- **AITunnel** — a new provider (api.aitunnel.ru/v1, RUB billing via
+  `usage.cost_rub`). Balance / 30-day stats / email right in
+  settings via `GET /api/aitunnel/info`; a "will last N days" forecast
+  and a red highlight when days < 3.
+- **Per-provider context**: `contextWindow`, `compactModel`, `autoCompact`,
+  `autoCompactThreshold`, `temperature` are now each provider's own.
+- **Auto-detection of the context window** from `/v1/models` (fields
   `context_length` / `context_window` / `top_provider.context_length` /
-  `max_input_tokens` — покрывает OpenRouter, LiteLLM, Ollama-compat).
-- **Авто-сжатие контекста**: клиентский watch на ratio заполнения с
-  настраиваемым порогом; при превышении автоматически шлёт `checkpoint`,
-  опционально через отдельную (более дешёвую) `compactModel`.
-- **Понятные ошибки провайдера** — `formatLlmError()` парсит структуру
-  AITunnel `{error: {code, message, metadata}}` и стандартный OpenAI shape:
-  401 «недействительный ключ», 402 «недостаточно средств», 403 «модерация»
-  (с reasons / flagged_input / provider_name), 408/429/502.
-- **Auto-save API-ключа** на ввод (debounce 600 мс).
-- **`temperature`** как опциональное per-provider поле (пусто = дефолт
-  провайдера).
+  `max_input_tokens` — covers OpenRouter, LiteLLM, Ollama-compat).
+- **Context auto-compaction**: a client-side watch on the fill ratio with
+  a configurable threshold; on exceeding it automatically sends a `checkpoint`,
+  optionally via a separate (cheaper) `compactModel`.
+- **Readable provider errors** — `formatLlmError()` parses the
+  AITunnel structure `{error: {code, message, metadata}}` and the standard OpenAI shape:
+  401 "invalid key", 402 "insufficient funds", 403 "moderation"
+  (with reasons / flagged_input / provider_name), 408/429/502.
+- **API-key auto-save** on input (debounce 600 ms).
+- **`temperature`** as an optional per-provider field (empty = the provider's
+  default).
 
 ### Changed
-- Чекпоинт-стрим теперь использует `compactModel` (если задан) только для
-  одного вызова — основная модель не подменяется.
-- Прогресс-бар контекста и кнопка «📦 сжать» в шапке чата скрыты, когда
-  `autoCompact` отключён (для AITunnel — по умолчанию).
-- `ssh_exec` фильтрует stderr-шум `WARNING: apt does not have a stable
-  CLI interface...`; для `apt list --upgradable` без свежего `apt-get
-  update` подсказывает обновить кэш и подгрузить скилл `controller-update`.
+- The checkpoint stream now uses `compactModel` (if set) only for
+  a single call — the main model is not swapped.
+- The context progress bar and the "📦 compact" button in the chat header are hidden when
+  `autoCompact` is off (for AITunnel — by default).
+- `ssh_exec` filters the stderr noise `WARNING: apt does not have a stable
+  CLI interface...`; for `apt list --upgradable` without a fresh `apt-get
+  update` it suggests refreshing the cache and loading the `controller-update` skill.
 
 [Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.22...HEAD
 [0.13.22]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.21...v0.13.22

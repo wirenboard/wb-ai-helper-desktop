@@ -7,13 +7,13 @@ import type { TopLevelSpec } from 'vega-lite'
 import type { HistorySeries } from './tools.ts'
 
 export type ChartType =
-  | 'line'      // время-ряд линиями (по умолчанию)
-  | 'bar'       // столбики во времени (для дискретных событий, бинарных каналов)
-  | 'area'      // заливка под линией (накопления, доля)
-  | 'point'     // скаттер (редкие точки, выбросы)
-  | 'histogram' // распределение значений: x=бины значений, y=кол-во точек
-  | 'heatmap'   // плотность: x=время, y=бины значений, color=кол-во (видно «обычный» уровень и выбросы)
-  | 'boxplot'   // ящики с усами по периодам — min/max/median/quartiles
+  | 'line'      // time series as lines (default)
+  | 'bar'       // bars over time (for discrete events, binary channels)
+  | 'area'      // fill under the line (accumulation, share)
+  | 'point'     // scatter (sparse points, outliers)
+  | 'histogram' // value distribution: x=value bins, y=point count
+  | 'heatmap'   // density: x=time, y=value bins, color=count (shows "normal" level and outliers)
+  | 'boxplot'   // box-and-whisker per period — min/max/median/quartiles
 
 interface FlatPoint {
   t: string
@@ -142,7 +142,7 @@ export async function renderHistoryChart(
     config: baseConfig,
   }
 
-  // ─── histogram: распределение значений по бинам ──────────────────────
+  // ─── histogram: value distribution across bins ──────────────────────
   if (chartType === 'histogram') {
     return await renderSpec({
       ...baseSpec,
@@ -160,12 +160,12 @@ export async function renderHistoryChart(
     })
   }
 
-  // ─── heatmap: x=время-биннированное, y=значение-биннированное ────────
+  // ─── heatmap: x=time-binned, y=value-binned ─────────────────────────
   if (chartType === 'heatmap') {
     const tu = durationSec <= 7 * 86400 ? 'yearmonthdatehours' : 'yearmonthdate'
     const heatmapMark = { type: 'rect' as const, tooltip: true }
     if (seriesCount > 1) {
-      // Один heatmap на каждую серию, идут вертикально друг над другом
+      // One heatmap per series, stacked vertically
       return await renderSpec({
         ...baseSpec,
         data: { values },
@@ -195,7 +195,7 @@ export async function renderHistoryChart(
     })
   }
 
-  // ─── boxplot: разброс по периодам (час / день в зависимости от длины) ─
+  // ─── boxplot: spread per period (hour / day depending on span) ───────
   if (chartType === 'boxplot') {
     const tu = durationSec <= 86400 ? 'hours' : durationSec <= 7 * 86400 ? 'yearmonthdate' : 'yearweek'
     return await renderSpec({
@@ -210,7 +210,7 @@ export async function renderHistoryChart(
     })
   }
 
-  // ─── line / bar / area / point — все time-series виды ────────────────
+  // ─── line / bar / area / point — all time-series kinds ──────────────
   const markType: 'line' | 'bar' | 'area' | 'point' =
     chartType === 'bar' ? 'bar' :
     chartType === 'area' ? 'area' :
@@ -263,7 +263,7 @@ export async function renderHistoryChart(
     })
     return await renderSpec({ ...baseSpec, data: { values }, layer: layers, resolve: { scale: { y: 'independent' } } } as any)
   }
-  // 3+ единиц — нормализация
+  // 3+ units — normalization
   const legendLabels = nonEmpty.map(s => {
     const base = labelMap.get(s)!
     const range = `${s.min.toFixed(2)}…${s.max.toFixed(2)}${s.units ? ` ${s.units}` : ''}`

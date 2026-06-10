@@ -1,7 +1,7 @@
-// Smoke-тест: запускает свежесобранный бинарник, дёргает /api/health и /api/controllers,
-// проверяет что фронтенд (index.html) встроен. Завершается с кодом 0 если всё ОК.
+// Smoke test: runs the freshly built binary, hits /api/health and /api/controllers,
+// verifies the frontend (index.html) is embedded. Exits 0 if all OK.
 //
-// Использование:  bun scripts/smoke.ts [path-to-binary]
+// Usage:  bun scripts/smoke.ts [path-to-binary]
 
 import { spawn } from 'node:child_process'
 import { copyFileSync, existsSync, mkdtempSync, rmSync, chmodSync } from 'node:fs'

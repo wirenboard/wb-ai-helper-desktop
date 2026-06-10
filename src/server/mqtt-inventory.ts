@@ -1,18 +1,17 @@
-// Парсеры и билдер inventory-снимка для tool'а `mqtt_inventory`.
-// Вынесены в отдельный модуль, чтобы покрыть unit-тестами без mock-MQTT —
-// handler в tools.ts вытаскивает топики через MqttPool.listTopics и
-// прогоняет их через `buildInventory`.
+// Parsers and inventory-snapshot builder for the `mqtt_inventory` tool.
+// Split into its own module to unit-test without mock MQTT — the handler in
+// tools.ts pulls topics via MqttPool.listTopics and feeds them through
+// `buildInventory`.
 
 /** WB MQTT Conventions error codes (https://github.com/wirenboard/conventions):
  *    `r` — read error / device reports an error;
  *    `w` — write error;
- *    `p` — period miss (драйвер не успел опросить вовремя).
- *  Комбинации возможны: "rw", "rp", "rwp". Пустая строка / null = нет ошибок.
+ *    `p` — period miss (driver didn't poll in time).
+ *  Combinations possible: "rw", "rp", "rwp". Empty string / null = no errors.
  *
- *  Важный нюанс: при `read=true` значение в value-топике — это
- *  last-known-good (последнее успешно прочитанное), а не текущий live-readout.
- *  Без этого знания модель часто делает неверный вывод вида «датчик в офлайне,
- *  но MQTT показывает 23°C». */
+ *  Key caveat: when `read=true` the value-topic value is last-known-good (last
+ *  successful read), not the current live readout. Without this the model often
+ *  draws a wrong conclusion like "sensor is offline but MQTT shows 23°C". */
 export type ErrorFlags = {
   raw: string
   read: boolean
@@ -37,7 +36,7 @@ export function parseErrorFlags(raw: string | undefined | null): ErrorFlags | un
 
 export type Control = {
   name: string
-  /** Когда `error.read=true` — это last-known-good (per WB Conventions). */
+  /** When `error.read=true` this is last-known-good (per WB Conventions). */
   value?: string
   type?: string
   units?: string
@@ -48,7 +47,7 @@ export type Control = {
   precision?: number
   error?: ErrorFlags
   title?: unknown
-  /** Полный raw meta-объект, попадает только при includeMeta=true. */
+  /** Full raw meta object, included only when includeMeta=true. */
   meta?: Record<string, unknown>
 }
 
@@ -77,13 +76,13 @@ function parseMetaJson(s: string): Record<string, unknown> | null {
   }
 }
 
-/** Собрать inventory-снимок из плоского списка retained-топиков
- *  (`/devices/#` после `MqttPool.listTopics`). Чистая функция, тестируется
- *  без сети.
+/** Build an inventory snapshot from a flat list of retained topics
+ *  (`/devices/#` from `MqttPool.listTopics`). Pure function, tested without
+ *  a network.
  *
- *  - filter: подстрока для фильтрации device_id (case-insensitive)
- *  - includeEmpty: оставлять устройства без контролов (только с meta)
- *  - includeMeta: класть весь raw meta-объект в каждый control'е
+ *  - filter: substring to filter device_id by (case-insensitive)
+ *  - includeEmpty: keep devices with no controls (meta only)
+ *  - includeMeta: attach the full raw meta object to each control
  */
 export function buildInventory(
   topics: Iterable<readonly [string, string]>,
@@ -133,9 +132,9 @@ export function buildInventory(
     const ctrlMatch = rest.match(/^controls\/(.+)$/)
     if (!ctrlMatch) continue
     const ctrlPart = ctrlMatch[1]!
-    // Имя контрола может содержать `/` только в виде `/meta` или `/meta/<key>`;
-    // во всех остальных случаях это часть имени (имена с пробелами уже
-    // обрабатываются на уровне MQTT-парсинга).
+    // A control name may contain `/` only as `/meta` or `/meta/<key>`; in all
+    // other cases it's part of the name (names with spaces are already handled
+    // at the MQTT-parsing level).
     const subMatch = ctrlPart.match(/^(.+?)\/meta(?:\/(.+))?$/)
     if (subMatch) {
       const ctrlName = subMatch[1]!
@@ -166,7 +165,7 @@ export function buildInventory(
         else if (metaKey === 'error') c.error = parseErrorFlags(payload)
       }
     } else {
-      // /devices/<id>/controls/<name> — value-топик
+      // /devices/<id>/controls/<name> — value topic
       const c = ensureCtrl(d, ctrlPart)
       c.value = payload
     }

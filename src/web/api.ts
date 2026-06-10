@@ -35,12 +35,12 @@ export function turnsToItems(turns: ChatTurn[], chatId: string): ChatItem[] {
   for (let i = 0; i < turns.length; i++) {
     const t = turns[i]!
     if (t.role === 'user') {
-      if (t.content.startsWith('[Система]')) {
-        items.push({ type: 'system_event', text: t.content.slice('[Система]'.length).trim().split('\n')[0]! })
+      if (t.content.startsWith('[System]')) {
+        items.push({ type: 'system_event', text: t.content.slice('[System]'.length).trim().split('\n')[0]! })
         continue
       }
-      // Парсим токены вложений `[file:id:name]` (вставляются ChatInputArea
-      // при отправке). Image-расширения помечаем для рендера thumbnail.
+      // Parse `[file:id:name]` attachment tokens (inserted by ChatInputArea
+      // on send). Image extensions get flagged for thumbnail rendering.
       const attachments: ChatItemUserAttachment[] = []
       const text = t.content.replace(/\[file:([^:\]]+):([^\]]+)\]\s*/g, (_match, id: string, name: string) => {
         attachments.push({ id, name, isImage: /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name) })
@@ -101,11 +101,10 @@ export function turnsToItems(turns: ChatTurn[], chatId: string): ChatItem[] {
   }
   for (let i = inserts.length - 1; i >= 0; i--) items.splice(inserts[i]!.at, 0, inserts[i]!.item)
 
-  // Считаем tool_call'ы, накопленные между предыдущим user-сообщением (или
-  // assistant_text-ом) и каждым ассистент-сообщением. Это число рендерится в
-  // подвале сообщения рядом с токенами/стоимостью, чтобы было очевидно: $0.05
-  // включает не только генерацию финального текста, но и все промежуточные
-  // LLM-вызовы для tool-iterations этого стрима.
+  // Count tool_calls accumulated between the previous user (or assistant_text)
+  // message and each assistant message. Rendered in the message footer next to
+  // tokens/cost to make clear that $0.05 covers not just the final text but all
+  // intermediate LLM calls for this stream's tool iterations.
   let toolsSince = 0
   for (const it of items) {
     if (it.type === 'tool_call') {
@@ -186,8 +185,7 @@ export const PROVIDER_INFO: Record<LlmProvider, ProviderInfo & { apiFormat: ApiF
     label: 'AITunnel',
     defaultBaseURL: 'https://api.aitunnel.ru/v1',
     currency: 'RUB',
-    // aitunnel сам считает стоимость в каждом ответе (usage.cost_rub) —
-    // ручные цены не нужны.
+    // aitunnel reports cost per response (usage.cost_rub) — no manual prices.
     pricesEditable: false,
     signupUrl: 'https://aitunnel.ru/',
     apiFormat: 'openai',
@@ -199,7 +197,7 @@ export const PROVIDER_INFO: Record<LlmProvider, ProviderInfo & { apiFormat: ApiF
     label: 'OpenRouter',
     defaultBaseURL: 'https://openrouter.ai/api/v1',
     currency: 'USD',
-    // OpenRouter возвращает usage.cost — ручные цены не нужны.
+    // OpenRouter returns usage.cost — no manual prices.
     pricesEditable: false,
     signupUrl: 'https://openrouter.ai/keys',
     apiFormat: 'openai',
@@ -250,9 +248,8 @@ export const COPILOT_MULTIPLIERS: Record<string, string> = {
 }
 
 /**
- * Известные размеры контекстного окна по имени модели. UI показывает
- * заполнение `↑X / 128k` в шапке чата. Юзер может переопределить через
- * ProviderConfig.contextWindow.
+ * Known context-window sizes by model name. UI shows `↑X / 128k` fill in the
+ * chat header. User can override via ProviderConfig.contextWindow.
  */
 export const MODEL_CONTEXT: Record<string, number> = {
   // OpenAI
@@ -277,21 +274,21 @@ export const MODEL_CONTEXT: Record<string, number> = {
   'gpt-5.5':            400_000,
   'gpt-5.3-codex':      400_000,
   'gpt-5.2-codex':      400_000,
-  // Claude (через MITM-прокси, OpenAI-совместимый формат)
+  // Claude (via MITM proxy, OpenAI-compatible format)
   'claude-haiku-4.5':    200_000,
   'claude-sonnet-4':     200_000,
   'claude-sonnet-4.5':   200_000,
   'claude-sonnet-4.6':   200_000,
   'claude-opus-4.5':     200_000,
   'claude-opus-4.7':     200_000,
-  // Прочее
+  // Other
   'gemini-2.5-pro':        1_000_000,
   'gemini-3.1-pro-preview':2_000_000,
   'grok-code-fast-1':        256_000,
 }
 
-/** Разумный дефолт когда конкретная модель не в таблице. 128k — медиана для
- * современных чат-моделей. Юзер может переопределить через ProviderConfig.contextWindow. */
+/** Sensible default when the model isn't in the table. 128k is the median for
+ * modern chat models. User can override via ProviderConfig.contextWindow. */
 const DEFAULT_CONTEXT_WINDOW = 128_000
 
 export function contextWindowOf(model: string, override?: number | null): number {
@@ -312,16 +309,16 @@ export type ProviderConfigPublic = {
   priceOutput: number | null
   priceCached: number | null
   contextWindow: number | null
-  /** Опциональная (обычно более дешёвая) модель для сжатия контекста.
-   * Пустая строка → используется основная `model`. */
+  /** Optional (usually cheaper) model for context compaction.
+   * Empty string → use the main `model`. */
   compactModel: string
-  /** Авто-сжатие при заполнении контекстного окна (per-provider). */
+  /** Auto-compact when the context window fills up (per-provider). */
   autoCompact: boolean
-  /** Порог заполнения контекстного окна (0..1) для автосжатия (per-provider). */
+  /** Context-fill threshold (0..1) for auto-compaction (per-provider). */
   autoCompactThreshold: number
   /** Sampling temperature override (per-provider). null = use provider default. */
   temperature: number | null
-  /** Минимальный интервал между запросами к провайдеру, мс. null = нет троттлинга. */
+  /** Min interval between provider requests, ms. null = no throttling. */
   minRequestIntervalMs: number | null
   apiKeyConfigured: boolean
   llmProxyPasswordConfigured: boolean
@@ -354,6 +351,7 @@ export type Settings = {
   sshKeyPath: string
   discoveryInterval: number
   openBrowser: boolean
+  uiLanguage: 'ru' | 'en'
   mqttPasswordConfigured: boolean
   sshPasswordConfigured: boolean
   storagePath: string
@@ -375,6 +373,7 @@ export type SettingsPatch = Partial<{
   sshKeyPath: string
   discoveryInterval: number
   openBrowser: boolean
+  uiLanguage: 'ru' | 'en'
   priceInput: number | null
   priceOutput: number | null
   priceCached: number | null
@@ -447,10 +446,10 @@ export const api = {
     }).then((r) => json<Chat>(r)),
   deleteChat: (id: string) =>
     fetch(`/api/chats/${id}`, { method: 'DELETE' }).then((r) => json<{ ok: true }>(r)),
-  /** Принудительное сжатие истории чата (деструктивно). Сохраняет system-турн +
-   *  последний user-msg и всё после него; промежуточные turns заменяются одним
-   *  synthetic [Система] уведомлением. Возвращает количество удалённых turns
-   *  и обновлённый chat. Вызывается фронтом при ratio >= HARD_COMPACT_RATIO. */
+  /** Force chat-history compaction (destructive). Keeps the system turn + the
+   *  last user msg and everything after it; intermediate turns are replaced by a
+   *  single synthetic [System] notice. Returns the count of removed turns and the
+   *  updated chat. Called by the frontend when ratio >= HARD_COMPACT_RATIO. */
   forceCompact: (id: string, reason: string) =>
     fetch(`/api/chats/${id}/force-compact`, {
       method: 'POST',
@@ -463,11 +462,10 @@ export const api = {
       .then((r) => json<{ ok: true }>(r)),
 
   /** Send a message and stream SSE events.
-   * `compact: true` сигнализирует backend использовать configured `compactModel`
-   * (если задан) для этого вызова — вместо основной модели.
-   * `retryLast: true` — backend НЕ добавляет user-turn повторно (использует
-   * последний из DB), text может быть пустым. Используется кнопкой
-   * «Повторить» в баннере ошибок. */
+   * `compact: true` tells the backend to use the configured `compactModel`
+   * (if set) for this call instead of the main model.
+   * `retryLast: true` — backend does NOT re-append a user turn (reuses the last
+   * from DB), text may be empty. Used by the error-banner «Повторить» button. */
   sendMessage(
     id: string,
     text: string,

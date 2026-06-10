@@ -39,17 +39,17 @@ WB AI Helper is a single-binary desktop AI assistant for Wiren Board IoT control
 2. Backend appends user message to SQLite, opens an SSE stream
 3. `llm.ts` calls LLM with full chat history + tool schemas; emits `text-delta`, `tool-call`, `tool-result`, `usage`, `done` events
 4. `tools.ts` dispatches each tool call (~50 tools) to MQTT/SSH/HTTP pools / discovery / chart renderer / job tracker
-5. Loop continues until `finish_reason === 'stop'` OR `maxTurns` (20) is reached. On `max_turns` without text the backend appends a fallback message asking the user to say "продолжай"
+5. Loop continues until `finish_reason === 'stop'` OR `maxTurns` (20) is reached. On `max_turns` without text the backend appends a fallback message asking the user to say "continue"
 6. Final assistant turn persisted with `tokensPrompt/Completion/Cached/totalCost` + `created_at`
 
 ### LLM provider profiles
 
-`settings.providers: Record<provider, ProviderConfig>` — switching `settings.provider` swaps every LLM-side field at once. **Per-provider** fields (см. `PROVIDER_FIELDS` в `settings.ts`): apiKey, baseURL, model, llmProxy*, tlsInsecure, caCert, apiFormat, priceInput/Output/Cached, **contextWindow**, **compactModel**, **autoCompact**, **autoCompactThreshold**, **temperature**. Только `mqtt*`, `ssh*`, `discoveryInterval`, `openBrowser` остаются shared.
+`settings.providers: Record<provider, ProviderConfig>` — switching `settings.provider` swaps every LLM-side field at once. **Per-provider** fields (see `PROVIDER_FIELDS` in `settings.ts`): apiKey, baseURL, model, llmProxy*, tlsInsecure, caCert, apiFormat, priceInput/Output/Cached, **contextWindow**, **compactModel**, **autoCompact**, **autoCompactThreshold**, **temperature**. Only `mqtt*`, `ssh*`, `discoveryInterval`, `openBrowser` remain shared.
 
 | profile        | baseURL editable | apiFormat editable | caCert | currency | autoCompact default | typical use |
 |----------------|------------------|--------------------|--------|----------|--------------------|-------------|
 | `openai`       | no (api.openai.com fixed) | no | no | USD | true | direct OpenAI |
-| `aitunnel`     | no (api.aitunnel.ru/v1 fixed) | no | no | RUB | **false** (server-side message-transforms) | RUB-биллинг, баланс/статистика inline |
+| `aitunnel`     | no (api.aitunnel.ru/v1 fixed) | no | no | RUB | **false** (server-side message-transforms) | RUB billing, balance/stats inline |
 | `custom`       | yes              | yes                | no  | none | true | any OpenAI-compatible (Ollama, LiteLLM, vLLM…) |
 | `custom_proxy` | yes              | yes                | yes | none | true | MITM proxy (Claude proxy) — auth in URL, CA-cert PEM stored inline in settings.json |
 
@@ -61,15 +61,15 @@ WB AI Helper is a single-binary desktop AI assistant for Wiren Board IoT control
 
 Per-provider behaviour:
 1. **Detection** — `listModels()` parses `context_length`/`context_window`/`max_input_tokens`/`top_provider.context_length`/`details.context_length` (covers OpenRouter, LiteLLM, Ollama-compat). `/api/models` exposes them as `contextLengths: Record<modelId, number>`.
-2. **Manual override** — `ProviderConfig.contextWindow` (settings.json). UI shows the auto-detected value as a placeholder + «подставить авто» button.
-3. **Auto-compact watch** in `App.vue`: when `currentContextUsage.ratio >= autoCompactThreshold` and `autoCompact === true`, posts the «вызови checkpoint» nudge with `compact: true`. Backend swaps the model to `compactModel` (if set) only for that single stream via `runAgent({ modelOverride })`. Guard: doesn't re-trigger until ratio drops below threshold.
-4. **Hidden when off** — when `autoCompact === false`, the chat header progress bar, manual «📦 сжать» button, and Settings panel context fields (size / compactModel / threshold) are all hidden. AITunnel relies on this default.
+2. **Manual override** — `ProviderConfig.contextWindow` (settings.json). UI shows the auto-detected value as a placeholder + a «use auto» button.
+3. **Auto-compact watch** in `App.vue`: when `currentContextUsage.ratio >= autoCompactThreshold` and `autoCompact === true`, posts the «call checkpoint» nudge with `compact: true`. Backend swaps the model to `compactModel` (if set) only for that single stream via `runAgent({ modelOverride })`. Guard: doesn't re-trigger until ratio drops below threshold.
+4. **Hidden when off** — when `autoCompact === false`, the chat header progress bar, manual «📦 compact» button, and Settings panel context fields (size / compactModel / threshold) are all hidden. AITunnel relies on this default.
 
 ### AITunnel-specific
 
 - `usage.cost_rub` parsed alongside `total_cost` in `llm.ts` → surfaces as `tokensCost` with currency from `PROVIDER_INFO`.
 - `GET /api/aitunnel/info` calls `/v1/aitunnel/{balance,stats/summary,me}` in parallel and surfaces balance + 30-day spend + email in `SettingsPanel`. Computed `daysLeft` (`balance / avg_daily_spend`) goes red below 3 days.
-- `formatLlmError()` in `llm.ts` decodes AITunnel error structure (`{error: {code, message, metadata}}`) — covers 400/401/402 (нет средств)/403 (модерация — с reasons/flagged_input/provider_name)/408/429/502 (с upstream provider/raw). Same parser handles standard OpenAI errors.
+- `formatLlmError()` in `llm.ts` decodes AITunnel error structure (`{error: {code, message, metadata}}`) — covers 400/401/402 (insufficient funds)/403 (moderation — with reasons/flagged_input/provider_name)/408/429/502 (with upstream provider/raw). Same parser handles standard OpenAI errors.
 
 ### Key source files
 
@@ -126,7 +126,7 @@ Per chat: `attachments/<chatId>/<id>_<u\|a>__<name>` — `clearAttachmentSession
 
 ### Settings precedence
 
-`DEFAULTS` < env vars (first run only, written to disk) < `settings.json` (user via UI). Secrets — `apiKey`, `mqttPassword`, `sshPassword`, `llmProxyPassword` — never leave the backend; `toPublic()` replaces them with `*Configured` booleans. CA-cert PEM goes through, since the UI needs to show "✓ загружен (N КБ)".
+`DEFAULTS` < env vars (first run only, written to disk) < `settings.json` (user via UI). Secrets — `apiKey`, `mqttPassword`, `sshPassword`, `llmProxyPassword` — never leave the backend; `toPublic()` replaces them with `*Configured` booleans. CA-cert PEM goes through, since the UI needs to show "✓ loaded (N KB)".
 
 ### Environment variables (seed on first run)
 
@@ -134,31 +134,31 @@ Per chat: `attachments/<chatId>/<id>_<u\|a>__<name>` — `clearAttachmentSession
 
 ## CI/CD
 
-GitHub Actions автоматически собирает проект при каждом пуше и релизе.
+GitHub Actions builds the project automatically on every push and release.
 
 ### CI (`.github/workflows/ci.yml`)
 
-Запускается на push в `main` и на pull request. Шаги: typecheck → build (linux-x64 + windows-x64) → upload artifacts (14 дней).
+Runs on push to `main` and on pull requests. Steps: typecheck → build (linux-x64 + windows-x64) → upload artifacts (14 days).
 
 ### Release (`.github/workflows/release.yml`)
 
-Запускается при пуше тега `v*`. Собирает бинарники и создаёт GitHub Release с файлами:
+Runs on pushing a `v*` tag. Builds the binaries and creates a GitHub Release with the files:
 - `wb-ai-helper-linux-x64`
 - `wb-ai-helper-windows-x64.exe`
 - `README.txt`
 
-### Как сделать релиз
+### How to cut a release
 
-1. Убедиться что CI на `main` зелёный
-2. Обновить `version` в `package.json`
-3. **Перенести записи из `## [Unreleased]` в `CHANGELOG.md` в новый раздел `## [X.Y.Z] — YYYY-MM-DD`** и обновить ссылки сравнения внизу файла. CHANGELOG обязан меняться при каждом bump-е версии — иначе релиз неполный.
-4. Закоммитить «chore: release X.Y.Z» вместе с bump'ом version и CHANGELOG, смержить в main.
-5. Создать и запушить тег:
+1. Make sure CI on `main` is green
+2. Bump `version` in `package.json`
+3. **Move the entries from `## [Unreleased]` in `CHANGELOG.md` into a new section `## [X.Y.Z] — YYYY-MM-DD`** and update the comparison links at the bottom of the file. The CHANGELOG must change on every version bump — otherwise the release is incomplete.
+4. Commit «chore: release X.Y.Z» together with the version bump and CHANGELOG, merge into main.
+5. Create and push a tag:
    ```bash
    git tag vX.Y.Z
    git push origin vX.Y.Z
    ```
-6. Release workflow соберёт бинарники и опубликует на https://github.com/wirenboard/wb-ai-helper-desktop/releases
+6. The Release workflow builds the binaries and publishes them to https://github.com/wirenboard/wb-ai-helper-desktop/releases
 
 ## TypeScript notes
 
@@ -169,5 +169,9 @@ GitHub Actions автоматически собирает проект при �
 ## Known holes / future work
 
 - **Anthropic / Responses API:** structurally `apiFormat` is wired through but the only implemented branch is OpenAI Chat Completions. For Claude via the proxy, hit `api.anthropic.com` through Custom AI Proxy with `apiFormat='openai'` only works if the proxy speaks both formats; otherwise translation logic in `llm.ts` is needed.
-- **i18n:** UI is RU-only (with one Vue i18n module half-written in a stash).
+- **i18n:** RU/EN. The split follows one rule — **user-facing text is bilingual; model-facing text is single-language (English), because the model bridges languages itself.**
+  - **UI (user-facing):** lightweight custom module `src/web/i18n.ts` (`t`/`plural`/`fmtSize`, reactive `lang`, `localStorage('wb-lang')` + `navigator.language` autodetect, safe for non-DOM import) — no vue-i18n dependency. Components import `t`/`plural` directly.
+  - **`settings.uiLanguage`** (shared field, `WB_HELPER_LANGUAGE` env, first-run only) drives the UI **and** the few server strings that reach the user: the system-prompt language directive (`LANG_DIRECTIVE` in `chats.ts` — a high-priority block **prepended** to the system prompt that forces the model to reply **strictly in the UI language**, explicitly overriding the Russian persona-prompt body; it does NOT mirror the user's message language, since the big Russian `SYSTEM_PROMPT` otherwise drags weaker models back to Russian), the welcome/fallback/checkpoint messages and `getExtraSystemMsgs` (localized via the `L()` helper in `index.ts`), and the default chat title / context suffix (`ChatStore` resolves it via a `getLang` callback).
+  - **Skills (`fixtures/skills/*.md`) and tool descriptions (`tools.ts`) are English-only — a single set, no per-language variants.** They are model-facing instructions never shown verbatim to the user; the model reads English and still replies in the user's language via the directive above. No `toolSchemas(lang)`, no `.en.md` files. (The `{en, ru}` / `translations.ru` blocks that remain inside `wb-rules.md` and `wb-serial-templates.md` are intentional — they document those skills' own bilingual APIs.)
+  - The `[System]` prefix stays a fixed protocol sentinel across languages (stripped by `api.ts` before display).
 - **Job persistence:** `jobs.ts` is in-memory; restart loses tracking even though jobs continue running on controllers.

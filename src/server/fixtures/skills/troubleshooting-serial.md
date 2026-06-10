@@ -1,143 +1,143 @@
 # troubleshooting-serial
 
-Программная диагностика serial-шины (RS-485, Modbus и другие протоколы) с уровня драйвера и MQTT. Подгружай при: ошибках Modbus, CRC, таймаутах, «устройство не отвечает», «данные не обновляются», медленном опросе, ошибках чтения/записи.
+Software diagnostics of the serial bus (RS-485, Modbus and other protocols) from the driver and MQTT level. Load this skill on: Modbus errors, CRC, timeouts, "device not responding", "data not updating", slow polling, read/write errors.
 
-**ВАЖНО: Действуй без пауз. НЕ спрашивай разрешение на каждый шаг — пользователь УЖЕ попросил диагностику, это и есть подтверждение. Выполняй ВСЕ шаги подряд: логи → debug → scan → здоровье. НЕ останавливайся с вопросами «хотите запустить debug?» или «если хочешь, я могу...» — просто делай. Отчёт — в конце. Лог сохрани через `write_file(sn, "/mnt/data/ai/wb-ai-helper/diag/serial-diag.txt", <отчёт>)`.**
+**IMPORTANT: Act without pauses. Do NOT ask permission for every step — the user has ALREADY asked for diagnostics, that IS the confirmation. Perform ALL steps in sequence: logs → debug → scan → health. Do NOT stop with questions like "do you want me to run debug?" or "if you want, I can..." — just do it. The report comes at the end. Save the log via `write_file(sn, "/mnt/data/ai/wb-ai-helper/diag/serial-diag.txt", <report>)`.**
 
-## Начни с этого
+## Start here
 
-1. **Документация по устройству** — всегда показывай URL источника. Последовательность:
-   - `web_fetch("https://wirenboard.com/wiki/<DeviceModel>")` — страница устройства, раздел «Известные неисправности»
-   - Если ничего не нашёл там — сразу пробуй веб-поиск по вики (домен менялся, пробуй оба): `web_search("site:wirenboard.com/wiki/ <DeviceModel> <ошибка>")` или `web_search("site:wiki.wirenboard.com <DeviceModel> <ошибка>")`
-   - Смотри changelog устройства (`web_fetch` страницы changelog) — там часто есть ERRMODBUS-коды и исправленные баги
-   - **Всегда цитируй URL**, откуда взял информацию
-2. `systemctl is-active wb-mqtt-serial` — жив ли драйвер
-3. Логи — масштаб и тип:
+1. **Device documentation** — always show the source URL. Sequence:
+   - `web_fetch("https://wirenboard.com/wiki/<DeviceModel>")` — device page, "Known issues" section
+   - If you found nothing there — immediately try a wiki web search (the domain changed, try both): `web_search("site:wirenboard.com/wiki/ <DeviceModel> <error>")` or `web_search("site:wiki.wirenboard.com <DeviceModel> <error>")`
+   - Check the device changelog (`web_fetch` the changelog page) — it often has ERRMODBUS codes and fixed bugs
+   - **Always cite the URL** where you got the information
+2. `systemctl is-active wb-mqtt-serial` — is the driver alive
+3. Logs — scale and type:
 ```bash
 ssh_exec(sn, "journalctl -u wb-mqtt-serial -p warning --since '1 hour ago' --no-pager | grep -c 'failed to'; journalctl -u wb-mqtt-serial -p warning --since '1 hour ago' --no-pager | grep -oP 'device modbus:\\K\\d+' | sort | uniq -c | sort -rn; journalctl -u wb-mqtt-serial -p warning -n 15 --no-pager")
 ```
-4. **Debug — raw-пакеты. ВЫПОЛНЯЙ СРАЗУ, НЕ СПРАШИВАЯ.** Это безопасная операция — `serial_debug_collect` сам включает и выключает debug, сам перезапускает драйвер. Вызывай тул немедленно после анализа логов.
+4. **Debug — raw packets. RUN IT IMMEDIATELY, WITHOUT ASKING.** This is a safe operation — `serial_debug_collect` enables and disables debug itself, and restarts the driver itself. Call the tool immediately after analyzing the logs.
 
-Время debug: раздели 18000 на количество ошибок за час (из шага 3). Результат — секунды. Минимум 30, максимум 300. Если ошибок 0 — ставь 120.
+Debug duration: divide 18000 by the number of errors per hour (from step 3). The result is in seconds. Minimum 30, maximum 300. If there are 0 errors — use 120.
 
-Таблица:
-- 10 ошибок/час → 18000/10 = 1800 → cap 300 сек
-- 50 ошибок/час → 18000/50 = 360 → cap 300 сек
-- 100 ошибок/час → 18000/100 = 180 сек
-- 500 ошибок/час → 18000/500 = 36 сек
-- 1000 ошибок/час → 18000/1000 = 18 → floor 30 сек
+Table:
+- 10 errors/hour → 18000/10 = 1800 → cap 300 sec
+- 50 errors/hour → 18000/50 = 360 → cap 300 sec
+- 100 errors/hour → 18000/100 = 180 sec
+- 500 errors/hour → 18000/500 = 36 sec
+- 1000 errors/hour → 18000/1000 = 18 → floor 30 sec
 
-Вызови прямо сейчас: `serial_debug_collect(sn, durationSec)`. НЕ пиши «если хочешь, запущу debug» — ПРОСТО ВЫЗОВИ ТУЛ.
+Call it right now: `serial_debug_collect(sn, durationSec)`. Do NOT write "if you want, I'll run debug" — JUST CALL THE TOOL.
 
-После завершения забери лог: `fetch_from_controller(sn, "/mnt/data/ai/wb-ai-helper/diag/debug-serial.log")`.
+After it finishes, retrieve the log: `fetch_from_controller(sn, "/mnt/data/ai/wb-ai-helper/diag/debug-serial.log")`.
 
-Если за 2 минуты ошибка не воспроизвелась — скажи пользователю: проблема редкая, debug выключен.
+If the error didn't reproduce within 2 minutes — tell the user: the problem is rare, debug is off.
 
-5. **Scan шины** — кто есть, кого нет, дубликаты. **Используй параметры из шага 3 (ports/Load).** Вызывай тул `wb_bus_scan` — он сам запустит скан, будет опрашивать прогресс и доставит результат через баннер:
+5. **Bus scan** — who is present, who is missing, duplicates. **Use the parameters from step 3 (ports/Load).** Call the `wb_bus_scan` tool — it starts the scan itself, polls the progress, and delivers the result via a banner:
 ```
 wb_bus_scan(sn, port="/dev/ttyRS485-1", baud_rate=115200, parity="N", stop_bits=2)
 ```
-Подставь реальные параметры порта! НЕ вызывай mqtt_rpc для bus-scan напрямую — используй только `wb_bus_scan`. Scan находит только WB и Onokom (Fast Modbus). Стороннее — только `modbus_client_rpc`.
+Substitute the real port parameters! Do NOT call mqtt_rpc for a bus scan directly — use only `wb_bus_scan`. The scan finds only WB and Onokom (Fast Modbus). Third-party devices — only via `modbus_client_rpc`.
 
-6. **Здоровье WB-устройств** — питание и uptime (только для WB, определяй по scan):
+6. **Health of WB devices** — power and uptime (only for WB, determined by the scan):
 ```bash
 ssh_exec(sn, "modbus_client_rpc -m rtu -a <slave> -t 3 -r 104 -c 2 -b <baud> -s <stop> -p <parity> <path> && modbus_client_rpc -m rtu -a <slave> -t 3 -r 121 -c 2 -b <baud> -s <stop> -p <parity> <path>")
 ```
 
-## Версия прошивки устройства
+## Device firmware version
 
-Если нужна версия прошивки конкретного WB-устройства — **не спрашивай пользователя**, делай так:
+If you need the firmware version of a specific WB device — **don't ask the user**, do this:
 
-1. Загрузи конфиг драйвера: `mqtt_rpc(sn, "wb-mqtt-serial", "config", "Load", {})`
-2. Найди устройство по slave_id, запомни его `device_type` (например `WB-MDM3`)
-3. Загрузи шаблон этого типа: `mqtt_rpc(sn, "wb-mqtt-serial", "templates", "GetTemplate", {"device_type": "<device_type>"})`
-4. Среди каналов шаблона найди тот, у кого название напоминает версию прошивки: `FW Version`, `Firmware Version`, `SW Version`, `Serial` и т.п. — имя может быть любым, ищи по смыслу
-5. В конфиге драйвера найди этот канал у нужного устройства и включи: `"enabled": true`
-6. Сохрани конфиг: `mqtt_rpc({ sn, driver:"confed", service:"Editor", method:"Save", params:{ path:"/etc/wb-mqtt-serial.conf", content:"<полный конфиг>" } })`
-7. Прочитай значение из MQTT: `mqtt_get(sn, "/devices/<device_id>/controls/<channel_name>")`
+1. Load the driver config: `mqtt_rpc(sn, "wb-mqtt-serial", "config", "Load", {})`
+2. Find the device by slave_id, note its `device_type` (for example `WB-MDM3`)
+3. Load the template for this type: `mqtt_rpc(sn, "wb-mqtt-serial", "templates", "GetTemplate", {"device_type": "<device_type>"})`
+4. Among the template channels, find the one whose name resembles a firmware version: `FW Version`, `Firmware Version`, `SW Version`, `Serial`, etc. — the name can be anything, search by meaning
+5. In the driver config, find this channel on the relevant device and enable it: `"enabled": true`
+6. Save the config: `mqtt_rpc({ sn, driver:"confed", service:"Editor", method:"Save", params:{ path:"/etc/wb-mqtt-serial.conf", content:"<full config>" } })`
+7. Read the value from MQTT: `mqtt_get(sn, "/devices/<device_id>/controls/<channel_name>")`
 
-Пример: у `wb-mdm3_57` канал называется `FW Version`, у другого устройства может быть иначе — всегда смотри в шаблоне.
+Example: on `wb-mdm3_57` the channel is called `FW Version`, on another device it may be different — always check the template.
 
-## Паттерны: увидел → делай
+## Patterns: saw → do
 
-| Увидел | Делай |
+| Saw | Do |
 |---|---|
-| `invalid crc` в логах | Debug → смотри raw-пакет. CRC битый = помехи/контакт. Чужой slave_id = дубликат |
-| `request timed out` | `device/Probe` → живо ли. Если молчит — физика, питание, slave_id |
-| `invalid data size` | Scan → ищи дубликат slave_id. Debug → лишние байты = коллизия |
-| `rate limit exceeded` | Разнести устройства по портам, увеличить baud, отключить лишние каналы |
-| Устройство в scan но не в конфиге | Может мешать! Добавить или отключить физически |
-| Устройство в конфиге но не в scan | Выключено, обрыв, или стороннее (scan не видит) |
-| CRC у всех устройств | Помехи, терминатор 120 Ом, заземление. Эксперимент: снизить скорость |
-| CRC у одного | Подключить коротким проводом. Если заработает — линия |
-| Другие stop bits помогают | Несовпадение параметров порта и устройства |
-| Мин. напряжение < 20В (рег. 122) | Просадки питания → блок питания, сечение провода |
-| Маленький uptime (рег. 104-105) | Устройство перезагружалось → питание |
-| Exception code в debug | 1=illegal FC, 2=illegal addr, 3=illegal value, 4=device failure |
-| Протокол не Modbus в конфиге | modbus_client_rpc и scan не помогут, только логи и debug |
+| `invalid crc` in logs | Debug → look at the raw packet. Broken CRC = interference/contact. Foreign slave_id = duplicate |
+| `request timed out` | `device/Probe` → is it alive. If silent — physics, power, slave_id |
+| `invalid data size` | Scan → look for a duplicate slave_id. Debug → extra bytes = collision |
+| `rate limit exceeded` | Spread devices across ports, increase baud, disable unused channels |
+| Device in scan but not in config | May interfere! Add it or disconnect physically |
+| Device in config but not in scan | Disabled, broken link, or third-party (scan doesn't see it) |
+| CRC on all devices | Interference, 120 Ohm terminator, grounding. Experiment: lower the speed |
+| CRC on one device | Connect with a short wire. If it works — the line is the issue |
+| Different stop bits help | Mismatch between port and device parameters |
+| Min. voltage < 20V (reg. 122) | Power sags → power supply, wire cross-section |
+| Small uptime (reg. 104-105) | Device rebooted → power |
+| Exception code in debug | 1=illegal FC, 2=illegal addr, 3=illegal value, 4=device failure |
+| Protocol is not Modbus in the config | modbus_client_rpc and scan won't help, only logs and debug |
 
-## Инструменты
+## Tools
 
-**modbus_client_rpc** (приоритет) — через очередь драйвера, безопасен:
+**modbus_client_rpc** (priority) — through the driver queue, safe:
 ```bash
 modbus_client_rpc -m rtu -a <slave> -t <FC> -r <reg> -c <count> -b <baud> -s <stop> -p <parity> <port>
 ```
 FC: 1=coils, 2=discrete, 3=holding, 4=input, 5=write coil, 6=write reg, 15=write coils, 16=write regs.
 
-**device/Probe** — быстрая проверка "живо ли":
+**device/Probe** — quick "is it alive" check:
 ```
 mqtt_rpc(sn, "wb-mqtt-serial", "device", "Probe", {"path":"..","baud_rate":..,"data_bits":..,"parity":"..","stop_bits":..,"slave_id":..,"total_timeout":10000})
 ```
 
-**ports/Load** — параметры портов:
+**ports/Load** — port parameters:
 ```
 mqtt_rpc(sn, "wb-mqtt-serial", "ports", "Load", {})
 ```
 
-**wb-modbus-scanner** — Fast Modbus утилита (WB, Onokom). `apt install wb-modbus-ext-scanner`. Конфликтует с драйвером — HITL.
+**wb-modbus-scanner** — Fast Modbus utility (WB, Onokom). `apt install wb-modbus-ext-scanner`. Conflicts with the driver — HITL.
 ```bash
 wb-modbus-scanner -d <port> -b <baud>        # scan
-wb-modbus-scanner -d <port> -s <sn> -i <id>  # смена slave_id
+wb-modbus-scanner -d <port> -s <sn> -i <id>  # change slave_id
 ```
 
-**modbus_client** — прямой доступ. Конфликтует с драйвером — HITL.
+**modbus_client** — direct access. Conflicts with the driver — HITL.
 
-## Полезные регистры WB-устройств
+## Useful registers of WB devices
 
-| Регистр | Что | Формат |
+| Register | What | Format |
 |---|---|---|
-| 104-105 | Uptime | u32, секунды |
-| 110 | Baud rate | u16, сокращённо: 96=9600, 1152=115200 |
-| 121 | Напряжение питания | u16, мВ |
-| 122 | Мин. напряжение | u16, мВ (с момента загрузки) |
+| 104-105 | Uptime | u32, seconds |
+| 110 | Baud rate | u16, abbreviated: 96=9600, 1152=115200 |
+| 121 | Supply voltage | u16, mV |
+| 122 | Min. voltage | u16, mV (since boot) |
 | 128 | Slave ID | u16 |
-| 200-205 | Модель | string |
-| 270-271 | Серийный номер | u32 |
+| 200-205 | Model | string |
+| 270-271 | Serial number | u32 |
 
-Broadcast запись (slave_id 0) — сменить baud/адрес всем WB на шине разом.
+Broadcast write (slave_id 0) — change baud/address for all WB devices on the bus at once.
 
-baud_rate `1152` = `115200` — сокращённая запись, НЕ ошибка.
+baud_rate `1152` = `115200` — abbreviated notation, NOT an error.
 
-## Эксперименты (бэкап + HITL)
+## Experiments (backup + HITL)
 
-Перед экспериментами: `ssh_exec(sn, "cp /etc/wb-mqtt-serial.conf /etc/wb-mqtt-serial.conf.bak-$(date +%s)")`
+Before experiments: `ssh_exec(sn, "cp /etc/wb-mqtt-serial.conf /etc/wb-mqtt-serial.conf.bak-$(date +%s)")`
 
-- **Stop bits**: попробовать 1 и 2 через `modbus_client_rpc -s 1` / `-s 2`
-- **Скорость**: broadcast `modbus_client_rpc -a 0 -t 6 -r 110 ... 96` → смена порта через confed. Пропали ошибки = кабель/терминация
-- **Изоляция**: `config/Load` → `"enabled": false` → `confed/Editor/Save`. Пропали ошибки у остальных = это устройство мешает
-- **Таймауты**: `response_timeout_ms`, `guard_interval_us` в конфиге порта
+- **Stop bits**: try 1 and 2 via `modbus_client_rpc -s 1` / `-s 2`
+- **Speed**: broadcast `modbus_client_rpc -a 0 -t 6 -r 110 ... 96` → change the port via confed. Errors gone = cable/termination
+- **Isolation**: `config/Load` → `"enabled": false` → `confed/Editor/Save`. Errors on the rest gone = this device is the one interfering
+- **Timeouts**: `response_timeout_ms`, `guard_interval_us` in the port config
 
-**Всё вернуть обратно после экспериментов.**
+**Revert everything after the experiments.**
 
-## Грабли
+## Pitfalls
 
-- `modbus_client`/`wb-modbus-scanner` без остановки драйвера → ложные ошибки
-- Debug забыт → диск заполнится
-- port/Scan → только WB и Onokom
-- Неправильный baud → молчит СОВСЕМ. Неправильные stop bits → плавающие ошибки
-- RS-485 звездой работает на коротких расстояниях; при проблемах — рекомендуй цепочку
+- `modbus_client`/`wb-modbus-scanner` without stopping the driver → false errors
+- Debug forgotten → disk fills up
+- port/Scan → only WB and Onokom
+- Wrong baud → COMPLETELY silent. Wrong stop bits → floating errors
+- RS-485 in a star topology works at short distances; on problems — recommend a daisy chain
 
-## Документация
+## Documentation
 
 - <https://wiki.wirenboard.com/wiki/RS-485>
 - <https://wiki.wirenboard.com/wiki/Modbus>

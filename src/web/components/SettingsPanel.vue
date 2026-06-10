@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { api, COPILOT_MULTIPLIERS, PROVIDER_INFO, type AitunnelInfo, type ApiFormat, type LlmProvider, type OpenRouterInfo, type Settings } from '../api'
+import { t, plural, lang, setLang, localeTag, type Lang } from '../i18n'
 import ComboboxSearch from './ComboboxSearch.vue'
 
 const props = defineProps<{ settings: Settings | null; open: boolean; version?: string; fontSize?: number }>()
 const emit = defineEmits<{
   close: []
-  /** Юзер нажал «Сохранить» — родитель может закрыть окно. */
+  /** User clicked «Save» — parent may close the panel. */
   saved: [Settings]
-  /** Авто-сохранение (ключ / провайдер) — родитель только обновляет
-   * локальный state, окно НЕ закрывает (юзер ещё в процессе настройки). */
+  /** Auto-save (key / provider) — parent only updates local state, does NOT
+   * close the panel (user is still configuring). */
   autoSaved: [Settings]
   fontSizeChange: [number]
 }>()
@@ -33,8 +34,8 @@ const autoCompact = ref(true)
 const autoCompactThreshold = ref(0.85)
 const temperature = ref<number | null>(null)
 const minRequestIntervalMs = ref<number | null>(null)
-/** id → context length, заполняется после fetchModels(); используется как
- * подсказка/auto-fill для contextWindow. */
+/** id → context length, filled after fetchModels(); used as a hint/auto-fill
+ * for contextWindow. */
 const contextLengths = ref<Record<string, number>>({})
 
 const providerInfo = computed(() => PROVIDER_INFO[provider.value])
@@ -102,15 +103,15 @@ async function onProviderChange(next: LlmProvider) {
   aitunnelInfoError.value = null
   openrouterInfo.value = null
   openrouterInfoError.value = null
-  // Сохраняем выбор провайдера на бэке немедленно — иначе info-эндпоинты
-  // (`/api/aitunnel/info`, `/api/openrouter/info`) возвращают 400 «провайдер
-  // не <name>». Это согласуется с auto-save API-ключа. Эмитим autoSaved,
-  // чтобы родитель не закрывал окно настроек посреди работы юзера.
+  // Save the provider choice to the backend immediately — else the info
+  // endpoints (`/api/aitunnel/info`, `/api/openrouter/info`) return 400 "provider
+  // not <name>". Consistent with API-key auto-save. Emit autoSaved so the parent
+  // doesn't close the settings panel mid-task.
   try {
     const saved = await api.saveSettings({ provider: next })
     emit('autoSaved', saved)
   } catch (e: any) {
-    saveError.value = `Не удалось переключить провайдера: ${e?.message ?? String(e)}`
+    saveError.value = t('settings.providerSwitchError', { msg: e?.message ?? String(e) })
     return
   }
   void refreshAitunnelInfo()
@@ -130,14 +131,14 @@ const loadingModels = ref(false)
 const saving = ref(false)
 const saveError = ref<string | null>(null)
 
-// AITunnel-specific: баланс / статистика / email — выводим в шапку настроек
-// провайдера, чтобы юзер сразу видел сколько у него на счету.
+// AITunnel-specific: balance / stats / email — shown atop the provider settings
+// so the user immediately sees their balance.
 const aitunnelInfo = ref<AitunnelInfo | null>(null)
 const aitunnelInfoError = ref<string | null>(null)
 const loadingAitunnelInfo = ref(false)
 
-/** Сколько дней хватит баланса при текущем среднем расходе. Возвращает null
- * если расход 0 (нет истории) или баланс отсутствует. */
+/** How many days the balance lasts at the current average spend. Returns null
+ * if spend is 0 (no history) or there's no balance. */
 const aitunnelDaysLeft = computed<number | null>(() => {
   const info = aitunnelInfo.value
   if (!info?.balance || !info.stats) return null
@@ -161,7 +162,7 @@ async function refreshAitunnelInfo() {
   }
 }
 
-// OpenRouter-specific: credits + лимиты ключа
+// OpenRouter-specific: credits + key limits
 const openrouterInfo = ref<OpenRouterInfo | null>(null)
 const openrouterInfoError = ref<string | null>(null)
 const loadingOpenrouterInfo = ref(false)
@@ -190,8 +191,8 @@ const openrouterLowBalance = computed(() => {
   return r !== null && r < 1
 })
 
-/** Контекстное окно текущей модели по данным от провайдера (если он
- * вернул их в /v1/models). Пусто = автоопределение недоступно. */
+/** Current model's context window per provider data (if returned in /v1/models).
+ * Empty = auto-detection unavailable. */
 const detectedContextWindow = computed<number | null>(() => {
   const m = model.value
   if (!m) return null
@@ -199,26 +200,25 @@ const detectedContextWindow = computed<number | null>(() => {
 })
 
 const contextWindowPlaceholder = computed(() => {
-  if (detectedContextWindow.value) return `авто: ${detectedContextWindow.value.toLocaleString('ru-RU')}`
-  return 'напр. 128000 (пусто = по умолчанию 128k)'
+  if (detectedContextWindow.value) return t('settings.ctxAutoPh', { n: detectedContextWindow.value.toLocaleString(localeTag()) })
+  return t('settings.ctxManualPh')
 })
 
 function applyDetectedContextWindow() {
   if (detectedContextWindow.value) contextWindow.value = detectedContextWindow.value
 }
 
-/** Провайдер умеет сжимать контекст на своей стороне — тогда чекбокс
- * `autoCompact` работает как переключатель: off = серверное сжатие,
- * on = клиентский checkpoint (серверное в этом случае отключаем
- * на стороне backend, чтобы не было двойной обработки).
- * AITunnel: server-side всегда, флаг работает как «доп. checkpoint».
- * OpenRouter: middle-out управляется backend'ом из !autoCompact. */
+/** Provider can compact context on its side — then the `autoCompact` checkbox
+ * acts as a toggle: off = server-side compaction, on = client checkpoint (server
+ * compaction is disabled in the backend in that case to avoid double processing).
+ * AITunnel: always server-side, the flag works as an "extra checkpoint".
+ * OpenRouter: middle-out is driven by the backend from !autoCompact. */
 const providerHasServerCompaction = computed(() =>
   provider.value === 'aitunnel' || provider.value === 'openrouter',
 )
 
-// Если провайдер не сжимает сам — клиентское авто-сжатие принудительно ВКЛ
-// (без него длинный чат просто упадёт при переполнении окна).
+// If the provider doesn't compact itself — client auto-compaction is forced ON
+// (without it a long chat just crashes when the window overflows).
 watch(providerHasServerCompaction, (has) => {
   if (!has && !autoCompact.value) autoCompact.value = true
 }, { immediate: true })
@@ -236,13 +236,13 @@ async function loadCaCertFromFile(file: File) {
   try {
     const text = await file.text()
     if (!/-----BEGIN CERTIFICATE-----/.test(text)) {
-      saveError.value = 'Файл не похож на PEM-сертификат (нет -----BEGIN CERTIFICATE-----)'
+      saveError.value = t('settings.caNotPem')
       return
     }
     caCert.value = text
     saveError.value = null
   } catch (e: any) {
-    saveError.value = `Не удалось прочитать файл: ${e?.message ?? e}`
+    saveError.value = t('settings.caReadError', { msg: e?.message ?? e })
   }
 }
 
@@ -258,7 +258,7 @@ async function exportSettings() {
     document.body.appendChild(a); a.click(); a.remove()
     setTimeout(() => URL.revokeObjectURL(a.href), 0)
   } catch (e: any) {
-    saveError.value = `Экспорт не удался: ${e?.message ?? e}`
+    saveError.value = t('settings.exportError', { msg: e?.message ?? e })
   }
 }
 
@@ -273,14 +273,13 @@ async function importSettings(file: File) {
     })
     if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text().catch(() => '')}`)
     const next = await r.json() as Settings
-    // autoSaved — окно не закрываем, юзер только что импортировал
-    // и может ещё подправить.
+    // autoSaved — don't close the panel; the user just imported and may tweak.
     emit('autoSaved', next)
     // Re-load the form from imported state
     provider.value = next.provider
     loadProviderFields(provider.value)
   } catch (e: any) {
-    saveError.value = `Импорт не удался: ${e?.message ?? e}`
+    saveError.value = t('settings.importError', { msg: e?.message ?? e })
   }
 }
 
@@ -312,8 +311,8 @@ async function fetchModels() {
   loadingModels.value = true
   modelsError.value = null
   try {
-    // Если юзер успел вставить ключ и сразу нажать кнопку до debounce —
-    // дописываем его в этот же запрос, чтобы запрос моделей точно увидел свежий ключ.
+    // If the user pasted a key and hit the button before the debounce — include
+    // it in this request so the models fetch definitely sees the fresh key.
     if (apiKey.value) {
       const patch: any = { provider: provider.value, apiKey: apiKey.value }
       if (providerInfo.value.baseURLEditable) patch.baseURL = baseURL.value
@@ -337,11 +336,11 @@ async function fetchModels() {
 }
 
 /**
- * Авто-сохранение API-ключа после ввода (debounce 600ms). Очищаем поле и
- * показываем «(сохранён)» сразу — иначе юзер видит как поле опустошается
- * после нажатия «обновить список» и думает что ключ потерян.
+ * Auto-save the API key after entry (600ms debounce). Clear the field and show
+ * "(saved)" right away — else the user sees the field empty after hitting
+ * "refresh list" and thinks the key was lost.
  *
- * Опустошение поля игнорируем — для удаления есть отдельная кнопка.
+ * Clearing the field is ignored — there's a separate button for removal.
  */
 let apiKeySaveTimer: ReturnType<typeof setTimeout> | null = null
 watch(apiKey, (v) => {
@@ -365,12 +364,12 @@ async function autoSaveApiKey() {
     const next = await api.saveSettings(patch)
     apiKey.value = ''
     emit('autoSaved', next)
-    // С новым ключом сразу подтягиваем модели и провайдерскую info
+    // With the new key, immediately pull models and provider info
     void fetchModels()
     void refreshAitunnelInfo()
     void refreshOpenrouterInfo()
   } catch (e: any) {
-    saveError.value = `Не удалось сохранить ключ: ${e?.message ?? String(e)}`
+    saveError.value = t('settings.keySaveError', { msg: e?.message ?? String(e) })
   }
 }
 
@@ -398,6 +397,7 @@ async function save() {
       sshKeyPath: sshKeyPath.value,
       discoveryInterval: Number(discoveryInterval.value) || 15000,
       openBrowser: openBrowser.value,
+      uiLanguage: lang.value,
       autoCompact: autoCompact.value,
       autoCompactThreshold: Number(autoCompactThreshold.value) || 0.85,
       priceInput: priceInput.value != null ? Number(priceInput.value) : null,
@@ -428,8 +428,19 @@ async function save() {
   }
 }
 
+/** Switch UI language immediately (localStorage via setLang) and persist it to
+ * the backend so server-generated strings (system prompt, welcome, tool
+ * descriptions, skills) follow the same language. */
+async function onLangChange(next: Lang) {
+  setLang(next)
+  try {
+    const saved = await api.saveSettings({ uiLanguage: next })
+    emit('autoSaved', saved)
+  } catch { /* UI language already applied locally; backend sync is best-effort */ }
+}
+
 async function removeKey() {
-  if (!confirm('Удалить сохранённый API-ключ?')) return
+  if (!confirm(t('settings.removeKeyConfirm'))) return
   try {
     const next = await api.clearApiKey()
     models.value = []
@@ -444,14 +455,14 @@ async function removeKey() {
   <div v-if="open" class="modal-backdrop" @click.self="emit('close')">
     <div class="modal">
       <div class="modal-header">
-        <h2>Настройки</h2>
+        <h2>{{ t('settings.title') }}</h2>
         <button class="ghost" @click="emit('close')">×</button>
       </div>
       <div class="modal-body">
         <section>
-          <h3>LLM</h3>
+          <h3>{{ t('settings.llm') }}</h3>
           <label class="field">
-            <span>Провайдер</span>
+            <span>{{ t('settings.provider') }}</span>
             <div class="provider-row">
               <label
                 v-for="(info, key) in PROVIDER_INFO"
@@ -459,9 +470,9 @@ async function removeKey() {
                 class="provider-opt"
                 :class="{ active: provider === key }"
                 :title="key === 'aitunnel'
-                  ? 'Доступен из России без VPN, оплата в рублях'
+                  ? t('settings.providerHintAitunnel')
                   : key === 'openrouter'
-                  ? 'Оплата картой или Alipay (можно пополнить из Сбербанка или ТБанка)'
+                  ? t('settings.providerHintOpenrouter')
                   : undefined"
               >
                 <input type="radio" :value="key" :checked="provider === key" @change="onProviderChange(key as LlmProvider)" />
@@ -470,40 +481,40 @@ async function removeKey() {
             </div>
           </label>
           <div v-if="provider === 'aitunnel'" class="muted small provider-hint">
-            Доступен из России без VPN, оплата в рублях
+            {{ t('settings.providerHintAitunnel') }}
           </div>
           <div v-else-if="provider === 'openrouter'" class="muted small provider-hint">
-            Оплата картой или Alipay (можно пополнить из Сбербанка или ТБанка)
+            {{ t('settings.providerHintOpenrouter') }}
           </div>
           <div v-if="provider === 'aitunnel' && apiKeyConfiguredForProvider" class="aitunnel-info" :class="{ 'aitunnel-low': aitunnelLowBalance }">
-            <div v-if="loadingAitunnelInfo" class="muted small">загрузка баланса…</div>
-            <div v-else-if="aitunnelInfoError" class="error small">Не удалось получить данные: {{ aitunnelInfoError }}</div>
+            <div v-if="loadingAitunnelInfo" class="muted small">{{ t('settings.loadingBalance') }}</div>
+            <div v-else-if="aitunnelInfoError" class="error small">{{ t('settings.infoError', { msg: aitunnelInfoError }) }}</div>
             <template v-else-if="aitunnelInfo">
               <div class="aitunnel-row">
-                <span class="aitunnel-label">Баланс:</span>
+                <span class="aitunnel-label">{{ t('settings.balance') }}</span>
                 <strong :class="{ 'aitunnel-low-text': aitunnelLowBalance }">
-                  {{ aitunnelInfo.balance ? aitunnelInfo.balance.balance.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) : '—' }} ₽
+                  {{ aitunnelInfo.balance ? aitunnelInfo.balance.balance.toLocaleString(localeTag(), { maximumFractionDigits: 2 }) : '—' }} ₽
                 </strong>
                 <span v-if="aitunnelDaysLeft !== null" class="muted small">
-                  ≈ хватит на {{ aitunnelDaysLeft }} {{ aitunnelDaysLeft === 1 ? 'день' : (aitunnelDaysLeft >= 2 && aitunnelDaysLeft <= 4 ? 'дня' : 'дней') }}
+                  {{ t('settings.enoughForDays', { n: aitunnelDaysLeft, form: plural(aitunnelDaysLeft, 'day') }) }}
                 </span>
                 <span v-if="aitunnelInfo.balance && aitunnelInfo.balance.budget !== aitunnelInfo.balance.balance" class="muted small">
-                  · бюджет ключа {{ aitunnelInfo.balance.budget.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} ₽
+                  {{ t('settings.keyBudget', { amount: aitunnelInfo.balance.budget.toLocaleString(localeTag(), { maximumFractionDigits: 2 }) }) }}
                 </span>
                 <span style="flex:1"></span>
-                <button type="button" class="ghost small" @click="refreshAitunnelInfo" title="Обновить">↻</button>
+                <button type="button" class="ghost small" @click="refreshAitunnelInfo" :title="t('common.refresh')">↻</button>
               </div>
               <div v-if="aitunnelInfo.stats" class="aitunnel-stats muted small">
-                <span>Сегодня: {{ aitunnelInfo.stats.today_spend.toFixed(2) }} ₽ ({{ aitunnelInfo.stats.today_requests }} запр.)</span>
+                <span>{{ t('settings.today', { spend: aitunnelInfo.stats.today_spend.toFixed(2), n: aitunnelInfo.stats.today_requests }) }}</span>
                 <span>·</span>
-                <span>За месяц: {{ aitunnelInfo.stats.month_spend.toFixed(2) }} ₽ ({{ aitunnelInfo.stats.month_requests }} запр.)</span>
+                <span>{{ t('settings.month', { spend: aitunnelInfo.stats.month_spend.toFixed(2), n: aitunnelInfo.stats.month_requests }) }}</span>
                 <span v-if="aitunnelInfo.stats.avg_daily_spend > 0">·</span>
                 <span v-if="aitunnelInfo.stats.avg_daily_spend > 0">
-                  В среднем {{ aitunnelInfo.stats.avg_daily_spend.toFixed(2) }} ₽/день
+                  {{ t('settings.avgDaily', { spend: aitunnelInfo.stats.avg_daily_spend.toFixed(2) }) }}
                 </span>
                 <span v-if="aitunnelInfo.stats.top_model_by_spend">·</span>
                 <span v-if="aitunnelInfo.stats.top_model_by_spend">
-                  Топ: <code>{{ aitunnelInfo.stats.top_model_by_spend }}</code>
+                  {{ t('settings.topModel') }} <code>{{ aitunnelInfo.stats.top_model_by_spend }}</code>
                 </span>
               </div>
               <div v-if="aitunnelInfo.me?.email" class="muted small">{{ aitunnelInfo.me.email }}</div>
@@ -511,33 +522,31 @@ async function removeKey() {
           </div>
 
           <div v-if="provider === 'openrouter' && apiKeyConfiguredForProvider" class="aitunnel-info" :class="{ 'aitunnel-low': openrouterLowBalance }">
-            <div v-if="loadingOpenrouterInfo" class="muted small">загрузка баланса…</div>
-            <div v-else-if="openrouterInfoError" class="error small">Не удалось получить данные: {{ openrouterInfoError }}</div>
+            <div v-if="loadingOpenrouterInfo" class="muted small">{{ t('settings.loadingBalance') }}</div>
+            <div v-else-if="openrouterInfoError" class="error small">{{ t('settings.infoError', { msg: openrouterInfoError }) }}</div>
             <template v-else-if="openrouterInfo">
               <div class="aitunnel-row">
-                <span class="aitunnel-label">Остаток:</span>
+                <span class="aitunnel-label">{{ t('settings.remaining') }}</span>
                 <strong :class="{ 'aitunnel-low-text': openrouterLowBalance }">
                   ${{ openrouterRemaining !== null ? openrouterRemaining.toLocaleString('en-US', { maximumFractionDigits: 4 }) : '—' }}
                 </strong>
                 <span v-if="openrouterInfo.credits" class="muted small">
-                  · потрачено ${{ openrouterInfo.credits.total_usage.toLocaleString('en-US', { maximumFractionDigits: 4 }) }}
-                  / куплено ${{ openrouterInfo.credits.total_credits.toLocaleString('en-US', { maximumFractionDigits: 2 }) }}
+                  {{ t('settings.spentBought', { spent: openrouterInfo.credits.total_usage.toLocaleString('en-US', { maximumFractionDigits: 4 }), bought: openrouterInfo.credits.total_credits.toLocaleString('en-US', { maximumFractionDigits: 2 }) }) }}
                 </span>
                 <span style="flex:1"></span>
-                <button type="button" class="ghost small" @click="refreshOpenrouterInfo" title="Обновить">↻</button>
+                <button type="button" class="ghost small" @click="refreshOpenrouterInfo" :title="t('common.refresh')">↻</button>
               </div>
               <div v-if="openrouterInfo.key" class="aitunnel-stats muted small">
-                <span v-if="openrouterInfo.key.label">Ключ: <code>{{ openrouterInfo.key.label }}</code></span>
+                <span v-if="openrouterInfo.key.label">{{ t('settings.keyLabel') }} <code>{{ openrouterInfo.key.label }}</code></span>
                 <span v-if="openrouterInfo.key.is_free_tier">·</span>
-                <span v-if="openrouterInfo.key.is_free_tier">free-tier</span>
+                <span v-if="openrouterInfo.key.is_free_tier">{{ t('settings.freeTier') }}</span>
                 <span v-if="openrouterInfo.key.limit != null">·</span>
                 <span v-if="openrouterInfo.key.limit != null">
-                  лимит ${{ openrouterInfo.key.limit }}<template v-if="openrouterInfo.key.limit_remaining != null">,
-                  осталось ${{ openrouterInfo.key.limit_remaining.toLocaleString('en-US', { maximumFractionDigits: 4 }) }}</template>
+                  {{ t('settings.limit', { limit: openrouterInfo.key.limit }) }}<template v-if="openrouterInfo.key.limit_remaining != null">{{ t('settings.limitRemaining', { n: openrouterInfo.key.limit_remaining.toLocaleString('en-US', { maximumFractionDigits: 4 }) }) }}</template>
                 </span>
                 <span v-if="openrouterInfo.key.rate_limit">·</span>
                 <span v-if="openrouterInfo.key.rate_limit">
-                  rate {{ openrouterInfo.key.rate_limit.requests }}/{{ openrouterInfo.key.rate_limit.interval }}
+                  {{ t('settings.rate', { requests: openrouterInfo.key.rate_limit.requests, interval: openrouterInfo.key.rate_limit.interval }) }}
                 </span>
               </div>
             </template>
@@ -545,179 +554,171 @@ async function removeKey() {
 
           <label class="field">
             <span>
-              API-ключ {{ apiKeyConfiguredForProvider ? '(сохранён)' : '(не задан)' }}
+              {{ t('settings.apiKey') }} {{ apiKeyConfiguredForProvider ? t('common.saved') : t('common.notSet') }}
               <a
                 v-if="providerInfo.signupUrl"
                 :href="providerInfo.signupUrl"
                 target="_blank"
                 rel="noopener noreferrer"
                 class="key-link"
-              >Получить ключ ↗</a>
+              >{{ t('settings.getKey') }}</a>
             </span>
             <div class="row">
               <input
                 type="password"
                 v-model="apiKey"
-                :placeholder="apiKeyConfiguredForProvider ? '••• оставьте пустым чтобы не менять' : 'sk-...'"
+                :placeholder="apiKeyConfiguredForProvider ? t('common.placeholderUnchanged') : t('settings.apiKeyPh')"
                 autocomplete="off"
               />
               <button
                 v-if="apiKeyConfiguredForProvider"
                 class="ghost danger"
                 @click="removeKey"
-              >удалить</button>
+              >{{ t('common.remove') }}</button>
             </div>
           </label>
 
           <label v-if="providerInfo.supportsCaCert" class="field">
-            <span>CA-сертификат прокси (PEM)</span>
+            <span>{{ t('settings.caCert') }}</span>
             <div v-if="caCert" class="ca-loaded">
-              <span>✓ сертификат загружен ({{ Math.round(caCert.length / 1024 * 10) / 10 }} КБ)</span>
-              <button type="button" class="ghost danger" @click="caCert = ''">удалить</button>
+              <span>{{ t('settings.caLoaded', { n: Math.round(caCert.length / 1024 * 10) / 10 }) }}</span>
+              <button type="button" class="ghost danger" @click="caCert = ''">{{ t('common.remove') }}</button>
             </div>
             <div v-else class="row" style="gap:6px">
               <input ref="caFileInput" type="file" accept=".pem,.crt,.cer,.txt" hidden @change="(e: Event) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) loadCaCertFromFile(f); (e.target as HTMLInputElement).value = '' }" />
-              <button type="button" class="small" @click="($refs.caFileInput as HTMLInputElement).click()">📁 Загрузить .pem</button>
-              <span class="muted small">для MITM-прокси типа Claude proxy</span>
+              <button type="button" class="small" @click="($refs.caFileInput as HTMLInputElement).click()">{{ t('settings.caUpload') }}</button>
+              <span class="muted small">{{ t('settings.caHint') }}</span>
             </div>
           </label>
 
           <label v-if="providerInfo.baseURLEditable" class="field">
-            <span>Base URL</span>
+            <span>{{ t('settings.baseUrl') }}</span>
             <input v-model="baseURL" :placeholder="baseURLPlaceholder" />
           </label>
 
           <label class="field">
-            <span>Прокси для LLM <span class="muted small">(необязательно)</span></span>
+            <span>{{ t('settings.proxy') }} <span class="muted small">{{ t('common.optional') }}</span></span>
             <input v-model="llmProxy" placeholder="http://proxy-host:8080" />
           </label>
           <div v-if="llmProxy && provider !== 'custom_proxy'" class="proxy-auth-row">
             <label class="field" style="flex:1;margin-bottom:0">
-              <span>Логин прокси <span class="muted small">(опционально)</span></span>
-              <input v-model="llmProxyUser" placeholder="user" autocomplete="off" />
+              <span>{{ t('settings.proxyUser') }} <span class="muted small">{{ t('common.optionalShort') }}</span></span>
+              <input v-model="llmProxyUser" :placeholder="t('settings.proxyUserPh')" autocomplete="off" />
             </label>
             <label class="field" style="flex:1;margin-bottom:0">
-              <span>Пароль прокси {{ llmProxyPasswordConfiguredForProvider ? '(сохранён)' : '' }}</span>
+              <span>{{ t('settings.proxyPass') }} {{ llmProxyPasswordConfiguredForProvider ? t('common.saved') : '' }}</span>
               <input
                 type="password"
                 v-model="llmProxyPassword"
-                :placeholder="llmProxyPasswordConfiguredForProvider ? '••• оставьте пустым чтобы не менять' : ''"
+                :placeholder="llmProxyPasswordConfiguredForProvider ? t('common.placeholderUnchanged') : ''"
                 autocomplete="off"
               />
             </label>
           </div>
           <p v-else-if="provider === 'custom_proxy' && llmProxy" class="muted small" style="margin: -4px 0 8px;">
-            Логин/пароль прокси держи прямо в URL: <code>https://USER:PASS@host:port</code>
+            {{ t('settings.proxyInUrl') }} <code>https://USER:PASS@host:port</code>
           </p>
 
           <label class="field checkbox-field">
             <input type="checkbox" v-model="tlsInsecure" />
-            <span>Отключить проверку TLS-сертификата <span class="muted small">(для self-signed)</span></span>
+            <span>{{ t('settings.tlsInsecure') }} <span class="muted small">{{ t('settings.tlsHint') }}</span></span>
           </label>
 
           <label class="field">
             <div class="spread">
-              <span>Модель</span>
+              <span>{{ t('settings.model') }}</span>
               <button
                 class="small"
                 :disabled="!canFetchModels || loadingModels"
                 @click="fetchModels"
-              >{{ loadingModels ? 'загрузка…' : 'обновить список' }}</button>
+              >{{ loadingModels ? t('settings.loading') : t('settings.refreshList') }}</button>
             </div>
             <div v-if="!apiKeyConfiguredForProvider && !apiKey" class="muted small" style="margin-top:4px">
-              Введите API-ключ, чтобы загрузить список моделей.
+              {{ t('settings.needKeyForModels') }}
             </div>
             <div v-else-if="providerInfo.baseURLEditable && !baseURL.trim()" class="muted small" style="margin-top:4px">
-              Укажите Base URL.
+              {{ t('settings.needBaseUrl') }}
             </div>
             <ComboboxSearch
               v-else-if="models.length"
               :modelValue="model"
               :options="models"
               :badges="provider === 'custom_proxy' ? COPILOT_MULTIPLIERS : undefined"
-              placeholder="начните печатать для поиска…"
+              :placeholder="t('settings.modelSearchPh')"
               @update:modelValue="model = $event"
             />
             <input
               v-else
               v-model="model"
-              placeholder="нажмите «обновить список» или впишите имя модели"
+              :placeholder="t('settings.modelManualPh')"
               style="margin-top:4px"
             />
             <div v-if="modelsError" class="error small">{{ modelsError }}</div>
           </label>
 
           <label class="field">
-            <span>Temperature <span class="muted small">(пусто = дефолт провайдера)</span></span>
+            <span>{{ t('settings.temperature') }} <span class="muted small">{{ t('settings.temperatureHint') }}</span></span>
             <input
               type="number"
               min="0"
               max="2"
               step="0.1"
               v-model.number="temperature"
-              placeholder="напр. 0.7 — оставь пустым чтобы использовать дефолт"
+              :placeholder="t('settings.temperaturePh')"
             />
           </label>
 
           <label class="field">
-            <span>Минимальный интервал между запросами, мс <span class="muted small">(пусто = без троттлинга)</span></span>
+            <span>{{ t('settings.minInterval') }} <span class="muted small">{{ t('settings.minIntervalHint') }}</span></span>
             <input
               type="number"
               min="0"
               step="100"
               v-model.number="minRequestIntervalMs"
-              placeholder="напр. 1000 — не чаще одного запроса в секунду"
+              :placeholder="t('settings.minIntervalPh')"
             />
             <div class="muted small" style="margin-top:4px">
-              Помогает избежать бана у строгих провайдеров. На 429 (rate-limit) клиент автоматически ждёт и пробует снова — это видно в чате как «Провайдер занят, ждём…».
+              {{ t('settings.minIntervalDesc') }}
             </div>
           </label>
 
           <template v-if="showPriceFields">
-            <div class="subsection-label">Стоимость</div>
+            <div class="subsection-label">{{ t('settings.cost') }}</div>
             <label class="field">
-              <span>Цена входных токенов ($/1M)</span>
-              <input type="number" min="0" step="0.01" v-model.number="priceInput" placeholder="напр. 0.15" />
+              <span>{{ t('settings.priceInput') }}</span>
+              <input type="number" min="0" step="0.01" v-model.number="priceInput" :placeholder="t('settings.priceInputPh')" />
             </label>
             <label class="field">
-              <span>Цена выходных токенов ($/1M)</span>
-              <input type="number" min="0" step="0.01" v-model.number="priceOutput" placeholder="напр. 0.60" />
+              <span>{{ t('settings.priceOutput') }}</span>
+              <input type="number" min="0" step="0.01" v-model.number="priceOutput" :placeholder="t('settings.priceOutputPh')" />
             </label>
             <label class="field">
-              <span>Цена кэшированных токенов ($/1M) <span class="muted small">(по умолчанию — как входные)</span></span>
-              <input type="number" min="0" step="0.01" v-model.number="priceCached" placeholder="напр. 0.075" />
+              <span>{{ t('settings.priceCached') }} <span class="muted small">{{ t('settings.priceCachedHint') }}</span></span>
+              <input type="number" min="0" step="0.01" v-model.number="priceCached" :placeholder="t('settings.priceCachedPh')" />
             </label>
           </template>
 
-          <div class="subsection-label">Контекст</div>
+          <div class="subsection-label">{{ t('settings.context') }}</div>
 
-          <div v-if="provider === 'aitunnel'" class="muted small" style="margin-bottom:6px; padding:6px 8px; border-left:2px solid var(--accent); background: color-mix(in srgb, var(--accent) 4%, var(--bg))">
-            AITunnel сжимает контекст автоматически на своей стороне
-            (<a href="https://docs.aitunnel.ru/features/message-transforms.html" target="_blank" rel="noopener noreferrer">message-transforms</a>).
-            Включи клиентское сжатие ниже, если хочешь явный <code>checkpoint</code> с summary в твоей истории чата.
-          </div>
-          <div v-else-if="provider === 'openrouter'" class="muted small" style="margin-bottom:6px; padding:6px 8px; border-left:2px solid var(--accent); background: color-mix(in srgb, var(--accent) 4%, var(--bg))">
-            OpenRouter сжимает контекст автоматически на своей стороне
-            (<a href="https://openrouter.ai/docs/features/message-transforms" target="_blank" rel="noopener noreferrer">middle-out</a>).
-            Включи клиентское сжатие ниже, если хочешь явный <code>checkpoint</code> с summary в твоей истории чата.
-          </div>
+          <div v-if="provider === 'aitunnel'" class="muted small" style="margin-bottom:6px; padding:6px 8px; border-left:2px solid var(--accent); background: color-mix(in srgb, var(--accent) 4%, var(--bg))" v-html="t('settings.aitunnelCompactNote')"></div>
+          <div v-else-if="provider === 'openrouter'" class="muted small" style="margin-bottom:6px; padding:6px 8px; border-left:2px solid var(--accent); background: color-mix(in srgb, var(--accent) 4%, var(--bg))" v-html="t('settings.openrouterCompactNote')"></div>
 
           <label v-if="providerHasServerCompaction" class="field checkbox-field">
             <input type="checkbox" v-model="autoCompact" />
-            <span>Клиентское авто-сжатие контекста (через инструмент checkpoint)</span>
+            <span>{{ t('settings.clientAutoCompact') }}</span>
           </label>
 
           <template v-if="autoCompact">
             <label class="field">
               <div class="spread">
-                <span>Размер контекстного окна (токенов)</span>
+                <span>{{ t('settings.ctxWindow') }}</span>
                 <button
                   v-if="detectedContextWindow && contextWindow !== detectedContextWindow"
                   type="button"
                   class="small"
                   @click="applyDetectedContextWindow"
-                  :title="`Подставить значение, полученное от провайдера: ${detectedContextWindow.toLocaleString('ru-RU')}`"
-                >подставить авто</button>
+                  :title="t('settings.applyAutoTooltip', { n: detectedContextWindow.toLocaleString(localeTag()) })"
+                >{{ t('settings.applyAuto') }}</button>
               </div>
               <input
                 type="number"
@@ -727,31 +728,30 @@ async function removeKey() {
                 :placeholder="contextWindowPlaceholder"
               />
               <div class="muted small" style="margin-top:4px">
-                Пусто — берётся либо значение от провайдера ({{ detectedContextWindow ? detectedContextWindow.toLocaleString('ru-RU') : 'нет' }}),
-                либо встроенная таблица известных моделей, либо 128 000 по умолчанию.
+                {{ t('settings.ctxWindowDesc', { n: detectedContextWindow ? detectedContextWindow.toLocaleString(localeTag()) : t('common.none') }) }}
               </div>
             </label>
 
             <label class="field">
-              <span>Модель для сжатия контекста <span class="muted small">(опционально, обычно дешевле основной)</span></span>
+              <span>{{ t('settings.compactModel') }} <span class="muted small">{{ t('settings.compactModelHint') }}</span></span>
               <ComboboxSearch
                 v-if="models.length"
                 :modelValue="compactModel"
                 :options="['', ...models]"
                 :badges="provider === 'custom_proxy' ? COPILOT_MULTIPLIERS : undefined"
-                placeholder="(использовать основную модель)"
+                :placeholder="t('settings.compactModelPh')"
                 @update:modelValue="compactModel = $event"
               />
               <input
                 v-else
                 v-model="compactModel"
-                placeholder="(использовать основную модель)"
+                :placeholder="t('settings.compactModelPh')"
               />
             </label>
 
             <label class="field" style="margin-top:-4px">
               <div class="spread">
-                <span>Порог автосжатия</span>
+                <span>{{ t('settings.compactThreshold') }}</span>
                 <span class="muted small">{{ Math.round(autoCompactThreshold * 100) }}%</span>
               </div>
               <input
@@ -760,61 +760,64 @@ async function removeKey() {
                 style="width:100%; padding:0; background:transparent; border:none;"
               />
               <div class="muted small">
-                Когда заполнение превысит этот порог — будет автоматически отправлен запрос на checkpoint
-                (используется
-                <code v-if="compactModel">{{ compactModel }}</code>
-                <span v-else>основная модель</span>).
-                Сколько останется после сжатия — зависит от размера последнего раунда tool calls (обычно 5–20% от окна).
+                {{ t('settings.compactThresholdDesc1') }}<code v-if="compactModel">{{ compactModel }}</code><span v-else>{{ t('settings.mainModel') }}</span>{{ t('settings.compactThresholdDesc2') }}
               </div>
             </label>
           </template>
         </section>
 
         <section>
-          <h3>MQTT (на контроллерах)</h3>
+          <h3>{{ t('settings.mqttSection') }}</h3>
           <label class="field">
-            <span>Пользователь</span>
-            <input v-model="mqttUser" placeholder="по умолчанию пусто (анонимно)" />
+            <span>{{ t('settings.user') }}</span>
+            <input v-model="mqttUser" :placeholder="t('settings.mqttUserPh')" />
           </label>
           <label class="field">
-            <span>Пароль {{ settings?.mqttPasswordConfigured ? '(сохранён)' : '' }}</span>
+            <span>{{ t('settings.password') }} {{ settings?.mqttPasswordConfigured ? t('common.saved') : '' }}</span>
             <input
               type="password"
               v-model="mqttPassword"
-              :placeholder="settings?.mqttPasswordConfigured ? '••• оставьте пустым чтобы не менять' : ''"
+              :placeholder="settings?.mqttPasswordConfigured ? t('common.placeholderUnchanged') : ''"
             />
           </label>
         </section>
 
         <section>
-          <h3>SSH (на контроллерах)</h3>
+          <h3>{{ t('settings.sshSection') }}</h3>
           <p class="muted small" style="margin:0 0 8px">
-            Сначала пробуется приватный ключ (если задан), потом фоллбек на пароль.
-            Дефолт — <code>root</code> / <code>wirenboard</code>.
+            {{ t('settings.sshHint1') }}
+            {{ t('settings.sshHint2') }} <code>root</code> / <code>wirenboard</code>.
           </p>
           <label class="field">
-            <span>Пользователь</span>
-            <input v-model="sshUser" placeholder="root" />
+            <span>{{ t('settings.user') }}</span>
+            <input v-model="sshUser" :placeholder="t('settings.sshUserPh')" />
           </label>
           <label class="field">
-            <span>Пароль {{ settings?.sshPasswordConfigured ? '(сохранён)' : '' }}</span>
+            <span>{{ t('settings.password') }} {{ settings?.sshPasswordConfigured ? t('common.saved') : '' }}</span>
             <input
               type="password"
               v-model="sshPassword"
-              :placeholder="settings?.sshPasswordConfigured ? '••• оставьте пустым чтобы не менять' : 'wirenboard'"
+              :placeholder="settings?.sshPasswordConfigured ? t('common.placeholderUnchanged') : t('settings.sshPasswordPh')"
             />
           </label>
           <label class="field">
-            <span>Путь к приватному SSH-ключу <span class="muted small">(опционально)</span></span>
-            <input v-model="sshKeyPath" :placeholder="`~/.ssh/id_ed25519`" />
+            <span>{{ t('settings.sshKeyPath') }} <span class="muted small">{{ t('common.optionalShort') }}</span></span>
+            <input v-model="sshKeyPath" :placeholder="t('settings.sshKeyPh')" />
           </label>
         </section>
 
         <section>
-          <h3>Интерфейс</h3>
+          <h3>{{ t('settings.ui') }}</h3>
+          <label class="field">
+            <span>{{ t('settings.lang') }}</span>
+            <select :value="lang" @change="onLangChange(($event.target as HTMLSelectElement).value as Lang)">
+              <option value="ru">Русский</option>
+              <option value="en">English</option>
+            </select>
+          </label>
           <label class="field">
             <div class="spread">
-              <span>Размер шрифта</span>
+              <span>{{ t('settings.fontSize') }}</span>
               <span class="muted small">{{ fontSize ?? 15 }} px</span>
             </div>
             <input
@@ -827,9 +830,9 @@ async function removeKey() {
         </section>
 
         <section>
-          <h3>Прочее</h3>
+          <h3>{{ t('settings.misc') }}</h3>
           <label class="field">
-            <span>Период mDNS-сканирования (мс)</span>
+            <span>{{ t('settings.mdnsInterval') }}</span>
             <input type="number" min="3000" step="1000" v-model="discoveryInterval" />
           </label>
         </section>
@@ -837,20 +840,20 @@ async function removeKey() {
         <div v-if="saveError" class="error">{{ saveError }}</div>
         <div class="muted small" v-if="settings" style="display:flex;justify-content:space-between;align-items:center;gap:8px;min-width:0">
           <span style="display:flex;align-items:center;gap:4px;min-width:0;overflow:hidden">
-            <span style="white-space:nowrap;flex-shrink:0">Файл настроек:</span>
+            <span style="white-space:nowrap;flex-shrink:0">{{ t('settings.storageFile') }}</span>
             <code style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block" :title="settings.storagePath">{{ settings.storagePath }}</code>
           </span>
           <span v-if="version" style="white-space:nowrap;flex-shrink:0">v{{ version }}</span>
         </div>
       </div>
       <div class="modal-footer">
-        <button class="ghost small" @click="exportSettings" title="Сохранить все настройки в файл">📤 Экспорт</button>
+        <button class="ghost small" @click="exportSettings" :title="t('settings.exportTooltip')">{{ t('settings.export') }}</button>
         <input ref="importInput" type="file" accept=".json,application/json" hidden @change="(e: Event) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) importSettings(f); (e.target as HTMLInputElement).value = '' }" />
-        <button class="ghost small" @click="($refs.importInput as HTMLInputElement).click()" title="Загрузить настройки из файла">📥 Импорт</button>
+        <button class="ghost small" @click="($refs.importInput as HTMLInputElement).click()" :title="t('settings.importTooltip')">{{ t('settings.import') }}</button>
         <span style="flex:1"></span>
-        <button @click="emit('close')">Отмена</button>
+        <button @click="emit('close')">{{ t('common.cancel') }}</button>
         <button class="primary" :disabled="saving" @click="save">
-          {{ saving ? 'Сохраняю…' : 'Сохранить' }}
+          {{ saving ? t('common.saving') : t('common.save') }}
         </button>
       </div>
     </div>

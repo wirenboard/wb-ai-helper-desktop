@@ -1,7 +1,7 @@
 /**
- * Per-session todo list. In-memory — план живёт в рамках сессии.
- * Модель пишет список целиком через todo_write. Список инжектируется
- * как system-message каждого turn.
+ * Per-session todo list. In-memory — the plan lives within the session.
+ * The model writes the whole list via todo_write. The list is injected as a
+ * system message on every turn.
  */
 
 export type TodoStatus = 'pending' | 'in_progress' | 'completed'
@@ -27,7 +27,7 @@ export function clearTodos(sessionId: string): void {
 }
 
 export function formatTodos(items: TodoItem[]): string {
-  if (!items.length) return '(план пуст)'
+  if (!items.length) return '(plan is empty)'
   const mark: Record<TodoStatus, string> = { pending: '[ ]', in_progress: '[~]', completed: '[x]' }
   return items.map((t, i) => `${i + 1}. ${mark[t.status]} ${t.content}`).join('\n')
 }

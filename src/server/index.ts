@@ -74,10 +74,9 @@ function resolveBaseUrl(s: Settings): string | undefined {
   return def || undefined
 }
 
-// Возврат seedSystemSkills используется в POST /api/chats: при создании чата
-// юзеру в первой строке (system_event) показывается «Модель: X · инструменты:
-// N · скиллы: M», а если M=0 — рядом ⚠ предупреждение о баге сборки. Так
-// проблема видна в UI без копания в логах сервера.
+// seedSystemSkills feeds the chat's first system_event line «Model: X · tools:
+// N · skills: M»; M=0 surfaces a ⚠ build-bug warning, making the issue visible
+// in the UI without digging through server logs.
 seedSystemSkills(db)
 
 const discovery = new Discovery(db)
@@ -87,7 +86,7 @@ const ssh = new SshPool({
   password: settings.sshPassword,
   keyPath: settings.sshKeyPath,
 })
-const chats = new ChatStore(db)
+const chats = new ChatStore(db, () => settingsStore.get().uiLanguage)
 function buildLlmClient(s: Settings): LlmClient | null {
   const cur = s.providers[s.provider]
   if (!cur.apiKey) return null
@@ -101,13 +100,13 @@ function buildLlmClient(s: Settings): LlmClient | null {
     tlsInsecure: cur.tlsInsecure,
     caCert: cur.caCert || undefined,
     apiFormat: cur.apiFormat,
-    // OpenRouter возвращает usage.cost (USD) только если в теле явно
-    // передан `usage: { include: true }`.
+    // OpenRouter returns usage.cost (USD) only when the body explicitly
+    // sends `usage: { include: true }`.
     includeUsageAccounting: s.provider === 'openrouter',
-    // OpenRouter middle-out: серверное сжатие включается одной общей
-    // галочкой autoCompact (как у AITunnel). autoCompact=off → серверное
-    // сжатие провайдера; autoCompact=on → клиентский checkpoint, а
-    // серверный middle-out отключён, чтобы не было двойной обработки.
+    // OpenRouter middle-out: server-side compaction toggled by the shared
+    // autoCompact flag (like AITunnel). autoCompact=off → provider-side
+    // compaction; autoCompact=on → client checkpoint, server middle-out
+    // disabled to avoid double processing.
     middleOut: s.provider === 'openrouter' && !cur.autoCompact,
     minRequestIntervalMs: cur.minRequestIntervalMs,
   })
@@ -124,8 +123,8 @@ settingsStore.onChange((s) => {
 
 discovery.start(settings.discoveryInterval)
 
-// Background-poller, обновляющий состояние running-задач из памяти. UI
-// poll читает уже актуальный state без блокирующего SSH в http-обработчике.
+// Background poller that refreshes running-job state in memory, so the UI poll
+// reads a current state without blocking SSH inside the HTTP handler.
 startJobTracker(async (job) => {
   const ctrl = discovery.get(job.sn)
   if (!ctrl) return null
@@ -167,6 +166,7 @@ app.put('/api/settings', async (c) => {
   }
   if (typeof body['discoveryInterval'] === 'number') patch['discoveryInterval'] = body['discoveryInterval']
   if (typeof body['openBrowser'] === 'boolean') patch['openBrowser'] = body['openBrowser']
+  if (body['uiLanguage'] === 'ru' || body['uiLanguage'] === 'en') patch['uiLanguage'] = body['uiLanguage']
   if (typeof body['tlsInsecure'] === 'boolean') patch['tlsInsecure'] = body['tlsInsecure']
   if (typeof body['autoCompact'] === 'boolean') patch['autoCompact'] = body['autoCompact']
   if (typeof body['autoCompactThreshold'] === 'number'
@@ -213,8 +213,8 @@ app.delete('/api/settings/api-key', async (c) => {
 })
 
 /**
- * AITunnel-specific: баланс + сводная статистика + email юзера. Доступно только
- * когда активный провайдер — `aitunnel` (используем его apiKey/baseURL).
+ * AITunnel-specific: balance + summary stats + user email. Only available when
+ * the active provider is `aitunnel` (uses its apiKey/baseURL).
  */
 app.get('/api/aitunnel/info', async (c) => {
   const s = settingsStore.get()
@@ -245,8 +245,8 @@ app.get('/api/aitunnel/info', async (c) => {
 })
 
 /**
- * OpenRouter-specific: total credits / total usage / лимиты ключа.
- * Доступно только когда активный провайдер — `openrouter`.
+ * OpenRouter-specific: total credits / total usage / key limits.
+ * Only available when the active provider is `openrouter`.
  */
 app.get('/api/openrouter/info', async (c) => {
   const s = settingsStore.get()
@@ -339,21 +339,21 @@ app.get('/api/chats', (c) => c.json({ chats: chats.list() }))
 app.post('/api/chats', async (c) => {
   const body = await c.req.json().catch(() => ({}))
   const chat = chats.create(body.title, Array.isArray(body.contextSns) ? body.contextSns : [])
-  // Приветственный system_event с тем, что юзер должен видеть до первого
-  // сообщения: что за модель, сколько инструментов и скиллов сейчас заряжено.
-  // Тот же канал, что у уведомлений «джоба завершилась» (user-turn с префиксом
-  // «[Система]» рендерится фронтом как ⚙ system_event). Если скиллов 0 —
-  // сразу пишем предупреждение в этой же строке: иначе про багу сборки никто
-  // не узнает (console.error на сервере в Electron-приложении не виден).
+  // Welcome system_event shown before the first message: which model, how many
+  // tools and skills are loaded. Same channel as «job finished» notifications
+  // (a user-turn prefixed «[System]» renders as ⚙ system_event). If 0 skills,
+  // warn inline — otherwise the build bug goes unnoticed (server console.error
+  // is invisible inside the Electron app).
   const systemSkills = listSkills(db).filter((s) => s.origin === 'system').length
-  const toolsCount = toolSchemas().length
   const settings = settingsStore.get()
+  const toolsCount = toolSchemas().length
   const providerLabel = PROVIDER_DEFAULTS[settings.provider]?.label ?? settings.provider
+  const en = settings.uiLanguage === 'en'
   const head = llm?.model
-    ? `${providerLabel} · ${llm.model} · инструменты: ${toolsCount} · скиллы: ${systemSkills}`
-    : `${providerLabel} (не настроен) · инструменты: ${toolsCount} · скиллы: ${systemSkills}`
-  const warning = systemSkills === 0 ? ' ⚠ системные скиллы не загружены (бага сборки)' : ''
-  chats.appendTurn(chat.id, { role: 'user', content: `[Система] ${head}${warning}` })
+    ? `${providerLabel} · ${llm.model} · ${en ? 'tools' : 'инструменты'}: ${toolsCount} · ${en ? 'skills' : 'скиллы'}: ${systemSkills}`
+    : `${providerLabel} (${en ? 'not configured' : 'не настроен'}) · ${en ? 'tools' : 'инструменты'}: ${toolsCount} · ${en ? 'skills' : 'скиллы'}: ${systemSkills}`
+  const warning = systemSkills === 0 ? (en ? ' ⚠ system skills not loaded (build bug)' : ' ⚠ системные скиллы не загружены (бага сборки)') : ''
+  chats.appendTurn(chat.id, { role: 'user', content: `[System] ${head}${warning}` })
   return c.json(chats.get(chat.id))
 })
 
@@ -362,10 +362,10 @@ app.get('/api/chats/:id', (c) => {
   return chat ? c.json(chat) : c.json({ error: 'not found' }, 404)
 })
 
-// Принудительное сжатие истории чата — деструктивно. Сохраняет только
-// system-турн и последний user-msg + всё после него, на месте обрезанного
-// — synthetic [Система] уведомление. Используется фронтом когда автосжатие
-// уже попросило модель, та не сжала, а ratio переполз HARD_COMPACT_RATIO.
+// Force-compact chat history — destructive. Keeps only the system turn and the
+// last user message + everything after it; the truncated part is replaced by a
+// synthetic [System] notice. Used by the frontend when auto-compact already
+// asked the model, it didn't compact, and ratio crossed HARD_COMPACT_RATIO.
 app.post('/api/chats/:id/force-compact', async (c) => {
   const id = c.req.param('id')
   const body = await c.req.json().catch(() => ({}))
@@ -396,13 +396,13 @@ app.delete('/api/chats/:id', (c) => {
 
 app.get('/api/chats/:id/jobs', (c) => {
   const id = c.req.param('id')
-  // ВАЖНО: не дёргаем SSH из этого endpoint. Раньше на каждый polling
-  // (раз в 3 сек) делали `ssh.jobStatus(ctrl, jobId)` для всех running —
-  // и когда контроллер был недоступен (например, во время `apt upgrade`
-  // с обновлением ядра и reboot), SSH висел до handshake-таймаута,
-  // параллельные запросы с разных тиков пересекались, баннер мерцал/пропадал.
-  // Состояние job обновляется штатно — когда модель вызывает `job_status`
-  // как tool (см. tools.ts), это транзитом дёргает updateJobState.
+  // IMPORTANT: never touch SSH from this endpoint. It used to call
+  // `ssh.jobStatus(ctrl, jobId)` for every running job on each poll (every 3s);
+  // when the controller was unreachable (e.g. during `apt upgrade` with a kernel
+  // update and reboot), SSH hung until the handshake timeout, overlapping ticks
+  // collided, and the banner flickered/vanished. Job state is updated normally
+  // when the model calls the `job_status` tool (see tools.ts), which routes
+  // through updateJobState.
   return c.json({ jobs: getJobsForSession(id) })
 })
 
@@ -441,10 +441,10 @@ app.post('/api/chats/:id/message', async (c) => {
   const settingsAtRequest = settingsStore.get()
   const cur = settingsAtRequest.providers[settingsAtRequest.provider]
   const modelOverride = compactRequested && cur.compactModel ? cur.compactModel : undefined
-  // Атрибуция, которая прибивается к каждому сохраняемому assistant-turn'у:
-  // подвал в UI (ChatMessage.vue) теперь читает provider/model из самого
-  // turn'а, а не из текущих settings — иначе после переключения провайдера
-  // прошлые сообщения переименовывались (см. screenshot: AITunnel ₽ → OpenAI $).
+  // Attribution stamped onto every saved assistant turn: the UI footer
+  // (ChatMessage.vue) reads provider/model from the turn itself, not from
+  // current settings — otherwise switching providers relabeled past messages
+  // (e.g. AITunnel ₽ → OpenAI $).
   const turnAttribution = {
     provider: settingsAtRequest.provider,
     model: modelOverride || activeLlm.model,
@@ -454,9 +454,9 @@ app.post('/api/chats/:id/message', async (c) => {
       ? cur.temperature
       : undefined
 
-  // retryLast: не добавляем user-turn повторно — берём последний из DB.
-  // Используется кнопкой «Повторить» в баннере ошибок: текст уже сохранён
-  // в чате при первой попытке, дубль не нужен.
+  // retryLast: don't re-append a user turn — take the last one from DB. Used by
+  // the «Retry» button in the error banner: the text was already saved on the
+  // first attempt, no duplicate needed.
   const chatWithUser = retryLast
     ? chats.get(id)!
     : chats.appendTurn(id, { role: 'user', content: userText })!
@@ -466,6 +466,17 @@ app.post('/api/chats/:id/message', async (c) => {
     await send('user', { text: userText })
 
     const agentState: { checkpointSummary?: string } = {}
+    const lang = settingsStore.get().uiLanguage
+    const L = (ru: string, en: string) => (lang === 'en' ? en : ru)
+    // Refresh the leading system prompt to the CURRENT language + context.
+    // The system turn is persisted once at chat creation; if the user switched
+    // uiLanguage afterwards, its baked LANG_DIRECTIVE (and its default-language
+    // hint) would stay stale and the model would keep replying in the old
+    // language. Regenerate it from current settings on every send.
+    const sysTurn = chatWithUser.turns[0]
+    if (sysTurn && sysTurn.role === 'system') {
+      sysTurn.content = chats.systemPromptFor(chat.contextSns, lang)
+    }
     const ctx = { discovery, mqtt, ssh, contextSns: chat.contextSns, db, sessionId: id, agentState, braveApiKey: process.env['BRAVE_SEARCH_API_KEY'] }
     let assistantText = ''
     const pendingToolCalls: { id: string; name: string; arguments: string }[] = []
@@ -482,11 +493,22 @@ app.post('/api/chats/:id/message', async (c) => {
           agentState,
           modelOverride,
           temperature: temperatureOverride,
-          // Vision: при отправке user-сообщения с прикреплёнными
-          // картинками llm.ts превратит токены `[file:id:name]` для
-          // image-расширений в multi-modal content (image_url + base64).
-          // Если модель не vision-capable, провайдер вернёт ошибку —
-          // formatLlmError её распарсит для пользователя.
+          checkpointMessage: (summary: string) => L(
+            `Чекпоинт — итог предыдущего этапа:\n${summary}\n\n` +
+              'Сделан checkpoint, история сжата. ПРОДОЛЖАЙ выполнение текущей задачи: ' +
+              'следующий шаг по плану через нужный инструмент. Если задача полностью ' +
+              'завершена и больше делать нечего — дай финальный ответ пользователю. ' +
+              'Не пиши «дальше проверю / посмотрю / попробую» как обещание — сразу делай.',
+            `Checkpoint — summary of the previous stage:\n${summary}\n\n` +
+              'Checkpoint done, history compacted. CONTINUE the current task: ' +
+              'the next step of the plan via the appropriate tool. If the task is fully ' +
+              'complete and there is nothing left to do — give the final answer to the user. ' +
+              'Do not write «I will check / look / try next» as a promise — just do it.',
+          ),
+          // Vision: when a user message has attached images, llm.ts turns
+          // `[file:id:name]` tokens for image extensions into multi-modal
+          // content (image_url + base64). If the model isn't vision-capable,
+          // the provider returns an error that formatLlmError parses for the user.
           loadAttachmentBuffer: (id: string) => {
             const meta = getAttachment(id, id) ?? getAttachment(chat.id, id)
             const buf = readAttachment(chat.id, id)
@@ -497,7 +519,7 @@ app.post('/api/chats/:id/message', async (c) => {
             const skills = listSkills(db)
             const catalog = skills.length
               ? skills.map((s) => `- ${s.name} — ${s.description}`).join('\n')
-              : '(нет доступных скиллов)'
+              : L('(нет доступных скиллов)', '(no skills available)')
             const todos = getTodos(id)
             const loadedSkills = getLoadedSkills(id)
             // Only user uploads are shown to the LLM — assistant-produced files
@@ -507,19 +529,34 @@ app.post('/api/chats/:id/message', async (c) => {
             const runningJobs = sessionJobs.filter((j) => j.state === 'running')
             return [
               chat.contextSns.length
-                ? `Текущий контекст — выбранные контроллеры: ${chat.contextSns.join(', ')}. Когда пользователь говорит «текущий», «этот», «он» про контроллер без явного SN — это эти SN. Если пользователь явно называет другой SN — ориентируйся на него.`
-                : `Контекст не выбран — пользователь не выбрал ни одного контроллера в UI. Если задача требует SN — вызови list_controllers или спроси пользователя.`,
-              `Каталог скиллов (подгружай через load_skill("<name>") ДО действий с контроллером):\n${catalog}`,
+                ? L(
+                    `Текущий контекст — выбранные контроллеры: ${chat.contextSns.join(', ')}. Когда пользователь говорит «текущий», «этот», «он» про контроллер без явного SN — это эти SN. Если пользователь явно называет другой SN — ориентируйся на него.`,
+                    `Current context — selected controllers: ${chat.contextSns.join(', ')}. When the user says «current», «this», «it» about a controller without an explicit SN — these are the SNs. If the user explicitly names a different SN — go with that one.`,
+                  )
+                : L(
+                    `Контекст не выбран — пользователь не выбрал ни одного контроллера в UI. Если задача требует SN — вызови list_controllers или спроси пользователя.`,
+                    `No context selected — the user has not selected any controller in the UI. If the task needs an SN — call list_controllers or ask the user.`,
+                  ),
+              L(
+                `Каталог скиллов (подгружай через load_skill("<name>") ДО действий с контроллером):\n${catalog}`,
+                `Skill catalog (load via load_skill("<name>") BEFORE acting on a controller):\n${catalog}`,
+              ),
               todos.length
-                ? `Текущий план работы (редактируй через todo_write):\n${formatTodos(todos)}`
-                : 'План работы не задан. На задачах в 3+ шага сначала вызови todo_write.',
+                ? L(`Текущий план работы (редактируй через todo_write):\n${formatTodos(todos)}`, `Current work plan (edit via todo_write):\n${formatTodos(todos)}`)
+                : L('План работы не задан. На задачах в 3+ шага сначала вызови todo_write.', 'No work plan set. For tasks of 3+ steps, call todo_write first.'),
               attachments.length
-                ? `Вложения текущего чата (файлы загруженные пользователем):\n${attachments.map(a => `- ${a.id}: ${a.name} (${a.size} байт, ${a.mime})`).join('\n')}\nДля чтения используй read_attachment(fileId). Для загрузки на контроллер — upload_to_controller(sn, fileId, path).`
-                : 'Вложений нет. Если нужно загрузить файл на контроллер — попроси пользователя прикрепить его кнопкой 📎 в UI.',
+                ? L(
+                    `Вложения текущего чата (файлы загруженные пользователем):\n${attachments.map(a => `- ${a.id}: ${a.name} (${a.size} байт, ${a.mime})`).join('\n')}\nДля чтения используй read_attachment(fileId). Для загрузки на контроллер — upload_to_controller(sn, fileId, path).`,
+                    `Attachments in the current chat (files uploaded by the user):\n${attachments.map(a => `- ${a.id}: ${a.name} (${a.size} bytes, ${a.mime})`).join('\n')}\nUse read_attachment(fileId) to read them. To upload to a controller — upload_to_controller(sn, fileId, path).`,
+                  )
+                : L('Вложений нет. Если нужно загрузить файл на контроллер — попроси пользователя прикрепить его кнопкой 📎 в UI.', 'No attachments. If you need to upload a file to a controller — ask the user to attach it with the 📎 button in the UI.'),
               ...(runningJobs.length
-                ? [`⚙ Активные фоновые задачи в этом чате:\n${runningJobs.map((j) => `  jobId=${j.jobId}  sn=${j.sn}  "${j.label}"`).join('\n')}\nИспользуй эти jobId для job_status/job_tail/job_cancel. Не вызывай job_status с jobId="unknown" — только с реальным 8-значным hex.`]
+                ? [L(
+                    `⚙ Активные фоновые задачи в этом чате:\n${runningJobs.map((j) => `  jobId=${j.jobId}  sn=${j.sn}  "${j.label}"`).join('\n')}\nИспользуй эти jobId для job_status/job_tail/job_cancel. Не вызывай job_status с jobId="unknown" — только с реальным 8-значным hex.`,
+                    `⚙ Active background jobs in this chat:\n${runningJobs.map((j) => `  jobId=${j.jobId}  sn=${j.sn}  "${j.label}"`).join('\n')}\nUse these jobIds for job_status/job_tail/job_cancel. Do not call job_status with jobId="unknown" — only a real 8-hex id.`,
+                  )]
                 : []),
-              ...loadedSkills.map((s) => `Инструкции загруженного скилла "${s.name}" (активны в этой сессии):\n${s.content}`),
+              ...loadedSkills.map((s) => L(`Инструкции загруженного скилла "${s.name}" (активны в этой сессии):\n${s.content}`, `Instructions of the loaded skill "${s.name}" (active in this session):\n${s.content}`)),
             ]
           },
         },
@@ -567,10 +604,13 @@ app.post('/api/chats/:id/message', async (c) => {
         turnAttribution,
       )
     }
-    // Если агент упёрся в max_turns без финального текста — пишем явное
-    // системное сообщение, чтобы пользователь не сидел перед пустым чатом.
+    // If the agent hit max_turns without final text, write an explicit system
+    // message so the user isn't left staring at an empty chat.
     if (finishReason === 'max_turns' && !assistantText) {
-      const hint = 'Агент исчерпал бюджет шагов (20 итераций) и не успел подвести итог. Скажи «продолжай» — я продолжу с того места, или переформулируй задачу.'
+      const hint = L(
+        'Агент исчерпал бюджет шагов (20 итераций) и не успел подвести итог. Скажи «продолжай» — я продолжу с того места, или переформулируй задачу.',
+        'The agent ran out of its step budget (20 iterations) and could not wrap up. Say «continue» — I will pick up from there, or rephrase the task.',
+      )
       chats.appendTurn(id, { role: 'assistant', content: hint }, undefined, turnAttribution)
       await send('text-delta', { text: hint })
     }

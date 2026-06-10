@@ -47,9 +47,9 @@ describe('extractDescription', () => {
   })
 })
 
-// Гард против ситуации, когда в fixtures/skills прилетает .md без валидного
-// первого абзаца — seedSystemSkills такой файл `пропустит` с warn'ом, и в БД
-// его не будет ни в dev, ни в release. Тест ловит это до коммита.
+// Guard against a fixtures/skills .md landing without a valid first paragraph —
+// seedSystemSkills would skip it with a warning, so it'd be absent from the DB
+// in both dev and release. This test catches it before commit.
 describe('every shipped fixture skill has a valid description', () => {
   const SKILLS_DIR = join(import.meta.dir, '..', 'src', 'server', 'fixtures', 'skills')
   const files = readdirSync(SKILLS_DIR).filter((f) => f.endsWith('.md'))

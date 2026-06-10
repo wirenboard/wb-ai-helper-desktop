@@ -7,11 +7,11 @@ type Conn = {
   ready: Promise<void>
 }
 
-// 4 сек оказались тесноватыми на холодном коннекте — `mqtt_inventory`
-// первый вызов на чате-сессии регулярно падал с «connack timeout»,
-// пока mqtt.js устанавливал TCP+MQTT handshake к контроллеру через mDNS.
-// Со второго раза работало (соединение в `conns` уже активно). 8 сек
-// даёт запас на медленные сети и резолв wirenboard-XXX.local.
+// 4 s turned out too tight on a cold connect — `mqtt_inventory`'s first call
+// in a chat session regularly failed with "connack timeout" while mqtt.js
+// established the TCP+MQTT handshake to the controller over mDNS. The second
+// call worked (the `conns` connection was already active). 8 s leaves headroom
+// for slow networks and wirenboard-XXX.local resolution.
 const CONNECT_TIMEOUT = 8000
 const READ_TIMEOUT = 1500
 

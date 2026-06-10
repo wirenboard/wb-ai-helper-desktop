@@ -191,11 +191,11 @@ export class Discovery {
     }
   }
 
-  /** `serviceType` (e.g. `_ssh._tcp`, `_http._tcp`, `_workstation._tcp`) — нужен
-   *  чтобы НЕ принимать `svc.port` от чего попало. Поле `Controller.port`
-   *  семантически означает «нестандартный SSH-порт»; mDNS-announce от http/
-   *  workstation шлёт 80/9 соответственно, и если их подхватить — `SshPool`
-   *  пойдёт коннектиться на 80/9. Поэтому порт берём только из `_ssh._tcp`. */
+  /** `serviceType` (e.g. `_ssh._tcp`, `_http._tcp`, `_workstation._tcp`) — needed
+   *  so we DON'T accept `svc.port` from just anything. `Controller.port`
+   *  semantically means "non-standard SSH port"; http/workstation mDNS announces
+   *  send 80/9 respectively, and picking those up would make `SshPool` connect to
+   *  80/9. So the port is only taken from `_ssh._tcp`. */
   private onService(
     svc: { host?: string; addresses?: string[]; port?: number },
     serviceType: string = '',
@@ -206,10 +206,10 @@ export class Discovery {
     const key = sn.toUpperCase()
     const existing = this.controllers.get(key)
     const isSshAnnouncement = /^_ssh\._tcp/.test(serviceType)
-    // Existing port wins (он либо из предыдущего _ssh._tcp announce, либо ввели
-    // вручную как `host:port`); только потом — новый порт, но только если это
-    // именно SSH-announce, и только если порт нестандартный (22 явно
-    // указывать не нужно — это дефолт baseConfig).
+    // Existing port wins (either from a prior _ssh._tcp announce or entered
+    // manually as `host:port`); only then a new port, and only if this is an
+    // SSH announce and the port is non-standard (22 needn't be set explicitly —
+    // it's the baseConfig default).
     let port = existing?.port
     if (isSshAnnouncement && typeof svc.port === 'number' && svc.port > 0 && svc.port !== 22) {
       port = svc.port
@@ -248,6 +248,32 @@ export function parseSn(host: string): string | null {
 
 export function defaultHost(sn: string): string {
   return `wirenboard-${sn.toLowerCase()}.local`
+}
+
+export function isIPv4(a: string): boolean {
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(a)
+}
+
+/** IPv6 link-local (fe80::/10 → fe80..febf). Unusable for us: it needs a zone
+ *  id and WB sshd doesn't listen there — dialing it yields ECONNREFUSED. */
+export function isLinkLocalIPv6(a: string): boolean {
+  return /^fe[89ab][0-9a-f]:/i.test(a)
+}
+
+/** Pick the host to dial for SSH from a controller's resolved addresses.
+ *  Priority: IPv4 literal → routable IPv6 literal → hostname (let the OS
+ *  resolve) → first address. Never returns a bare link-local IPv6 when anything
+ *  better exists — that's the ECONNREFUSED trap when mDNS resolves AAAA to a
+ *  fe80:: address (the controller is still reachable over IPv4 / its .local). */
+export function preferredSshHost(addresses: string[], host: string): string {
+  const v4 = addresses.find(isIPv4)
+  if (v4) return v4
+  const routableV6 = addresses.find((a) => a.includes(':') && !isLinkLocalIPv6(a))
+  if (routableV6) return routableV6
+  // No usable address literal left — prefer the host (an IPv4 or a resolvable
+  // .local name) over a bare link-local IPv6, the ECONNREFUSED trap.
+  if (host) return host
+  return addresses[0] ?? ''
 }
 
 /** Split a free-form "host[:port]" string into parts. Port must be a positive

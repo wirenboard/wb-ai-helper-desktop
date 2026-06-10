@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import type { ChatItem, ChatItemToolCall, Settings, TrackedJob } from '../api'
-import { fmtSize, plural } from '../utils'
+import { t, plural } from '../i18n'
 import ChatMessage from './ChatMessage.vue'
 
 const props = defineProps<{
@@ -36,11 +36,11 @@ function groupRunningJobs(g: Group): TrackedJob[] {
 }
 const GROUP_THRESHOLD = 3
 
-const SUGGESTIONS = [
-  { label: 'Обзор', items: ['Что подключено на шине RS-485?', 'Какая версия прошивки и есть ли обновления?', 'Оцени состояние контроллера'] },
-  { label: 'Диагностика', items: ['Найди ошибки в логах за последний час', 'Собери и пришли диагностический архив', 'Выполни диагностику Modbus'] },
-  { label: 'Данные', items: ['Пришли график температуры процессора со вчерашнего дня', 'Сделай бэкап контроллера'] },
-]
+const SUGGESTIONS = computed(() => [
+  { label: t('suggestions.overview'), items: [t('suggestions.busDevices'), t('suggestions.firmware'), t('suggestions.controllerStatus')] },
+  { label: t('suggestions.diagnostics'), items: [t('suggestions.logErrors'), t('suggestions.diagArchive'), t('suggestions.modbusDiag')] },
+  { label: t('suggestions.data'), items: [t('suggestions.cpuTemp'), t('suggestions.backup')] },
+])
 
 type Group =
   | { kind: 'single'; key: string; item: ChatItem }
@@ -78,7 +78,7 @@ const expanded = reactive<Record<string, boolean>>({})
 function toggle(key: string) { expanded[key] = !expanded[key] }
 
 const scrollEl = ref<HTMLElement | null>(null)
-const BOTTOM_THRESHOLD = 80 // px — считаем "у дна" если < 80px до конца
+const BOTTOM_THRESHOLD = 80 // px — "at bottom" if < 80px from the end
 
 function isAtBottom(): boolean {
   if (!scrollEl.value) return true
@@ -90,12 +90,12 @@ function scrollToBottom() {
   if (scrollEl.value) scrollEl.value.scrollTop = scrollEl.value.scrollHeight
 }
 
-// Stick-to-bottom: скроллим только если пользователь уже внизу (для resize)
+// Stick-to-bottom: scroll only if the user is already at the bottom (for resize)
 function scrollIfAtBottom() {
   if (isAtBottom()) scrollToBottom()
 }
 
-// При новых сообщениях и окончании стриминга — всегда скроллим вниз
+// On new messages and when streaming ends — always scroll to bottom
 watch(() => props.items.length, () => nextTick(scrollToBottom))
 watch(() => props.streaming, (v) => { if (!v) nextTick(scrollToBottom) })
 
@@ -104,12 +104,12 @@ onMounted(async () => {
   await nextTick()
   scrollToBottom()
   if (!scrollEl.value) return
-  // ResizeObserver: только если уже внизу (раскрытие тулколов не должно прыгать)
+  // ResizeObserver: only if already at bottom (expanding tool-calls shouldn't jump)
   ro = new ResizeObserver(scrollIfAtBottom)
   Array.from(scrollEl.value.children).forEach(c => ro!.observe(c))
   const mo = new MutationObserver((mutations) => {
     mutations.forEach(m => m.addedNodes.forEach(n => { if (n instanceof Element && ro) ro.observe(n) }))
-    // Новый дочерний элемент — всегда скроллим
+    // New child element — always scroll
     scrollToBottom()
   })
   mo.observe(scrollEl.value, { childList: true })
@@ -119,9 +119,9 @@ onBeforeUnmount(() => ro?.disconnect())
 
 <template>
   <div ref="scrollEl" class="msg-list">
-    <!-- Empty state. Welcome ⚙ system_event (model/tools/skills) и баннеры
-         retry-wait тоже попадают в items, но это не «настоящие» сообщения —
-         если в чате только они, считаем чат пустым и показываем suggestion'ы. -->
+    <!-- Empty state. Welcome ⚙ system_event (model/tools/skills) and retry-wait
+         banners also land in items, but they aren't "real" messages — if a chat
+         has only those, treat it as empty and show suggestions. -->
     <div v-if="!items.some((i) => i.type !== 'system_event') && !streaming" class="empty-state">
       <div v-for="group in SUGGESTIONS" :key="group.label" class="suggestion-group">
         <div class="suggestion-label">{{ group.label }}</div>
@@ -138,7 +138,7 @@ onBeforeUnmount(() => ro?.disconnect())
         <button class="tool-group-head" @click="toggle(g.key)">
           <span class="caret">{{ expanded[g.key] ? '▾' : '▸' }}</span>
           <span class="tool-group-label">
-            {{ g.items.length }} вызов{{ g.items.length < 5 ? (g.items.length === 1 ? '' : 'а') : 'ов' }} инструментов
+            {{ t('tools.callsLabel', { n: g.items.length, form: plural(g.items.length, 'call') }) }}
           </span>
           <span class="tool-group-names">{{ [...new Set(g.items.map(i => i.name))].join(', ') }}</span>
         </button>
@@ -149,14 +149,14 @@ onBeforeUnmount(() => ro?.disconnect())
       <!-- Inline job indicators for this group -->
       <template v-for="job in groupRunningJobs(g)" :key="'job-' + job.jobId">
         <div v-if="pendingCancels?.[job.jobId]" class="inline-job inline-job--cancelling">
-          <span>⏳ Отмена через {{ pendingCancels![job.jobId]!.remaining }} с — {{ job.label }}</span>
-          <button class="inline-job-cancel ghost small" @click="emit('undoCancelJob', job.jobId)">продолжить</button>
+          <span>{{ t('job.cancelPending', { remaining: pendingCancels![job.jobId]!.remaining, label: job.label }) }}</span>
+          <button class="inline-job-cancel ghost small" @click="emit('undoCancelJob', job.jobId)">{{ t('job.undo') }}</button>
         </div>
         <div v-else class="inline-job">
           <span class="inline-job-spinner">⟳</span>
           <span class="inline-job-label">{{ job.label }}</span>
           <span class="inline-job-sn">{{ job.sn }}</span>
-          <button class="inline-job-cancel ghost small" @click="emit('cancelJob', job.jobId)" title="Отменить (с возможностью отката)">✕</button>
+          <button class="inline-job-cancel ghost small" @click="emit('cancelJob', job.jobId)" :title="t('job.cancelTooltip')">✕</button>
         </div>
       </template>
     </template>

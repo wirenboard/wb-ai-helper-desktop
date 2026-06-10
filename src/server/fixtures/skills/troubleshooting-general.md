@@ -1,111 +1,111 @@
 # troubleshooting-general
 
-Общая диагностика проблем на контроллере Wiren Board. Подгружай когда пользователь говорит: «не работает», «почини», «сломалось», «ошибка», «не запускается», «упал сервис», «проблема с…», «собери диагностику», «диагностический архив», «логи и состояние» — и это НЕ про serial/Modbus (для serial есть troubleshooting-serial).
+General troubleshooting of problems on a Wiren Board controller. Load this when the user says: "doesn't work", "fix it", "it broke", "error", "won't start", "a service crashed", "problem with…", "collect diagnostics", "diagnostic archive", "logs and state" — and it's NOT about serial/Modbus (for serial there's troubleshooting-serial).
 
-Не путай с бэкапом (`controller-backup`). Диагностический архив — для анализа и поддержки, не для восстановления. Собирается утилитой `wb-diag-collect` и включает: конфиги из `/etc`, логи сервисов (wb*, mosquitto, NetworkManager и др.), вывод диагностических команд (df, ps, ip, dpkg и др.).
+Don't confuse it with backup (`controller-backup`). A diagnostic archive is for analysis and support, not for recovery. It's collected by the `wb-diag-collect` utility and includes: configs from `/etc`, service logs (wb*, mosquitto, NetworkManager, etc.), output of diagnostic commands (df, ps, ip, dpkg, etc.).
 
-## Первые шаги — всегда
+## First steps — always
 
-Прежде чем чинить — разберись в причине. Не чини симптомы.
+Before fixing — figure out the cause. Don't fix symptoms.
 
-### 0. Документация — ОБЯЗАТЕЛЬНО
+### 0. Documentation — MANDATORY
 
-**Перед любой починкой** вызови `web_fetch` на страницу проблемного компонента в вики WB. Например: Docker → `web_fetch('https://wiki.wirenboard.com/wiki/Docker')`, Modbus → `web_fetch('https://wiki.wirenboard.com/wiki/Modbus')`, Home Assistant → `web_fetch('https://wiki.wirenboard.com/wiki/Home_Assistant')`. Ищи разделы "Известные проблемы", "Troubleshooting", "Ограничения". Если решение там есть — применяй его, не изобретай своё.
+**Before any fix** call `web_fetch` on the wiki page of the problematic component in the WB wiki. For example: Docker → `web_fetch('https://wiki.wirenboard.com/wiki/Docker')`, Modbus → `web_fetch('https://wiki.wirenboard.com/wiki/Modbus')`, Home Assistant → `web_fetch('https://wiki.wirenboard.com/wiki/Home_Assistant')`. Look for the "Known issues", "Troubleshooting", "Limitations" sections. If the solution is there — apply it, don't invent your own.
 
 ### 1. Kernel mismatch
 
-**Самая частая причина проблем после обновления.** Проверь первым делом:
+**The most common cause of problems after an update.** Check it first of all:
 
 ```bash
 echo "running: $(uname -r)"; dpkg -l 'linux-image-wb*' 2>/dev/null | grep ^ii | awk '{print "installed:", $3}'
 ```
 
-Если версии не совпадают — контроллер работает на старом ядре. Модули ядра (br_netfilter, iptable_nat, can, i2c и др.) не загрузятся, Docker/iptables/сеть могут не работать. **Единственное решение — перезагрузка.** Не пытайся обойти через modprobe/iptables-legacy — это бесполезно при kernel mismatch.
+If the versions don't match — the controller is running on an old kernel. Kernel modules (br_netfilter, iptable_nat, can, i2c, etc.) won't load, Docker/iptables/networking may not work. **The only solution is a reboot.** Don't try to work around it via modprobe/iptables-legacy — that's useless on a kernel mismatch.
 
-### 2. Место на диске
+### 2. Disk space
 
 ```bash
 df -h / /mnt/data
 ```
 
-Rootfs < 100 МБ — критично: apt не работает, логи не пишутся, сервисы падают. Чистка: `apt clean; journalctl --vacuum-time=3d; rm -rf /tmp/*`.
+Rootfs < 100 MB — critical: apt doesn't work, logs aren't written, services crash. Cleanup: `apt clean; journalctl --vacuum-time=3d; rm -rf /tmp/*`.
 
-### 3. Упавшие сервисы
+### 3. Crashed services
 
 ```bash
 systemctl --failed --no-pager
 ```
 
-Для каждого упавшего: `journalctl -u <unit> -n 50 --no-pager` — причина в логах.
+For each crashed one: `journalctl -u <unit> -n 50 --no-pager` — the cause is in the logs.
 
-### 4. Журнал ошибок
+### 4. Error journal
 
 ```bash
 journalctl -p err -n 50 --no-pager
 ```
 
-### 5. Нагрузка и память
+### 5. Load and memory
 
 ```bash
 uptime; free -h
 ```
 
-Load > 4 на WB — перегрузка. `top -bn1 | head -20` покажет кто ест CPU.
+Load > 4 on WB — overload. `top -bn1 | head -20` will show who's eating the CPU.
 
-## Типичные проблемы
+## Typical problems
 
-| Симптом | Первый шаг |
+| Symptom | First step |
 |---|---|
-| Сервис не запускается после обновления | Kernel mismatch → перезагрузка |
-| Docker не стартует, iptables ошибки | Сначала kernel mismatch. Если ядро ОК — iptables-legacy fix (см. ниже) |
-| modprobe: module not found | Kernel mismatch → перезагрузка |
-| apt не работает, dpkg lock | `fuser /var/lib/dpkg/lock-frontend` — кто держит. Если зомби от прерванного apt: `dpkg --configure -a` |
-| Сервис падает в цикле | `journalctl -u <unit> -n 100` — ищи причину, не перезапускай вслепую |
-| Нет сети | `ip addr`, `nmcli`, `ping 8.8.8.8`, `cat /etc/resolv.conf` |
-| MQTT не работает | `systemctl is-active mosquitto`, `mosquitto_sub -t '#' -C 1 -W 2` |
-| Web UI не открывается | `systemctl is-active nginx wb-mqtt-homeui` |
+| Service won't start after an update | Kernel mismatch → reboot |
+| Docker doesn't start, iptables errors | First a kernel mismatch. If the kernel is OK — iptables-legacy fix (see below) |
+| modprobe: module not found | Kernel mismatch → reboot |
+| apt doesn't work, dpkg lock | `fuser /var/lib/dpkg/lock-frontend` — who's holding it. If it's a zombie from an interrupted apt: `dpkg --configure -a` |
+| Service crashes in a loop | `journalctl -u <unit> -n 100` — find the cause, don't restart blindly |
+| No network | `ip addr`, `nmcli`, `ping 8.8.8.8`, `cat /etc/resolv.conf` |
+| MQTT doesn't work | `systemctl is-active mosquitto`, `mosquitto_sub -t '#' -C 1 -W 2` |
+| Web UI doesn't open | `systemctl is-active nginx wb-mqtt-homeui` |
 
-## Docker и iptables
+## Docker and iptables
 
-Если Docker не стартует с ошибками вроде `Chain 'MASQUERADE' does not exist`, `DOCKER-ISOLATION-STAGE`, `Failed to Setup IP tables` — и kernel mismatch исключён:
+If Docker doesn't start with errors like `Chain 'MASQUERADE' does not exist`, `DOCKER-ISOLATION-STAGE`, `Failed to Setup IP tables` — and a kernel mismatch has been ruled out:
 
-1. Переключи iptables на legacy:
+1. Switch iptables to legacy:
 ```bash
 ssh_exec(sn, "update-alternatives --set iptables /usr/sbin/iptables-legacy && update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy")
 ```
 
-2. Создай недостающее правило NAT:
+2. Create the missing NAT rule:
 ```bash
 ssh_exec(sn, "iptables -w10 -t nat -I POSTROUTING -s 172.17.0.0/16 ! -o docker0 -j MASQUERADE")
 ```
 
-3. Перезапусти Docker:
+3. Restart Docker:
 ```bash
 ssh_exec(sn, "systemctl restart docker && systemctl is-active docker")
 ```
 
-Если не помогло — перезагрузка: `ssh_exec(sn, "reboot")`. Подробнее: <https://wiki.wirenboard.com/wiki/Docker>.
+If it didn't help — a reboot: `ssh_exec(sn, "reboot")`. More details: <https://wiki.wirenboard.com/wiki/Docker>.
 
-## Диагностический архив
+## Diagnostic archive
 
-**Собирай ТОЛЬКО в двух случаях:**
-1. Пользователь явно просит «пришли диагархив» / «диагностический архив»
-2. Составляешь багрепорт — архив обязателен как вложение вместе с логами по проблеме
+**Collect it ONLY in two cases:**
+1. The user explicitly asks "send the diag archive" / "diagnostic archive"
+2. You're composing a bug report — the archive is mandatory as an attachment along with the problem logs
 
-Во всех остальных случаях (диагностика, поиск причины, починка) — **не создавай архив**, работай с логами напрямую через `ssh_exec`.
+In all other cases (diagnostics, finding the cause, fixing) — **don't create an archive**, work with the logs directly via `ssh_exec`.
 
 ```
-ssh_exec_async(sn, "wb-diag-collect /tmp/diag", label="сбор диагностики")
+ssh_exec_async(sn, "wb-diag-collect /tmp/diag", label="collect diagnostics")
 ```
 
-`wb-diag-collect` берёт аргумент как **префикс** и сам дописывает `_SN_ДАТА.zip` — реальное имя заранее неизвестно. Сбор занимает 30-60 секунд.
+`wb-diag-collect` takes the argument as a **prefix** and appends `_SN_DATE.zip` itself — the real name is not known in advance. Collection takes 30-60 seconds.
 
-После завершения — найди файл и скачай:
+After it finishes — find the file and download it:
 ```
 ssh_exec(sn, "ls /tmp/diag*.zip | tail -1")
-fetch_from_controller(sn, "<путь из вывода ls>")
+fetch_from_controller(sn, "<path from the ls output>")
 ```
 
-## Принцип
+## Principle
 
-Диагностируй → читай документацию → объясни причину → предложи решение → жди подтверждения. Не чини вслепую.
+Diagnose → read the documentation → explain the cause → propose a solution → wait for confirmation. Don't fix blindly.

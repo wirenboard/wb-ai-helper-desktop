@@ -1,43 +1,43 @@
 # diagnostic-archive
 
-Сбор диагностического архива с контроллера WB для службы поддержки. Подгружай когда пользователь просит: «собери диагностический архив», «пришли диагностику», «дампа для саппорта», «архив с логами для поддержки», «wb-diag-collect».
+Collecting a diagnostic archive from a WB controller for the support team. Load this when the user asks: "collect a diagnostic archive", "send me diagnostics", "a dump for support", "an archive with logs for support", "wb-diag-collect".
 
-**Это НЕ бэкап** (для восстановления контроллера — скилл `controller-backup`) и **не полный багрепорт** (описание проблемы + архив — скилл `bugreport`). Здесь только архив.
+**This is NOT a backup** (to restore a controller — see the `controller-backup` skill) and **not a full bug report** (problem description + archive — see the `bugreport` skill). This is just the archive.
 
-## Что это
+## What it is
 
-`wb-diag-collect` — штатная утилита WB, собирает системные логи, версии пакетов, конфиги MQTT/Modbus/сети, dmesg, systemd-состояние в единый zip. Этого архива достаточно, чтобы инженер поддержки увидел контекст без лишних вопросов.
+`wb-diag-collect` is a standard WB utility that collects system logs, package versions, MQTT/Modbus/network configs, dmesg, and systemd state into a single zip. This archive is enough for a support engineer to see the context without extra questions.
 
-## Как собрать и отдать
+## How to collect and deliver it
 
-### 1. Запусти сбор
+### 1. Start the collection
 
 ```
-ssh_exec_async(sn, "wb-diag-collect /mnt/data/ai/wb-ai-helper/diag", label="сбор диагностики")
+ssh_exec_async(sn, "wb-diag-collect /mnt/data/ai/wb-ai-helper/diag", label="diagnostics collection")
 ```
 
-Утилита берёт аргумент как **префикс** и дописывает `_SN_ДАТА.zip`. Работает 10–30 сек.
+The utility takes the argument as a **prefix** and appends `_SN_DATE.zip`. It runs for 10–30 sec.
 
-### 2. Найди готовый файл
+### 2. Find the resulting file
 
 ```
 ssh_exec(sn, "ls -t /mnt/data/ai/wb-ai-helper/diag*.zip 2>/dev/null | head -1")
 ```
 
-### 3. Отдай пользователю
+### 3. Deliver it to the user
 
 ```
-fetch_from_controller(sn, "<путь из вывода ls>")
+fetch_from_controller(sn, "<path from the ls output>")
 ```
 
-### 4. Короткий отчёт
+### 4. Short report
 
-- имя файла и размер
-- что внутри (кратко: «логи, dmesg, конфиги MQTT/сети, версии пакетов»)
-- к чему прикрепить: тикет в поддержку, если пользователь создаёт — предложи перейти к `bugreport`
+- file name and size
+- what's inside (briefly: "logs, dmesg, MQTT/network configs, package versions")
+- where to attach it: a support ticket; if the user is creating one — offer to switch to `bugreport`
 
-## Грабли
+## Pitfalls
 
-- Не выдумывать `wb-diag-collect --help`-аргументы. Один позиционный — префикс пути.
-- Не класть в `/tmp` — архив может быть потерян при ребуте. Только в `/mnt/data/ai/wb-ai-helper/diag*`.
-- Не путать с бэкапом — в диаг-архиве нет пользовательских данных, compose-файлов, проектов. Только для саппорта.
+- Don't invent `wb-diag-collect --help`-style arguments. There is one positional argument — the path prefix.
+- Don't put it in `/tmp` — the archive may be lost on reboot. Only in `/mnt/data/ai/wb-ai-helper/diag*`.
+- Don't confuse it with a backup — the diagnostic archive contains no user data, compose files, or projects. It's only for support.

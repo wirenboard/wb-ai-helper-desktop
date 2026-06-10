@@ -126,10 +126,10 @@ describe('turnsToItems: system turns', () => {
   })
 })
 
-// 🔧 N в подвале ассистент-сообщения. Цель — показать юзеру, что в стоимость
-// рядом входят ВСЕ tool-итерации стрима, а не только финальный LLM-вызов с
-// текстом. Счётчик перезагружается на каждом user-сообщении и каждом
-// assistant_text — чтобы соседние стримы не сложились в один счётчик.
+// 🔧 N in the assistant message footer. Shows the user that the adjacent cost
+// covers ALL tool iterations of the stream, not just the final LLM call with
+// text. The counter resets on each user message and each assistant_text, so
+// neighboring streams don't merge into one count.
 describe('turnsToItems: toolCallsCount on assistant_text', () => {
   test('zero when no tools precede the assistant_text', () => {
     const items = turns([
@@ -171,10 +171,10 @@ describe('turnsToItems: toolCallsCount on assistant_text', () => {
     ])
     const texts = items.filter((i) => i.type === 'assistant_text') as any[]
     expect(texts).toHaveLength(2)
-    // "first" — 2 tool_call'а перед ним (c1, c2 в том же turn'е, но они уходят
-    // в items раньше assistant_text согласно flow turnsToItems)
+    // "first" — 2 tool_calls before it (c1, c2 in the same turn, but they emit
+    // into items before assistant_text per turnsToItems flow)
     expect(texts[0].toolCallsCount).toBe(2)
-    // "final" — 1 tool_call между "first" и "final" (c3)
+    // "final" — 1 tool_call between "first" and "final" (c3)
     expect(texts[1].toolCallsCount).toBe(1)
   })
 
@@ -189,7 +189,7 @@ describe('turnsToItems: toolCallsCount on assistant_text', () => {
     ])
     const texts = items.filter((i) => i.type === 'assistant_text') as any[]
     expect(texts).toHaveLength(2)
-    expect(texts[0].toolCallsCount).toBe(1) // 1 инструмент перед "answer 1"
-    expect(texts[1].toolCallsCount).toBe(0) // user q2 сбросил счётчик
+    expect(texts[0].toolCallsCount).toBe(1) // 1 tool before "answer 1"
+    expect(texts[1].toolCallsCount).toBe(0) // user q2 reset the counter
   })
 })

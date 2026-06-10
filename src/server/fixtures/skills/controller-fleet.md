@@ -1,16 +1,16 @@
 # controller-fleet
 
-Обход всего парка через `list_controllers`, фильтрация по организации, группировка в отчёте. Подгружай, когда пользователь спрашивает «по парку»: «найди контроллер с …», «у кого настроено Y», «где есть X», «сколько контроллеров онлайн», «во всех ли включён ntp», «отчёт по моим контроллерам».
+Walking the entire fleet via `list_controllers`, filtering by organization, grouping in a report. Load it when the user asks "across the fleet": "find the controller with …", "who has Y configured", "where is X present", "how many controllers are online", "is ntp enabled on all of them", "report on my controllers".
 
-Не применять:
-- Пользователь явно назвал один SN, либо `contextSNs` непуст и он говорит «этот»/«текущий» — работай с ним, не парком.
-- Вопрос про **Zigbee** (устройства, спаривание, zigbee2mqtt) — сначала загрузи скилл `zigbee`, он знает как правильно искать. Если нужен обход парка на тему zigbee — загрузи ОБА скилла: `zigbee` + `controller-fleet`.
+Do not apply when:
+- The user explicitly named a single SN, or `contextSNs` is non-empty and they say "this one"/"the current one" — work with it, not the fleet.
+- The question is about **Zigbee** (devices, pairing, zigbee2mqtt) — first load the `zigbee` skill, it knows how to search correctly. If a fleet-wide walk on a zigbee topic is needed — load BOTH skills: `zigbee` + `controller-fleet`.
 
-## Обходи всех, не «по виду имени»
+## Walk all of them, not "by the look of the name"
 
-Пока не вызвал `list_controllers` — валидных SN у тебя нет, выдумывать запрещено. После вызова — обходи **каждый онлайн SN**, не отбирая по hostname/комментарию (имена обманывают или пусты). Офлайн пропускай, упомяни в конце отчёта.
+Until you've called `list_controllers`, you have no valid SNs — making them up is forbidden. After the call — walk **every online SN**, without selecting by hostname/comment (names lie or are empty). Skip offline ones, mention them at the end of the report.
 
-`list_controllers` возвращает:
+`list_controllers` returns:
 
 ```json
 [
@@ -19,41 +19,41 @@
 ]
 ```
 
-`status` — `"online"` или `"offline"`. `org` может быть `null`. `host` есть только у реальных контроллеров (у fake/demo — нет). Офлайн и контроллеры без `host` пропускай.
+`status` — `"online"` or `"offline"`. `org` can be `null`. `host` is present only on real controllers (fake/demo ones don't have it). Skip offline controllers and those without `host`.
 
-## Фильтр по организации — только по явной просьбе
+## Filter by organization — only on explicit request
 
-Пользователь видит ВСЕ свои организации сразу. «У меня», «мои контроллеры», «по парку» = ВСЕ SN из ответа, не одна орга.
+The user sees ALL their organizations at once. "Mine", "my controllers", "across the fleet" = ALL SNs from the response, not a single org.
 
-Фильтруй по `org.name` ТОЛЬКО если пользователь назвал конкретную:
-- «в орге wb-demo» → только `org.name == "wb-demo"`.
-- без явного упоминания — не фильтруй.
+Filter by `org.name` ONLY if the user named a specific one:
+- "in the org wb-demo" → only `org.name == "wb-demo"`.
+- without an explicit mention — don't filter.
 
-## Порядок действий
+## Order of actions
 
-1. `list_controllers` — **один раз** на запрос, не повторяй в том же ответе.
-2. Раздели на онлайн/офлайн.
-3. По каждому онлайн SN — нужный тул (`ssh_exec`, `mqtt_list_topics`, `mqtt_rpc`, ...). Read-only — можно параллельно, в одном ответе модели. Запись — последовательно и с подтверждением по каждому SN.
-4. Группируй отчёт по `org.name`:
+1. `list_controllers` — **once** per request, don't repeat it in the same response.
+2. Split into online/offline.
+3. For each online SN — the needed tool (`ssh_exec`, `mqtt_list_topics`, `mqtt_rpc`, ...). Read-only — can run in parallel, in a single model response. Writes — sequentially and with confirmation per SN.
+4. Group the report by `org.name`:
 
    ```
    wb-demo:
-     • ABC123 — есть, версия 2.4.1
-     • DEF456 — нет
+     • ABC123 — yes, version 2.4.1
+     • DEF456 — no
    aleksandr-degtyarev:
-     • XYZ789 — есть, версия 2.3.8
-   офлайн (пропущено): OFF001
-   Итого: у 2 из 3 онлайн.
+     • XYZ789 — yes, version 2.3.8
+   offline (skipped): OFF001
+   Total: 2 of 3 online.
    ```
 
-## Грабли
+## Pitfalls
 
-- Выбирать SN по hostname («возьму те, у кого в имени prod») — имена бывают пустые, дублирующиеся, обманчивые. Обходи всех.
-- Не отделить офлайн и demo — тратишь таймауты на мёртвые/моковые контроллеры. `status: "offline"` или нет `host` → сразу в «пропущено».
-- Неявно свернуть к одной организации. Пустой `contextSNs` ≠ выбрана одна орга, по умолчанию парк = все.
-- Фильтр по орге без явного указания от пользователя.
-- Повторный `list_controllers` в одном ответе — список не меняется в пределах одного ответа модели.
+- Selecting SNs by hostname ("I'll take the ones with prod in the name") — names can be empty, duplicated, misleading. Walk all of them.
+- Not separating offline and demo — you waste timeouts on dead/mock controllers. `status: "offline"` or no `host` → straight to "skipped".
+- Implicitly collapsing to a single organization. An empty `contextSNs` ≠ a single org is selected; by default the fleet = all.
+- Filtering by org without the user explicitly saying so.
+- A repeated `list_controllers` in one response — the list doesn't change within a single model response.
 
-## Документация
+## Documentation
 
 - Wiki Wiren Board Cloud: <https://wirenboard.com/wiki/Wiren_Board_Cloud>

@@ -15,9 +15,9 @@ describe('diagnoseHistoryChannels', () => {
       [['wb-system', 'CPU Temperature']],
       new Map([['wb-system', []]])
     )
-    expect(r).toContain('"wb-system" не найден')
+    expect(r).toContain('"wb-system" not found')
     expect(r).toContain('mqtt_list_topics')
-    expect(r).not.toContain('Доступные')
+    expect(r).not.toContain('Available')
   })
 
   test('device missing from map = treated as not found', () => {
@@ -25,7 +25,7 @@ describe('diagnoseHistoryChannels', () => {
       [['ghost', 'X']],
       new Map()
     )
-    expect(r).toContain('"ghost" не найден')
+    expect(r).toContain('"ghost" not found')
   })
 
   test('control not found on existing device → lists available controls of that device only', () => {
@@ -44,7 +44,7 @@ describe('diagnoseHistoryChannels', () => {
       [['ghost', 'X'], ['hwmon', 'CPU']],
       new Map([['hwmon', ['CPU Temperature']]])
     )
-    expect(r).toContain('"ghost" не найден')
+    expect(r).toContain('"ghost" not found')
     expect(r).toContain('"hwmon"')
     expect(r).toContain(' | ')
   })
@@ -66,7 +66,7 @@ describe('diagnoseHistoryChannels', () => {
         ['ghost', []],
       ])
     )
-    expect(r).toContain('"ghost" не найден')
+    expect(r).toContain('"ghost" not found')
     expect(r).not.toContain('hwmon')
   })
 

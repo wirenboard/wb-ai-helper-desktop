@@ -1,6 +1,6 @@
 import { Client, type ConnectConfig } from 'ssh2'
 import { existsSync, readFileSync } from 'node:fs'
-import type { Controller } from './discovery.ts'
+import { preferredSshHost, type Controller } from './discovery.ts'
 
 const AI_BASE = '/mnt/data/ai/wb-ai-helper'
 const JOB_DIR = `${AI_BASE}/jobs`
@@ -22,21 +22,21 @@ export type ExecResult = {
 }
 
 const CONNECT_TIMEOUT = 4000
-/** SSH handshake (KEX + auth) — отдельный лимит. На свежезагруженном
- * контроллере (factoryreset/reboot) handshake растягивается до 6-8 с
- * из-за RSA-3072 init на armv7 + параллельной нагрузки от mDNS/NM.
- * Дефолт 4с давал «Timed out while waiting for handshake». */
+/** SSH handshake (KEX + auth) — separate limit. On a freshly booted
+ * controller (factoryreset/reboot) the handshake stretches to 6-8s due to
+ * RSA-3072 init on armv7 plus concurrent load from mDNS/NM.
+ * Default 4s gave «Timed out while waiting for handshake». */
 const HANDSHAKE_TIMEOUT = 15000
-/** Backoff между попытками при handshake-таймауте. */
+/** Backoff between retries on handshake timeout. */
 const HANDSHAKE_RETRY_BACKOFF = [5000, 10000, 20000] as const
 const DEFAULT_EXEC_TIMEOUT = 10_000
 const MAX_EXEC_TIMEOUT = 120_000
-const MAX_BUFFER = 1_000_000  // 1 MB на stdout+stderr на один exec
+const MAX_BUFFER = 1_000_000  // 1 MB for stdout+stderr per exec
 
-/** Сколько одновременных channels (exec/sftp/shell) разрешаем на одном
- * Client. sshd на WB-контроллерах настроен MaxSessions=10. Держим 7 для
- * себя, оставляя ~3 пользователю на ручные ssh-подключения и непредвиденное.
- * Интерактивный shell в приложении тоже забирает 1 из этих 7. */
+/** Max concurrent channels (exec/sftp/shell) per Client. sshd on WB
+ * controllers is set to MaxSessions=10. We keep 7 for ourselves, leaving
+ * ~3 for the user's manual ssh sessions and the unexpected. The in-app
+ * interactive shell also takes 1 of these 7. */
 const MAX_PARALLEL_CHANNELS = 7
 
 type Conn = {
@@ -58,7 +58,7 @@ export class SshPool {
 
   setAuth(auth: SshAuth) {
     this.auth = auth
-    // Закрыть старые соединения — они авторизовались под предыдущими кредами.
+    // Close old connections — they authed with the previous credentials.
     void this.closeAll()
   }
 
@@ -67,9 +67,9 @@ export class SshPool {
     this.conns.clear()
   }
 
-  /** Получить слот для открытия channel (exec/sftp/shell) на контроллере.
-   * FIFO-очередь не даёт «новеньким» обходить ожидающих. Возвращает функцию
-   * release — её обязательно вызвать в finally. Идемпотентна. */
+  /** Acquire a slot to open a channel (exec/sftp/shell) on the controller.
+   * FIFO queue stops newcomers from jumping ahead of waiters. Returns a
+   * release fn — must be called in finally. Idempotent. */
   private async acquireSlot(sn: string): Promise<() => void> {
     let slot = this.slots.get(sn)
     if (!slot) {
@@ -79,7 +79,7 @@ export class SshPool {
     const s = slot
     if (s.queue.length > 0 || s.active >= MAX_PARALLEL_CHANNELS) {
       await new Promise<void>((resolve) => s.queue.push(resolve))
-      // слот «передан» нам предыдущим релизом — active уже учитывает нас
+      // slot was «handed» to us by the previous release — active already counts us
     } else {
       s.active++
     }
@@ -89,7 +89,7 @@ export class SshPool {
       released = true
       const next = s.queue.shift()
       if (next) {
-        // передаём слот следующему ожидающему — не декрементим
+        // hand the slot to the next waiter — don't decrement
         next()
       } else {
         s.active--
@@ -124,7 +124,7 @@ export class SshPool {
     rows = 24,
   ): Promise<{ write: (s: string) => void; resize: (c: number, r: number) => void; close: () => void }> {
     const conn = await this.connect(controller)
-    // Интерактивный shell держит слот всё время жизни сессии.
+    // Interactive shell holds the slot for the whole session lifetime.
     const release = await this.acquireSlot(controller.sn)
     return await new Promise((resolve, reject) => {
       conn.client.shell({ cols, rows, term: 'xterm-256color' }, (err, ch) => {
@@ -149,10 +149,10 @@ export class SshPool {
           close: () => {
             if (closed) return
             try { ch.end() } catch { /* ignore */ }
-            // release произойдёт в ch.on('close'); если ch.end не выстрелит
-            // close-event (зависший канал) — release всё равно идемпотентен,
-            // но шанс утечки слота минимален. Подстраховку не делаем,
-            // чтобы не освободить слот пока ssh2 ещё пишет данные.
+            // release happens in ch.on('close'); if ch.end doesn't fire the
+            // close event (stuck channel), release is still idempotent, so
+            // slot-leak risk is minimal. No fallback — to avoid freeing the
+            // slot while ssh2 is still writing data.
           },
         })
       })
@@ -211,7 +211,7 @@ export class SshPool {
   }
 
   async readFile(controller: Controller, path: string, maxBytes = 64_000): Promise<{ content: string; truncated: boolean }> {
-    // Простой и портативный путь: head -c через exec, без SFTP-сессии.
+    // Simple, portable path: head -c via exec, no SFTP session.
     const escaped = shellEscape(path)
     const r = await this.exec(controller, `head -c ${maxBytes + 1} ${escaped}`, 15_000)
     if (r.code !== 0) {
@@ -308,9 +308,9 @@ export class SshPool {
       (timeoutSec + 3) * 1000
     )
     const out = r.stdout.trim()
-    if (!out) throw new Error(`RPC ${driver}/${service}/${method} — нет ответа (таймаут ${timeoutSec}с)`)
+    if (!out) throw new Error(`RPC ${driver}/${service}/${method} — no response (timeout ${timeoutSec}s)`)
     const parsed = JSON.parse(out)
-    if (parsed.error) throw new Error(`RPC ${driver}/${service}/${method} ошибка: ${JSON.stringify(parsed.error)}`)
+    if (parsed.error) throw new Error(`RPC ${driver}/${service}/${method} error: ${JSON.stringify(parsed.error)}`)
     return parsed.result
   }
 
@@ -336,11 +336,11 @@ export class SshPool {
   }
 
   async getInfo(controller: Controller): Promise<Record<string, string>> {
-    // SN на WB-контроллере живёт в /var/lib/wirenboard/short_sn (точный
-    // наклеечный серийник, не путать с hostname — тот может быть переименован
-    // пользователем). Если файла нет (старая прошивка / не-WB железо) —
-    // возвращаем пустую строку и НЕ выводим SN из hostname: hostname-суффикс
-    // может быть переопределён, неавторитетен.
+    // On a WB controller the SN lives in /var/lib/wirenboard/short_sn (the
+    // exact sticker serial — not the hostname, which the user may rename).
+    // If the file is absent (old firmware / non-WB hardware), return an empty
+    // string and do NOT derive the SN from hostname: the hostname suffix may
+    // be overridden and isn't authoritative.
     const r = await this.exec(
       controller,
       'echo HOST; hostname; echo UNAME; uname -a; echo UPTIME; uptime; echo RELEASE; cat /etc/wb-release 2>/dev/null; echo FW; cat /etc/wb-fw-version 2>/dev/null; echo HWSN; cat /var/lib/wirenboard/short_sn 2>/dev/null'
@@ -483,7 +483,7 @@ export class SshPool {
     const result: Record<string, unknown> = { jobId, state, lines, fromLine: from, nextFromLine, totalLines, truncated }
     if (state === 'running') {
       result['_hint'] =
-        'Задача ещё работает, лог неполный. Это промежуточные данные — НЕ используй их как окончательный результат и НЕ давай финальный ответ пользователю. Заверши ход и жди системное сообщение «Фоновая задача завершена».'
+        'The job is still running, the log is incomplete. This is interim data — do NOT use it as the final result and do NOT give a final answer to the user. Finish your turn and wait for the system message «Background task completed».'
     }
     return result
   }
@@ -537,10 +537,10 @@ export class SshPool {
         this.conns.delete(key)
       }
     }
-    // Каскад: ключ (если задан) → пароль. Если ключ есть, но не подошёл —
-    // ssh2 кидает «All configured authentication methods failed». Пробуем пароль.
-    // На handshake-timeout (свежий контроллер, RSA init медленный) делаем
-    // retry с backoff — auth-ошибки НЕ ретраим, чтобы не блокировать UI.
+    // Cascade: key (if set) → password. If the key exists but is rejected,
+    // ssh2 throws «All configured authentication methods failed»; try password.
+    // On handshake timeout (fresh controller, slow RSA init) we retry with
+    // backoff — auth errors are NOT retried, to avoid blocking the UI.
     const attempts = this.authAttempts()
     let lastErr: unknown = new Error('no auth methods')
     for (let retry = 0; retry <= HANDSHAKE_RETRY_BACKOFF.length; retry++) {
@@ -556,12 +556,12 @@ export class SshPool {
           lastErr = e
           if (isAuthError(e)) {
             allHandshakeTimeouts = false
-            // продолжим со следующим вариантом (key→password)
+            // continue with the next variant (key→password)
           } else if (!isHandshakeTimeout(e)) {
-            // Другая жёсткая ошибка (host unreachable, refused) — не ретраим
+            // Other hard error (host unreachable, refused) — don't retry
             throw e
           }
-          // handshake timeout — продолжаем перебор, потом backoff
+          // handshake timeout — keep iterating, then backoff
         }
       }
       const nextDelay = HANDSHAKE_RETRY_BACKOFF[retry]
@@ -600,9 +600,9 @@ export class SshPool {
     }
     const client = new Client()
     const ready = new Promise<void>((resolve, reject) => {
-      // outer guard на полный handshake (TCP-connect + KEX + auth);
-      // ssh2 использует readyTimeout внутри, но бывает что 'ready' и 'error'
-      // вообще не сработают (зависший сокет), поэтому подстраховываемся.
+      // outer guard for the full handshake (TCP connect + KEX + auth);
+      // ssh2 uses readyTimeout internally, but sometimes 'ready' and 'error'
+      // never fire (stuck socket), so we add a safety net.
       const t = setTimeout(() => reject(new Error('ssh handshake timeout')), HANDSHAKE_TIMEOUT + 2000)
       client.once('ready', () => {
         clearTimeout(t)
@@ -612,7 +612,7 @@ export class SshPool {
         clearTimeout(t)
         reject(e)
       })
-      // keyboard-interactive с тем же паролем, если сервер так просит.
+      // keyboard-interactive with the same password, if the server asks.
       if (variant.kind === 'password') {
         client.on('keyboard-interactive', (_n, _i, _l, _p, finish) => finish([variant.password]))
       }
@@ -622,7 +622,9 @@ export class SshPool {
   }
 
   private baseConfig(controller: Controller): ConnectConfig {
-    const host = controller.addresses[0] ?? controller.host
+    // Never dial a bare IPv6 link-local (fe80::) — mDNS often resolves AAAA to
+    // one, but sshd doesn't listen there → ECONNREFUSED. Prefer IPv4 / hostname.
+    const host = preferredSshHost(controller.addresses, controller.host)
     return {
       host,
       port: controller.port ?? 22,

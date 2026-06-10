@@ -1,6 +1,6 @@
-// Unit tests для чистых парсеров diagnostic-tool'ов (network_status,
-// cloud_status). Сами tool-handler'ы не тестируем — они дёргают ssh.exec,
-// без mock-ssh запустить нельзя; парсеры покрывают всю интересную логику.
+// Unit tests for the pure parsers of the diagnostic tools (network_status,
+// cloud_status). The tool handlers themselves aren't tested — they call
+// ssh.exec and need mock-ssh; the parsers cover all the interesting logic.
 import { describe, test, expect } from 'bun:test'
 import {
   readMarkedSection,

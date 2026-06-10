@@ -1,38 +1,37 @@
-// Парсеры и форматтеры шаблонов wb-mqtt-serial. Вынесены сюда, чтобы
-// покрыть unit-тестами без mock'а MQTT — handler'ы в tools.ts вытаскивают
-// сырой RPC-ответ и читают файл шаблона, потом гонят через эти функции.
+// Parsers and formatters for wb-mqtt-serial templates. Split out so they can be
+// unit-tested without mocking MQTT — handlers in tools.ts pull the raw RPC
+// response and read the template file, then run them through these functions.
 
-/** Обогатить ошибку RPC `wb-mqtt-serial/device/<method>` диагностической
- *  подсказкой. Конкретно: при таймауте упомянуть, что устаревший драйвер
- *  (< 2.180) этот endpoint может не обслуживать — реальный кейс наблюдался
- *  на wb-mqtt-serial 2.146.0 (актуальная в репе stable wb7 — 2.224+).
- *  Для неустаревших версий ошибка сохраняет исходный смысл (network/bad
- *  params/etc), просто добавляется hint про возможную причину «таймаут».
+/** Enrich a `wb-mqtt-serial/device/<method>` RPC error with a diagnostic hint.
+ *  Specifically: on timeout, note that an outdated driver (< 2.180) may not
+ *  serve this endpoint — observed on wb-mqtt-serial 2.146.0 (current in stable
+ *  wb7 repo is 2.224+). For non-outdated versions the error keeps its original
+ *  meaning (network/bad params/etc), just with an added "timeout" cause hint.
  */
 export function enrichSerialRpcError(e: unknown, method: string): string {
   const raw = e instanceof Error ? e.message : String(e)
   if (/таймаут|timeout/i.test(raw)) {
     return (
       `${raw}. ` +
-      `На устаревших версиях wb-mqtt-serial (<2.180) endpoint device/${method} мог быть нерабочим — ` +
-      `проверь \`dpkg -l wb-mqtt-serial\`. Если версия меньше 2.180, обнови: \`apt update && apt install wb-mqtt-serial\` ` +
-      `(подтверди операцию с пользователем — это перезапустит драйвер).`
+      `On outdated wb-mqtt-serial versions (<2.180) the device/${method} endpoint may be non-functional — ` +
+      `check \`dpkg -l wb-mqtt-serial\`. If the version is below 2.180, update: \`apt update && apt install wb-mqtt-serial\` ` +
+      `(confirm the operation with the user — it restarts the driver).`
     )
   }
   return raw
 }
 
-/** Подготовить params для RPC `wb-mqtt-serial/device/LoadConfig`.
+/** Build params for the `wb-mqtt-serial/device/LoadConfig` RPC.
  *
- *  Два режима:
- *    1. По `device_id` (имя устройства в MQTT, например "wb-mr6c_138")
- *       — wb-mqtt-serial сам резолвит остальные поля из своего конфига.
- *    2. По явным `{path, slave_id, device_type, baud_rate, parity, data_bits, stop_bits}`
- *       — для случая когда устройство не в конфиге ещё (после bus scan).
+ *  Two modes:
+ *    1. By `device_id` (MQTT device name, e.g. "wb-mr6c_138") — wb-mqtt-serial
+ *       resolves the rest from its own config.
+ *    2. By explicit `{path, slave_id, device_type, baud_rate, parity, data_bits, stop_bits}`
+ *       — for a device not yet in the config (after a bus scan).
  *
- *  Если задан `device_id` — другие поля игнорируются (приоритет).
- *  Если нет `device_id` и нет `path+slave_id` — возвращает null (caller
- *  должен показать ошибку «нужен либо device_id, либо path+slave_id»).
+ *  If `device_id` is set, the other fields are ignored (it wins). With no
+ *  `device_id` and no `path+slave_id`, returns null (caller should report
+ *  "need either device_id or path+slave_id").
  */
 export function buildLoadConfigParams(args: {
   device_id?: string
@@ -46,17 +45,16 @@ export function buildLoadConfigParams(args: {
 }): Record<string, unknown> | null {
   if (args.device_id) return { device_id: args.device_id }
   if (!args.path || typeof args.slave_id !== 'number') return null
-  // Свежие версии wb-mqtt-serial (2.224+) требуют data_bits/parity/stop_bits
-  // как обязательные поля — без них RPC отвечает «Missing required property»
-  // (валидация JSON-schema). На старых это было опционально. Подставляем
-  // безопасные modbus-дефолты (8/N/2) если caller не передал явно — для
-  // 99% RS-485 устройств это правильно. baud_rate тоже подставляем (9600
-  // — стандартный default из wb-mqtt-serial config).
+  // Recent wb-mqtt-serial (2.224+) requires data_bits/parity/stop_bits — without
+  // them the RPC returns "Missing required property" (JSON-schema validation).
+  // Older versions treated them as optional. Fill in safe modbus defaults
+  // (8/N/2) when the caller didn't pass them — correct for 99% of RS-485
+  // devices. baud_rate too (9600 — the standard wb-mqtt-serial config default).
   const out: Record<string, unknown> = {
     path: args.path,
     slave_id: args.slave_id,
     baud_rate: typeof args.baud_rate === 'number' ? args.baud_rate : 9600,
-    // `||` (не `??`) — пустая строка для parity бесполезна, трактуем как «не задано».
+    // `||` (not `??`) — an empty parity string is useless, treat as unset.
     parity: args.parity || 'N',
     data_bits: typeof args.data_bits === 'number' ? args.data_bits : 8,
     stop_bits: typeof args.stop_bits === 'number' ? args.stop_bits : 2,
@@ -65,13 +63,13 @@ export function buildLoadConfigParams(args: {
   return out
 }
 
-/** Один шаблон в плоском списке (после flatten'а групп Load.types). */
+/** One template in the flat list (after flattening Load.types groups). */
 export type TemplateInfo = {
-  type: string // device_type из шаблона (e.g. "WB-MR6C")
-  mqttId: string // нормализованный id (e.g. "wb-mr6c") — из mqtt-id поля Load.types
-  name: string // human-readable название
+  type: string // device_type from the template (e.g. "WB-MR6C")
+  mqttId: string // normalized id (e.g. "wb-mr6c") — from the Load.types mqtt-id field
+  name: string // human-readable name
   deprecated: boolean
-  group: string // имя группы (e.g. "Реле и диммеры")
+  group: string // group name (e.g. "Реле и диммеры")
 }
 
 type RpcLoadTypes = {
@@ -86,10 +84,9 @@ type RpcLoadTypes = {
   }>
 }
 
-/** Флэттенит результат `wb-mqtt-serial/config/Load.types` в плоский массив
- *  TemplateInfo. Пустые группы пропускает. Если у шаблона нет mqtt-id —
- *  использует device_type в нижнем регистре как fallback (некоторые старые
- *  шаблоны не имеют отдельного mqtt-id поля).
+/** Flatten `wb-mqtt-serial/config/Load.types` into a flat TemplateInfo array.
+ *  Skips empty groups. If a template has no mqtt-id, falls back to lowercased
+ *  device_type (some old templates lack a separate mqtt-id field).
  */
 export function parseTemplatesList(load: RpcLoadTypes): TemplateInfo[] {
   const out: TemplateInfo[] = []
@@ -111,8 +108,8 @@ export function parseTemplatesList(load: RpcLoadTypes): TemplateInfo[] {
   return out
 }
 
-/** Подстрочный фильтр по type/mqttId/name (case-insensitive). Пустая строка
- *  → всё. */
+/** Substring filter over type/mqttId/name (case-insensitive). Empty string →
+ *  everything. */
 export function filterTemplates(list: TemplateInfo[], filter: string): TemplateInfo[] {
   const f = filter.trim().toLowerCase()
   if (!f) return list
@@ -124,10 +121,10 @@ export function filterTemplates(list: TemplateInfo[], filter: string): TemplateI
   )
 }
 
-/** Агрегат по группам — `{group: {count, deprecated_count}}`. Используется
- *  в `modbus_templates_list` без фильтра — чтобы не возвращать сразу 250+
- *  записей и не рвать токен-лимит. С фильтром handler возвращает плоский
- *  список matched. */
+/** Per-group aggregate — `{group: {count, deprecated_count}}`. Used by
+ *  `modbus_templates_list` without a filter — to avoid returning 250+ records
+ *  at once and blowing the token limit. With a filter the handler returns a
+ *  flat list of matches. */
 export function summarizeByGroup(list: TemplateInfo[]): Record<string, { count: number; deprecated: number }> {
   const out: Record<string, { count: number; deprecated: number }> = {}
   for (const t of list) {
@@ -138,7 +135,7 @@ export function summarizeByGroup(list: TemplateInfo[]): Record<string, { count: 
   return out
 }
 
-// ── Рендер одного шаблона (содержимое /usr/share/wb-mqtt-serial/templates/…json) ──
+// ── Render one template (contents of /usr/share/wb-mqtt-serial/templates/…json) ──
 
 type Channel = Record<string, unknown> & {
   name?: string
@@ -165,7 +162,7 @@ type Template = Record<string, unknown> & {
 
 export type TemplateView = 'summary' | 'full' | 'channels-only' | 'meta-only'
 
-/** Извлекает компактную информацию о канале для view='summary'. */
+/** Extract compact channel info for view='summary'. */
 function channelSummary(c: Channel): Record<string, unknown> {
   const out: Record<string, unknown> = { name: c.name ?? '?' }
   if (c.reg_type) out['reg_type'] = c.reg_type
@@ -177,8 +174,8 @@ function channelSummary(c: Channel): Record<string, unknown> {
   return out
 }
 
-/** Применить фильтры enabledOnly/channelFilter (case-insensitive substring
- *  по name) к списку channels. */
+/** Apply enabledOnly/channelFilter (case-insensitive substring over name) to
+ *  the channels list. */
 export function filterChannels(
   channels: Channel[],
   opts: { enabledOnly?: boolean; channelFilter?: string },
@@ -190,13 +187,13 @@ export function filterChannels(
   return out
 }
 
-/** Рендер шаблона в одно из view-представлений. Все view фильтруют каналы
- *  через `filterChannels` (если opts заданы).
+/** Render a template into one of the views. Every view filters channels via
+ *  `filterChannels` (when opts are given).
  *
  *    - summary (default): {device_type, title, deviceName, deviceId, channelCount, channels: [{name, reg_type, address, format, type, units}]}
- *    - full: весь шаблон как есть
- *    - channels-only: только {channelCount, channels: [...]} (без meta устройства)
- *    - meta-only: только {device_type, title, deviceName, deviceId, parametersCount, channelCount} — без channel'ов и параметров
+ *    - full: the whole template as-is
+ *    - channels-only: just {channelCount, channels: [...]} (no device meta)
+ *    - meta-only: just {device_type, title, deviceName, deviceId, parametersCount, channelCount} — no channels or parameters
  */
 export function renderTemplate(
   tmpl: Template,
@@ -217,7 +214,7 @@ export function renderTemplate(
     totalChannelCount: allChannels.length,
   }
   if (view === 'full') {
-    // Полный шаблон, но channels — отфильтрованные (если filter задан)
+    // Full template, but with filtered channels (when a filter is set)
     if (opts.enabledOnly || opts.channelFilter) {
       const out = JSON.parse(JSON.stringify(tmpl)) as Template
       if (out.device) out.device.channels = filtered

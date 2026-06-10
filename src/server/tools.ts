@@ -38,15 +38,15 @@ import {
   enrichSerialRpcError,
 } from './modbus-templates.ts'
 
-/** Common controller-target params: either `sn` (registry key, обычно серийник
- *  типа A25NDEMJ из list_controllers) или `host` (IP/hostname/host:port для
- *  ad-hoc подключения). Хотя бы одно должно быть, но `required` оставлен пустым
- *  — runtime fallback на chat contextSns обработает случай когда ни sn ни host
- *  не переданы. JSON Schema XOR не выражает кросс-провайдерно надёжно, поэтому
- *  валидация на стороне backend (`resolve1`). */
+/** Common controller-target params: either `sn` (registry key, usually a serial
+ *  like A25NDEMJ from list_controllers) or `host` (IP/hostname/host:port for
+ *  ad-hoc connection). At least one must be present, but `required` is left empty
+ *  — a runtime fallback to chat contextSns handles the case when neither sn nor
+ *  host is passed. JSON Schema XOR cannot express this reliably across providers,
+ *  so validation lives on the backend (`resolve1`). */
 const CONTROLLER_TARGET_PROPS = {
-  sn: { type: 'string' as const, description: 'Серийный номер контроллера (например A25NDEMJ) из контекста чата или ответа list_controllers.' },
-  host: { type: 'string' as const, description: 'Альтернатива sn — IP, hostname или host:port (например 192.168.1.10, wirenboard-abc.local, 192.168.1.10:2222). Используй когда контроллер показан по IP, или явно хочешь обратиться по нестандартному SSH-порту.' },
+  sn: { type: 'string' as const, description: 'Controller serial number (e.g. A25NDEMJ) from the chat context or the list_controllers response.' },
+  host: { type: 'string' as const, description: 'Alternative to sn — IP, hostname or host:port (e.g. 192.168.1.10, wirenboard-abc.local, 192.168.1.10:2222). Use it when the controller is shown by IP, or you explicitly want to address it over a non-standard SSH port.' },
 }
 
 export function toolSchemas(): ChatCompletionTool[] {
@@ -56,7 +56,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       function: {
         name: 'list_controllers',
         description:
-          'Список всех контроллеров Wirenboard, найденных в локальной сети через mDNS, плюс добавленные вручную. Возвращает SN, hostname, доступность и время последнего ответа.',
+          'List of all Wirenboard controllers found on the local network via mDNS, plus manually added ones. Returns SN, hostname, reachability and the time of the last response.',
         parameters: { type: 'object', properties: {}, additionalProperties: false },
       },
     },
@@ -64,7 +64,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'probe_controller',
-        description: 'Проверить доступность контроллера по HTTP (web UI) и обновить статус.',
+        description: 'Check controller reachability over HTTP (web UI) and refresh its status.',
         parameters: {
           type: 'object',
           properties: { ...CONTROLLER_TARGET_PROPS },
@@ -78,7 +78,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       function: {
         name: 'list_devices',
         description:
-          'Список устройств на контроллерах (или группе). Опрашивает MQTT-топики /devices/+/meta/name. Если sn не указан — берётся текущий контекст чата.',
+          'List of devices on controllers (or a group). Polls the MQTT topics /devices/+/meta/name. If sn is not specified, the current chat context is used.',
         parameters: {
           type: 'object',
           properties: {
@@ -87,7 +87,7 @@ export function toolSchemas(): ChatCompletionTool[] {
                 { type: 'string' },
                 { type: 'array', items: { type: 'string' } },
               ],
-              description: 'SN или массив SN. Если опущено — все контроллеры из контекста чата.',
+              description: 'SN or an array of SNs. If omitted — all controllers from the chat context.',
             },
           },
           additionalProperties: false,
@@ -98,12 +98,12 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'list_controls',
-        description: 'Список контролов конкретного устройства на контроллере (через MQTT).',
+        description: 'List of controls of a specific device on the controller (via MQTT).',
         parameters: {
           type: 'object',
           properties: {
             sn: { type: 'string' },
-            device: { type: 'string', description: 'ID устройства, например `wb-mr6c_45`' },
+            device: { type: 'string', description: 'Device ID, e.g. `wb-mr6c_45`' },
           },
           required: ['device'],
           additionalProperties: false,
@@ -114,15 +114,15 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'mqtt_inventory',
-        description: 'Объединённый снимок MQTT-устройств одним вызовом: id, name, driver, error + список контролов с распакованным meta (value, type, units, readonly, order, min/max, precision, error). Заменяет связку `list_devices` + N×`list_controls`. Поле `error` парсится по [WB MQTT Conventions](https://github.com/wirenboard/conventions): `r` (read), `w` (write), `p` (period miss) и комбинации. **При `error.read=true` значение в value-топике — last-known-good (последний успешно прочитанный), а не текущий live-readout** — без этого знания модель часто делает неверный диагноз вида «датчик показывает 23°C, но устройство в офлайне». Дополнительно возвращает массив `errors` со сводкой всех проблем по контроллеру. По умолчанию `includeEmpty=false` (устройства без контролов скрыты).',
+        description: 'Combined snapshot of MQTT devices in a single call: id, name, driver, error + a list of controls with unpacked meta (value, type, units, readonly, order, min/max, precision, error). Replaces the pair `list_devices` + N×`list_controls`. The `error` field is parsed per [WB MQTT Conventions](https://github.com/wirenboard/conventions): `r` (read), `w` (write), `p` (period miss) and combinations. **When `error.read=true` the value in the value-topic is last-known-good (the last successfully read value), not the current live readout** — without this knowledge the model often makes a wrong diagnosis like "the sensor shows 23°C, but the device is offline". Additionally returns an `errors` array summarizing all problems on the controller. By default `includeEmpty=false` (devices without controls are hidden).',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            device: { type: 'string', description: 'Фильтр по device_id (подстрока, регистронезависимо). Пусто — все устройства.' },
-            timeout: { type: 'number', description: 'Окно сбора в секундах. По умолчанию 3.' },
-            includeEmpty: { type: 'boolean', description: 'Включать устройства без контролов (только с meta). По умолчанию false.' },
-            includeMeta: { type: 'boolean', description: 'Класть полный raw meta-объект в каждый control. По умолчанию false (только распакованные поля).' },
+            device: { type: 'string', description: 'Filter by device_id (substring, case-insensitive). Empty — all devices.' },
+            timeout: { type: 'number', description: 'Collection window in seconds. Default 3.' },
+            includeEmpty: { type: 'boolean', description: 'Include devices without controls (meta only). Default false.' },
+            includeMeta: { type: 'boolean', description: 'Put the full raw meta object into each control. Default false (unpacked fields only).' },
           },
           required: [],
           additionalProperties: false,
@@ -133,12 +133,12 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'mqtt_read',
-        description: 'Прочитать одно retain-значение топика (mosquitto_sub -C 1 -W). Возвращает текущее значение или null если топик не retain.',
+        description: 'Read a single retained topic value (mosquitto_sub -C 1 -W). Returns the current value or null if the topic is not retained.',
         parameters: {
           type: 'object',
           properties: {
             sn: { type: 'string' },
-            topic: { type: 'string', description: 'Полный путь к топику, например `/devices/wb-mr6c_45/controls/K1`' },
+            topic: { type: 'string', description: 'Full topic path, e.g. `/devices/wb-mr6c_45/controls/K1`' },
           },
           required: ['topic'],
           additionalProperties: false,
@@ -150,7 +150,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       function: {
         name: 'mqtt_write',
         description:
-          'Опубликовать значение в MQTT-топик на контроллере (mosquitto_pub). Для управления используй суффикс /on (например /devices/wb-gpio/controls/A1_OUT/on). По умолчанию qos=1, retain=false — это нужно для команд `/on`. Для записи retained-конфига (например в системные топики или meta-настройки) укажи retain=true. HITL: перед вызовом объясни пользователю что делаешь и дождись подтверждения.',
+          'Publish a value to an MQTT topic on the controller (mosquitto_pub). For control use the /on suffix (e.g. /devices/wb-gpio/controls/A1_OUT/on). By default qos=1, retain=false — this is required for `/on` commands. To write retained config (e.g. into system topics or meta settings) set retain=true. HITL: before the call, explain to the user what you are doing and wait for confirmation.',
         parameters: {
           type: 'object',
           properties: {
@@ -162,8 +162,8 @@ export function toolSchemas(): ChatCompletionTool[] {
             },
             topic: { type: 'string' },
             payload: { type: 'string' },
-            qos: { type: 'integer', enum: [0, 1, 2], description: 'MQTT QoS, по умолчанию 1.' },
-            retain: { type: 'boolean', description: 'Опубликовать как retained, по умолчанию false.' },
+            qos: { type: 'integer', enum: [0, 1, 2], description: 'MQTT QoS, default 1.' },
+            retain: { type: 'boolean', description: 'Publish as retained, default false.' },
           },
           required: ['topic', 'payload'],
           additionalProperties: false,
@@ -175,7 +175,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       function: {
         name: 'ssh_exec',
         description:
-          'Выполнить shell-команду на контроллере. Для моментальных команд (локальный кеш, без сети): ls, cat, dpkg -l, apt list, apt policy, wb-release, systemctl status, journalctl. Для сетевых/долгих (apt update/install/upgrade, wb-release -t, tar больших каталогов) — используй ssh_exec_async. Для опасных команд — сначала объясни пользователю, жди подтверждения.',
+          'Run a shell command on the controller. For instant commands (local cache, no network): ls, cat, dpkg -l, apt list, apt policy, wb-release, systemctl status, journalctl. For network/long-running ones (apt update/install/upgrade, wb-release -t, tar of large directories) — use ssh_exec_async. For dangerous commands — first explain to the user, wait for confirmation.',
         parameters: {
           type: 'object',
           properties: {
@@ -184,10 +184,10 @@ export function toolSchemas(): ChatCompletionTool[] {
                 { type: 'string' },
                 { type: 'array', items: { type: 'string' } },
               ],
-              description: 'SN или массив SN. Если опущено — контроллеры из контекста чата.',
+              description: 'SN or an array of SNs. If omitted — controllers from the chat context.',
             },
             command: { type: 'string' },
-            timeoutMs: { type: 'number', description: 'таймаут команды (по умолчанию 10000, максимум 120000)' },
+            timeoutMs: { type: 'number', description: 'command timeout (default 10000, maximum 120000)' },
           },
           required: ['command'],
           additionalProperties: false,
@@ -198,13 +198,13 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'ssh_read_file',
-        description: 'Прочитать файл с контроллера по SSH (через head -c, ограничение по размеру).',
+        description: 'Read a file from the controller over SSH (via head -c, size-limited).',
         parameters: {
           type: 'object',
           properties: {
             sn: { type: 'string' },
             path: { type: 'string' },
-            maxBytes: { type: 'number', description: 'по умолчанию 64000' },
+            maxBytes: { type: 'number', description: 'default 64000' },
           },
           required: ['path'],
           additionalProperties: false,
@@ -215,14 +215,14 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'ssh_read_logs',
-        description: 'Последние строки systemd-журнала. Если указан unit — только этот сервис; иначе общий журнал. Для диагностики используй priority="err" чтобы видеть только ошибки.',
+        description: 'Last lines of the systemd journal. If a unit is specified — only that service; otherwise the full journal. For diagnostics use priority="err" to see only errors.',
         parameters: {
           type: 'object',
           properties: {
             sn: { type: 'string' },
-            unit: { type: 'string', description: 'systemd unit, например wb-mqtt-serial' },
-            lines: { type: 'number', description: 'кол-во строк (по умолчанию 200, максимум 2000)' },
-            priority: { type: 'string', description: 'фильтр приоритета journalctl: err, warning, info, debug. По умолчанию — все уровни.' },
+            unit: { type: 'string', description: 'systemd unit, e.g. wb-mqtt-serial' },
+            lines: { type: 'number', description: 'number of lines (default 200, maximum 2000)' },
+            priority: { type: 'string', description: 'journalctl priority filter: err, warning, info, debug. Default — all levels.' },
           },
           required: [],
           additionalProperties: false,
@@ -233,7 +233,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'todo_write',
-        description: 'Записать план из подзадач для текущей сессии. Перезаписывает список ЦЕЛИКОМ — передавай весь набор пунктов каждый раз, включая уже завершённые. Используй на задачах с 3+ шагами, при анализе/оценке (audit, диагностика, сравнение контроллеров), многоэтапных апдейтах и бэкапах. После каждого шага сразу обновляй статус: ровно один пункт "in_progress", завершённые — "completed". Не используй для тривиальных задач в один шаг. Список видно модели в каждом ходе.',
+        description: 'Write a plan of subtasks for the current session. Overwrites the list ENTIRELY — pass the whole set of items every time, including already completed ones. Use it for tasks with 3+ steps, for analysis/assessment (audit, diagnostics, comparing controllers), multi-stage updates and backups. After each step update the status immediately: exactly one item "in_progress", completed ones — "completed". Do not use it for trivial single-step tasks. The list is visible to the model on every turn.',
         parameters: {
           type: 'object',
           properties: {
@@ -258,7 +258,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'checkpoint',
-        description: 'Зафиксировать промежуточный итог текущего этапа и сжать контекст. Вызывай когда: (1) выполнено 5-7+ инструментов подряд, (2) завершён логический этап (диагностика, сбор данных, установка), (3) все пункты текущей фазы todo_write помечены completed. Параметр summary — суммари в 3-7 предложениях: что исследовали/сделали, что обнаружили, что планируем дальше. Текущие pending-задачи из todo_write автоматически сохраняются в чекпоинте — не нужно их дублировать в summary. После чекпоинта старые tool results заменяются суммари, новая фаза начинается с чистого контекста.',
+        description: 'Record an intermediate result of the current stage and compact the context. Call it when: (1) 5-7+ tools have run in a row, (2) a logical stage is finished (diagnostics, data collection, installation), (3) all items of the current todo_write phase are marked completed. The summary parameter is a 3-7 sentence summary: what was investigated/done, what was found, what is planned next. Current pending tasks from todo_write are automatically saved in the checkpoint — no need to duplicate them in the summary. After a checkpoint, old tool results are replaced by the summary, and the new phase starts from a clean context.',
         parameters: {
           type: 'object',
           properties: {
@@ -273,11 +273,11 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'load_skill',
-        description: 'Подгрузить содержимое специализированного скилла (markdown с инструкциями) ДО действий по профильной теме. Список доступных скиллов с описаниями — в системном промпте. После завершения задачи выгрузи скилл через unload_skill чтобы освободить контекст.',
+        description: 'Load the content of a specialized skill (markdown with instructions) BEFORE acting on the relevant topic. The list of available skills with descriptions is in the system prompt. After finishing the task, unload the skill via unload_skill to free up context.',
         parameters: {
           type: 'object',
           properties: {
-            name: { type: 'string', description: 'Имя скилла из каталога, kebab-case.' },
+            name: { type: 'string', description: 'Skill name from the catalog, kebab-case.' },
           },
           required: ['name'],
           additionalProperties: false,
@@ -288,7 +288,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'unload_skill',
-        description: 'Выгрузить ранее загруженный скилл из активного контекста сессии. Вызывай после завершения задачи, для которой скилл был нужен — это освобождает контекст. Скилл остаётся в каталоге и может быть загружен заново через load_skill.',
+        description: 'Unload a previously loaded skill from the active session context. Call it after finishing the task the skill was needed for — this frees up context. The skill stays in the catalog and can be loaded again via load_skill.',
         parameters: {
           type: 'object',
           properties: {
@@ -303,12 +303,12 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'create_skill',
-        description: 'Создать или обновить пользовательский скилл в каталоге. Вызывай, когда пользователь просит «создай скилл», «обнови скилл X», «сделай из этого скилл», «запомни эту тему как скилл». Перед вызовом подгрузи skill-creator и следуй формату. Description для каталога сервер извлечёт сам из первого абзаца после заголовка `# <name>`. Системные скиллы этим тулом не перезаписываются.',
+        description: 'Create or update a user skill in the catalog. Call it when the user asks to "create a skill", "update skill X", "make a skill out of this", "remember this topic as a skill". Before the call, load skill-creator and follow the format. The catalog description is extracted by the server itself from the first paragraph after the `# <name>` heading. System skills are not overwritten by this tool.',
         parameters: {
           type: 'object',
           properties: {
-            name: { type: 'string', description: 'kebab-case, 1-63 символа.' },
-            content: { type: 'string', description: 'Markdown. Обязательно: # <name>, пустая строка, описание, содержимое.' },
+            name: { type: 'string', description: 'kebab-case, 1-63 characters.' },
+            content: { type: 'string', description: 'Markdown. Required: # <name>, blank line, description, content.' },
           },
           required: ['name', 'content'],
           additionalProperties: false,
@@ -319,7 +319,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'delete_skill',
-        description: 'Удалить пользовательский скилл из БД. Системные скиллы не удаляются.',
+        description: 'Delete a user skill from the DB. System skills are not deleted.',
         parameters: {
           type: 'object',
           properties: {
@@ -334,7 +334,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'get_controller',
-        description: 'Базовая информация о контроллере: hostname, uname, uptime, версия прошивки. Делается одним SSH-запросом.',
+        description: 'Basic information about the controller: hostname, uname, uptime, firmware version. Done in a single SSH request.',
         parameters: {
           type: 'object',
           properties: { ...CONTROLLER_TARGET_PROPS },
@@ -347,7 +347,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'get_metrics',
-        description: 'Системные метрики контроллера: load average, RAM, диски (/, /mnt/data). Сырые данные с cat /proc/loadavg, free -m, df -h.',
+        description: 'System metrics of the controller: load average, RAM, disks (/, /mnt/data). Raw data from cat /proc/loadavg, free -m, df -h.',
         parameters: {
           type: 'object',
           properties: { ...CONTROLLER_TARGET_PROPS },
@@ -360,7 +360,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'failed_units',
-        description: 'Список упавших systemd-юнитов на контроллере (`systemctl --failed`). Один из первых шагов диагностики «что-то сломалось» — быстрее, чем читать journalctl целиком.',
+        description: 'List of failed systemd units on the controller (`systemctl --failed`). One of the first steps when diagnosing "something broke" — faster than reading the whole journalctl.',
         parameters: {
           type: 'object',
           properties: { ...CONTROLLER_TARGET_PROPS },
@@ -373,16 +373,16 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'systemd_unit',
-        description: 'Управление systemd-юнитом и его инспекция. Действие `status` (по умолчанию) возвращает структурированный объект {active, sub, load, unitFileState, exitCode, mainPid, since, statusTail} — для большинства диагностических вопросов этого достаточно. `cat` (юнит со всеми drop-ins) и `list-deps` тоже read-only. Действия, изменяющие состояние, — `start`/`stop`/`restart`/`reload`/`enable`/`disable`/`mask`/`unmask`: HITL — перед вызовом объясни пользователю что делаешь и дождись подтверждения. Имя юнита допускает суффикс или нет (`wb-mqtt-serial` ≡ `wb-mqtt-serial.service`).',
+        description: 'Manage a systemd unit and inspect it. The `status` action (default) returns a structured object {active, sub, load, unitFileState, exitCode, mainPid, since, statusTail} — enough for most diagnostic questions. `cat` (the unit with all drop-ins) and `list-deps` are also read-only. State-changing actions — `start`/`stop`/`restart`/`reload`/`enable`/`disable`/`mask`/`unmask`: HITL — before the call, explain to the user what you are doing and wait for confirmation. The unit name may have the suffix or not (`wb-mqtt-serial` ≡ `wb-mqtt-serial.service`).',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            unit: { type: 'string', description: 'Имя юнита (wb-mqtt-serial.service, fstrim.timer, mosquitto). Суффикс .service можно опустить.' },
+            unit: { type: 'string', description: 'Unit name (wb-mqtt-serial.service, fstrim.timer, mosquitto). The .service suffix may be omitted.' },
             action: {
               type: 'string',
               enum: ['status', 'start', 'stop', 'restart', 'reload', 'enable', 'disable', 'mask', 'unmask', 'cat', 'list-deps'],
-              description: 'Действие. По умолчанию status.',
+              description: 'Action. Default status.',
             },
           },
           required: ['unit'],
@@ -394,12 +394,12 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'network_status',
-        description: 'Сетевая сводка контроллера в одном вызове: интерфейсы (ip -j addr) с IPv4-адресами и состоянием, default-маршрут (ip -j route), активные соединения NetworkManager (nmcli connection show / device) и опционально ping до целевого хоста. Типичный first-call для диагностики «нет интернета»/«не виден через VPN»/«отвалился uplink».',
+        description: 'Network summary of the controller in a single call: interfaces (ip -j addr) with IPv4 addresses and state, default route (ip -j route), active NetworkManager connections (nmcli connection show / device) and optionally a ping to a target host. A typical first call for diagnosing "no internet"/"not visible over VPN"/"uplink dropped".',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            pingTarget: { type: 'string', description: 'Если задан — `ping -c1 -W2 <target>` (например 8.8.8.8). Иначе пинг пропускается.' },
+            pingTarget: { type: 'string', description: 'If set — `ping -c1 -W2 <target>` (e.g. 8.8.8.8). Otherwise the ping is skipped.' },
           },
           required: [],
           additionalProperties: false,
@@ -410,7 +410,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'cloud_status',
-        description: 'Состояние Wiren Board Cloud agent одним вызовом: активность сервиса wb-cloud-agent, наличие device-сертификата, список привязанных провайдеров, retained MQTT-контролы (status / activation_link / cloud_base_url) для каждого провайдера. По одному вызову видно, привязан ли контроллер к облаку и в каком статусе.',
+        description: 'State of the Wiren Board Cloud agent in a single call: whether the wb-cloud-agent service is active, presence of the device certificate, list of linked providers, retained MQTT controls (status / activation_link / cloud_base_url) for each provider. A single call shows whether the controller is linked to the cloud and in what status.',
         parameters: {
           type: 'object',
           properties: {
@@ -425,13 +425,13 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'write_file',
-        description: 'Записать содержимое в файл на контроллере (через SFTP). HITL: перед вызовом покажи пользователю diff или содержимое и дождись подтверждения.',
+        description: 'Write content to a file on the controller (via SFTP). HITL: before the call, show the user the diff or the content and wait for confirmation.',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            path: { type: 'string', description: 'Абсолютный путь к файлу.' },
-            content: { type: 'string', description: 'Полное содержимое файла.' },
+            path: { type: 'string', description: 'Absolute path to the file.' },
+            content: { type: 'string', description: 'Full content of the file.' },
           },
           required: ['path', 'content'],
           additionalProperties: false,
@@ -442,11 +442,11 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'web_search',
-        description: 'Поиск в интернете через Brave Search. Возвращает топ-10 результатов: {title, url, snippet}. Макс. 3 вызова на один ответ модели (счётчик обнуляется на каждом новом сообщении пользователя). Предпочитай прямой web_fetch на wiki.wirenboard.com. Используй web_search только когда не знаешь URL. Если результатов нет — НЕ повторяй, используй web_fetch.',
+        description: 'Search the internet via Brave Search. Returns the top 10 results: {title, url, snippet}. Max 3 calls per model response (the counter resets on every new user message). Prefer a direct web_fetch to wiki.wirenboard.com. Use web_search only when you do not know the URL. If there are no results — do NOT retry, use web_fetch.',
         parameters: {
           type: 'object',
           properties: {
-            query: { type: 'string', description: 'Поисковый запрос на русском или английском.' },
+            query: { type: 'string', description: 'Search query in Russian or English.' },
           },
           required: ['query'],
           additionalProperties: false,
@@ -457,11 +457,11 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'web_fetch',
-        description: 'Скачать содержимое веб-страницы по URL. Используй, когда не уверен в конвенциях/API/синтаксисе и хочешь свериться с документацией Wiren Board (github.com/wirenboard/*), README сторонних библиотек, конкретными файлами шаблонов и т.п. Возвращает text/plain (HTML конвертируется в читаемый текст; markdown/json/код — как есть). Лимит 20 000 символов.',
+        description: 'Download the content of a web page by URL. Use it when you are unsure about conventions/API/syntax and want to check against Wiren Board documentation (github.com/wirenboard/*), READMEs of third-party libraries, specific template files, etc. Returns text/plain (HTML is converted to readable text; markdown/json/code — as is). Limit 20 000 characters.',
         parameters: {
           type: 'object',
           properties: {
-            url: { type: 'string', description: 'Полный URL (http/https).' },
+            url: { type: 'string', description: 'Full URL (http/https).' },
           },
           required: ['url'],
           additionalProperties: false,
@@ -472,16 +472,16 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'mqtt_rpc',
-        description: 'Вызвать MQTT RPC на контроллере. Параметр `params` ВСЕГДА передавай явно — даже если RPC принимает {} — иначе вызов будет некорректным. Примеры: mqtt_rpc(sn, "wb-mqtt-serial", "device", "LoadConfig", params={port, slave_id, ...}); mqtt_rpc(sn, "wb-mqtt-serial", "config", "Load", params={}); mqtt_rpc(sn, "wbrules", "Editor", "Save", params={path: "имя.js", content: "..."}) — для Editor.Save оба поля path (с расширением .js) и content ОБЯЗАТЕЛЬНЫ; mqtt_rpc(sn, "wbrules", "Editor", "List", params={}); mqtt_rpc(sn, "wbrules", "Editor", "Load", params={path: "имя.js"}).',
+        description: 'Call an MQTT RPC on the controller. ALWAYS pass the `params` parameter explicitly — even if the RPC accepts {} — otherwise the call will be malformed. Examples: mqtt_rpc(sn, "wb-mqtt-serial", "device", "LoadConfig", params={port, slave_id, ...}); mqtt_rpc(sn, "wb-mqtt-serial", "config", "Load", params={}); mqtt_rpc(sn, "wbrules", "Editor", "Save", params={path: "name.js", content: "..."}) — for Editor.Save both fields path (with the .js extension) and content are REQUIRED; mqtt_rpc(sn, "wbrules", "Editor", "List", params={}); mqtt_rpc(sn, "wbrules", "Editor", "Load", params={path: "name.js"}).',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            driver: { type: 'string', description: 'Имя RPC-драйвера: wb-mqtt-serial, confed, db_logger, wb-device-manager, wbrules.' },
-            service: { type: 'string', description: 'Имя сервиса (device, config, Editor, history и т.д.)' },
-            method: { type: 'string', description: 'Имя метода (LoadConfig, Load, Save, Start и т.д.)' },
-            params: { type: 'object', description: 'Параметры вызова. Для пустых параметров — {}.' },
-            timeoutSec: { type: 'integer', minimum: 1, maximum: 30, description: 'Таймаут ожидания ответа (по умолч. 5с).' },
+            driver: { type: 'string', description: 'RPC driver name: wb-mqtt-serial, confed, db_logger, wb-device-manager, wbrules.' },
+            service: { type: 'string', description: 'Service name (device, config, Editor, history, etc.)' },
+            method: { type: 'string', description: 'Method name (LoadConfig, Load, Save, Start, etc.)' },
+            params: { type: 'object', description: 'Call parameters. For empty parameters — {}.' },
+            timeoutSec: { type: 'integer', minimum: 1, maximum: 30, description: 'Response wait timeout (default 5s).' },
           },
           required: ['driver', 'service', 'method', 'params'],
           additionalProperties: false,
@@ -492,15 +492,15 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'mqtt_list_topics',
-        description: 'Перечислить MQTT-топики на контроллере. По умолчанию — все, можно ограничить prefix-ом (например "/devices/wb-gpio/#"). Поддерживает пагинацию: limit (дефолт 200) и offset. Если has_more=true — запроси следующую страницу с next_offset.',
+        description: 'List MQTT topics on the controller. By default — all of them, can be narrowed by a prefix (e.g. "/devices/wb-gpio/#"). Supports pagination: limit (default 200) and offset. If has_more=true — request the next page with next_offset.',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            prefix: { type: 'string', description: 'MQTT-фильтр, дефолт "#".' },
+            prefix: { type: 'string', description: 'MQTT filter, default "#".' },
             timeoutSec: { type: 'integer', minimum: 1, maximum: 10 },
-            limit: { type: 'integer', minimum: 1, maximum: 2000, description: 'Макс. топиков на страницу (дефолт 200).' },
-            offset: { type: 'integer', minimum: 0, description: 'Пропустить N топиков (для пагинации, дефолт 0).' },
+            limit: { type: 'integer', minimum: 1, maximum: 2000, description: 'Max topics per page (default 200).' },
+            offset: { type: 'integer', minimum: 0, description: 'Skip N topics (for pagination, default 0).' },
           },
           required: [],
           additionalProperties: false,
@@ -511,13 +511,13 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'ssh_exec_async',
-        description: 'Запустить shell-команду на контроллере в фоне как transient systemd-unit. Возвращает {jobId, startedAt} мгновенно, SSH-соединение не держит. Команда переживает обрыв связи и продолжает работу под systemd. Используй для операций дольше пары минут: apt update/upgrade, wb-release -t testing, FIT-обновление, полный бэкап с tar, длинные bus-сканы. HITL как у ssh_exec: опасные команды — сначала подтверждение пользователя. После запуска проверяй прогресс через job_status/job_tail; не спамь polling-ом — достаточно раз в 10-30 сек.',
+        description: 'Run a shell command on the controller in the background as a transient systemd unit. Returns {jobId, startedAt} instantly and does not hold the SSH connection. The command survives a connection drop and keeps running under systemd. Use it for operations longer than a couple of minutes: apt update/upgrade, wb-release -t testing, FIT update, a full tar backup, long bus scans. HITL same as ssh_exec: dangerous commands — user confirmation first. After starting, check progress via job_status/job_tail; do not spam polling — once every 10-30 sec is enough.',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
             command: { type: 'string' },
-            label: { type: 'string', description: 'Короткая метка для человека.' },
+            label: { type: 'string', description: 'Short human-readable label.' },
           },
           required: ['command'],
           additionalProperties: false,
@@ -528,12 +528,12 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'job_status',
-        description: 'Состояние фоновой задачи из ssh_exec_async: running / exited (+ exitCode), сколько идёт, сколько строк в логе, команда, label.',
+        description: 'State of a background job from ssh_exec_async: running / exited (+ exitCode), how long it has been running, how many lines in the log, the command, the label.',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            jobId: { type: 'string', description: '8-символьный hex id из ssh_exec_async.' },
+            jobId: { type: 'string', description: '8-character hex id from ssh_exec_async.' },
           },
           required: ['jobId'],
           additionalProperties: false,
@@ -544,14 +544,14 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'job_tail',
-        description: 'Последние строки лога фоновой задачи (stdout+stderr склеены). Инкрементально: в ответе nextFromLine — с какой строки запрашивать дальше.',
+        description: 'Last lines of a background job log (stdout+stderr merged). Incremental: the response nextFromLine tells which line to request from next.',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
             jobId: { type: 'string' },
-            fromLine: { type: 'integer', minimum: 1, description: 'С какой строки читать (1-based). Дефолт 1.' },
-            maxLines: { type: 'integer', minimum: 1, maximum: 1000, description: 'Сколько строк максимум вернуть. Дефолт 100.' },
+            fromLine: { type: 'integer', minimum: 1, description: 'Which line to read from (1-based). Default 1.' },
+            maxLines: { type: 'integer', minimum: 1, maximum: 1000, description: 'Maximum number of lines to return. Default 100.' },
           },
           required: ['jobId'],
           additionalProperties: false,
@@ -562,7 +562,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'job_cancel',
-        description: 'Прервать фоновую задачу: SIGTERM → SIGKILL. HITL: подтверди у пользователя перед прерыванием.',
+        description: 'Abort a background job: SIGTERM → SIGKILL. HITL: confirm with the user before aborting.',
         parameters: {
           type: 'object',
           properties: {
@@ -578,7 +578,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'job_list',
-        description: 'Все фоновые задачи на контроллере, запущенные через ssh_exec_async: running и недавние exited (TTL 24ч).',
+        description: 'All background jobs on the controller started via ssh_exec_async: running and recently exited (TTL 24h).',
         parameters: {
           type: 'object',
           properties: {
@@ -593,12 +593,12 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'serial_debug_collect',
-        description: 'Собирает debug-лог wb-mqtt-serial с raw-пакетами за указанное время. Вызывай сразу при диагностике serial-ошибок.',
+        description: 'Collects a wb-mqtt-serial debug log with raw packets over the specified time. Call it right away when diagnosing serial errors.',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            durationSec: { type: 'integer', minimum: 10, maximum: 300, description: 'Сколько секунд собирать debug-данные. По умолчанию 30.' },
+            durationSec: { type: 'integer', minimum: 10, maximum: 300, description: 'How many seconds to collect debug data. Default 30.' },
           },
           required: [],
           additionalProperties: false,
@@ -609,17 +609,17 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'wb_bus_scan',
-        description: 'Сканирование шины Fast Modbus — находит устройства Wiren Board и Onokom. Если port не указан — автоматически обнаружит все RS-485 порты. Быстрое сканирование занимает около 40 секунд.',
+        description: 'Fast Modbus bus scan — finds Wiren Board and Onokom devices. If port is not specified — it automatically discovers all RS-485 ports. A fast scan takes about 40 seconds.',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            port: { type: 'string', description: 'Путь к порту, например "/dev/ttyRS485-1".' },
-            baud_rate: { type: 'integer', description: 'Скорость, по умолчанию перебирает 115200 и 9600.' },
-            data_bits: { type: 'integer', description: 'Биты данных, по умолчанию 8.' },
-            parity: { type: 'string', description: '"N", "E" или "O". По умолчанию "N".' },
-            stop_bits: { type: 'integer', description: '1 или 2. По умолчанию 2.' },
-            scan_type: { type: 'string', enum: ['extended', 'standard'], description: '"extended" — Fast Modbus (по умолчанию). "standard" — обычный Modbus.' },
+            port: { type: 'string', description: 'Port path, e.g. "/dev/ttyRS485-1".' },
+            baud_rate: { type: 'integer', description: 'Baud rate, by default tries 115200 and 9600.' },
+            data_bits: { type: 'integer', description: 'Data bits, default 8.' },
+            parity: { type: 'string', description: '"N", "E" or "O". Default "N".' },
+            stop_bits: { type: 'integer', description: '1 or 2. Default 2.' },
+            scan_type: { type: 'string', enum: ['extended', 'standard'], description: '"extended" — Fast Modbus (default). "standard" — regular Modbus.' },
           },
           required: [],
           additionalProperties: false,
@@ -630,7 +630,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'wb_add_devices',
-        description: 'Добавляет найденные сканером (wb_bus_scan) устройства в конфигурацию wb-mqtt-serial. Вызывай ПОСЛЕ wb_bus_scan. Требует подтверждения (HITL).',
+        description: 'Adds devices found by the scanner (wb_bus_scan) to the wb-mqtt-serial configuration. Call it AFTER wb_bus_scan. Requires confirmation (HITL).',
         parameters: {
           type: 'object',
           properties: {
@@ -645,12 +645,12 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'modbus_templates_list',
-        description: 'Список доступных Modbus-шаблонов wb-mqtt-serial через RPC `wb-mqtt-serial/config/Load.types`. Без `filter` — сводка по группам {group: {count, deprecated}}, чтобы не переполнить контекст (на типичной прошивке 250+ шаблонов). С `filter` (подстрока, case-insensitive по type/mqtt-id/name) — плоский список matched.',
+        description: 'List of available wb-mqtt-serial Modbus templates via RPC `wb-mqtt-serial/config/Load.types`. Without `filter` — a summary by groups {group: {count, deprecated}}, so as not to overflow the context (a typical firmware has 250+ templates). With `filter` (substring, case-insensitive over type/mqtt-id/name) — a flat list of matches.',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            filter: { type: 'string', description: 'Подстрока для фильтрации (например "wb-mr6c", "dimmer", "MAI"). Регистронезависимо.' },
+            filter: { type: 'string', description: 'Substring for filtering (e.g. "wb-mr6c", "dimmer", "MAI"). Case-insensitive.' },
           },
           required: [],
           additionalProperties: false,
@@ -661,15 +661,15 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'modbus_device_info',
-        description: 'Прошивочные параметры конкретного Modbus-устройства: версия fw, model-строка, текущие значения всех parameters (debounce, modes, mappings и т.п.). RPC `wb-mqtt-serial/device/LoadConfig`. Это НЕ список каналов — для каналов и шаблона используй `modbus_template`. Два режима: (1) по `device_id` (имя в MQTT, например "wb-mr6c_138") — самый простой; (2) по явным `path` + `slave_id` (опционально с device_type/baud_rate/parity/data_bits/stop_bits) — для устройств не в конфиге.',
+        description: 'Firmware parameters of a specific Modbus device: fw version, model string, current values of all parameters (debounce, modes, mappings, etc.). RPC `wb-mqtt-serial/device/LoadConfig`. This is NOT a list of channels — for channels and the template use `modbus_template`. Two modes: (1) by `device_id` (the MQTT name, e.g. "wb-mr6c_138") — the simplest; (2) by explicit `path` + `slave_id` (optionally with device_type/baud_rate/parity/data_bits/stop_bits) — for devices not in the config.',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            device_id: { type: 'string', description: 'Имя устройства в MQTT (wb-mr6c_138). Альтернатива path+slave_id.' },
-            path: { type: 'string', description: 'Порт (/dev/ttyRS485-1) — если без device_id.' },
-            slave_id: { type: 'number', description: 'Modbus slave-id — если без device_id.' },
-            device_type: { type: 'string', description: 'Опционально: тип устройства из шаблонов (для устройств не в конфиге).' },
+            device_id: { type: 'string', description: 'Device name in MQTT (wb-mr6c_138). Alternative to path+slave_id.' },
+            path: { type: 'string', description: 'Port (/dev/ttyRS485-1) — if without device_id.' },
+            slave_id: { type: 'number', description: 'Modbus slave-id — if without device_id.' },
+            device_type: { type: 'string', description: 'Optional: device type from templates (for devices not in the config).' },
             baud_rate: { type: 'number' },
             parity: { type: 'string' },
             data_bits: { type: 'number' },
@@ -684,17 +684,17 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'modbus_probe',
-        description: 'Быстрый ping одного Modbus-устройства по slave_id на указанном порту. Не трогает конфиг wb-mqtt-serial — точечная проверка «оно вообще отвечает?». RPC `wb-mqtt-serial/device/Probe`. Полезно когда `wb_bus_scan` пропустил устройство (известный кейс с WB-MAP6S — сканер видит не всех, Probe видит).',
+        description: 'A quick ping of a single Modbus device by slave_id on the specified port. Does not touch the wb-mqtt-serial config — a targeted "does it respond at all?" check. RPC `wb-mqtt-serial/device/Probe`. Useful when `wb_bus_scan` missed a device (a known case with WB-MAP6S — the scanner does not see all of them, Probe does).',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            path: { type: 'string', description: 'Порт (/dev/ttyRS485-1).' },
+            path: { type: 'string', description: 'Port (/dev/ttyRS485-1).' },
             slave_id: { type: 'number', description: 'Modbus slave-id.' },
-            baud_rate: { type: 'number', description: 'Baud, по умолчанию 9600.' },
-            parity: { type: 'string', description: 'Parity, по умолчанию "N".' },
-            data_bits: { type: 'number', description: 'Data bits, по умолчанию 8.' },
-            stop_bits: { type: 'number', description: 'Stop bits, по умолчанию 2.' },
+            baud_rate: { type: 'number', description: 'Baud, default 9600.' },
+            parity: { type: 'string', description: 'Parity, default "N".' },
+            data_bits: { type: 'number', description: 'Data bits, default 8.' },
+            stop_bits: { type: 'number', description: 'Stop bits, default 2.' },
           },
           required: ['path', 'slave_id'],
           additionalProperties: false,
@@ -705,7 +705,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'modbus_ports',
-        description: 'Параметры всех настроенных RS-485 портов wb-mqtt-serial: путь, baud_rate, parity, stop_bits, data_bits, тайм-ауты, enabled-флаг. RPC `wb-mqtt-serial/ports/Load`. Возвращает только АКТИВНЫЕ порты из конфига (не все `/dev/ttyRS485-*` существующие физически).',
+        description: 'Parameters of all configured wb-mqtt-serial RS-485 ports: path, baud_rate, parity, stop_bits, data_bits, timeouts, enabled flag. RPC `wb-mqtt-serial/ports/Load`. Returns only ACTIVE ports from the config (not every physically existing `/dev/ttyRS485-*`).',
         parameters: {
           type: 'object',
           properties: {
@@ -720,16 +720,16 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'modbus_template',
-        description: 'Содержимое одного Modbus-шаблона: каналы, параметры, группы. Резолвит `device_type` (например "WB-MR6C") в `mqtt-id` через RPC config/Load.types и читает `/usr/share/wb-mqtt-serial/templates/config-<mqtt-id>.json`. Views: `summary` (default — компактный список каналов с reg_type/address/format/type/units), `full` (весь шаблон), `channels-only` (только каналы), `meta-only` (без каналов и параметров — только заголовки). Опционально фильтрует каналы (`enabledOnly`, `channelFilter`).',
+        description: 'Content of a single Modbus template: channels, parameters, groups. Resolves `device_type` (e.g. "WB-MR6C") to `mqtt-id` via RPC config/Load.types and reads `/usr/share/wb-mqtt-serial/templates/config-<mqtt-id>.json`. Views: `summary` (default — a compact list of channels with reg_type/address/format/type/units), `full` (the whole template), `channels-only` (channels only), `meta-only` (without channels and parameters — headers only). Optionally filters channels (`enabledOnly`, `channelFilter`).',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            device_type: { type: 'string', description: 'Тип устройства как в Load.types[].types[].type (например "WB-MR6C"). Альтернатива — mqtt_id.' },
-            mqtt_id: { type: 'string', description: 'mqtt-id шаблона (например "wb-mr6c"). Если задан — резолв пропускается, читается файл config-<mqtt_id>.json напрямую.' },
-            view: { type: 'string', enum: ['summary', 'full', 'channels-only', 'meta-only'], description: 'Представление. По умолчанию summary.' },
-            enabledOnly: { type: 'boolean', description: 'Только enabled-каналы (default false).' },
-            channelFilter: { type: 'string', description: 'Подстрока в имени канала (case-insensitive).' },
+            device_type: { type: 'string', description: 'Device type as in Load.types[].types[].type (e.g. "WB-MR6C"). Alternative — mqtt_id.' },
+            mqtt_id: { type: 'string', description: 'Template mqtt-id (e.g. "wb-mr6c"). If set — resolution is skipped, the config-<mqtt_id>.json file is read directly.' },
+            view: { type: 'string', enum: ['summary', 'full', 'channels-only', 'meta-only'], description: 'View. Default summary.' },
+            enabledOnly: { type: 'boolean', description: 'Only enabled channels (default false).' },
+            channelFilter: { type: 'string', description: 'Substring in the channel name (case-insensitive).' },
           },
           required: [],
           additionalProperties: false,
@@ -740,20 +740,20 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'get_history',
-        description: 'Получить историю значений MQTT-каналов из wb-mqtt-db. Возвращает массив точек {v, t}, статистику (min/max/avg), units и precision. Используй period вместо from/to.',
+        description: 'Get the history of MQTT channel values from wb-mqtt-db. Returns an array of points {v, t}, statistics (min/max/avg), units and precision. Use period instead of from/to.',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
             channels: {
               type: 'array',
-              description: 'Каналы для запроса. Каждый элемент — пара [device_id, control_name].',
+              description: 'Channels to query. Each element is a pair [device_id, control_name].',
               items: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 2 },
               minItems: 1,
             },
-            period: { type: 'string', description: 'Период: число + единица (m/h/d/w/y). Примеры: "2h", "30m", "3d".' },
-            from: { type: 'number', description: 'Начало диапазона (unix timestamp, секунды).' },
-            to: { type: 'number', description: 'Конец диапазона (unix timestamp, секунды).' },
+            period: { type: 'string', description: 'Period: number + unit (m/h/d/w/y). Examples: "2h", "30m", "3d".' },
+            from: { type: 'number', description: 'Range start (unix timestamp, seconds).' },
+            to: { type: 'number', description: 'Range end (unix timestamp, seconds).' },
           },
           required: ['channels'],
           additionalProperties: false,
@@ -765,35 +765,35 @@ export function toolSchemas(): ChatCompletionTool[] {
       function: {
         name: 'get_history_chart',
         description:
-          'Построить график истории MQTT-каналов и сохранить как вложение (SVG). ' +
-          'Использует wb-mqtt-db через RPC db_logger/history/get_values, рендерит через vega-lite. ' +
-          'По умолчанию строит линейный график (chart_type=line). Меняй chart_type когда пользователь просит конкретный вид: ' +
-          '«гистограмма» → histogram (распределение значений), «глазковая/тепловая карта/плотность» → heatmap, ' +
-          '«ящики/разброс по дням» → boxplot, «столбики/события» → bar, «область/заливка» → area, «точки/выбросы» → point. ' +
-          'Поддерживает несколько серий на одном графике, twin Y-axis при разных единицах.',
+          'Build a chart of MQTT channel history and save it as an attachment (SVG). ' +
+          'Uses wb-mqtt-db via RPC db_logger/history/get_values, renders via vega-lite. ' +
+          'By default builds a line chart (chart_type=line). Change chart_type when the user asks for a specific kind: ' +
+          '"histogram" -> histogram (value distribution), "eye/heat map/density" -> heatmap, ' +
+          '"boxes/spread by day" -> boxplot, "bars/events" -> bar, "area/fill" -> area, "points/outliers" -> point. ' +
+          'Supports several series on one chart, twin Y-axis for different units.',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
             channels: {
               type: 'array',
-              description: 'Каналы для графика. Каждый элемент — пара [device_id, control_name].',
+              description: 'Channels for the chart. Each element is a pair [device_id, control_name].',
               items: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 2 },
               minItems: 1,
             },
-            period: { type: 'string', description: 'Период: число + единица (m/h/d/w/y). Примеры: "2h", "30m", "3d", "1y".' },
-            from: { type: 'number', description: 'Начало диапазона (unix timestamp, секунды). Используй только если period не подходит.' },
-            to: { type: 'number', description: 'Конец диапазона (unix timestamp, секунды). По умолчанию — сейчас.' },
-            title: { type: 'string', description: 'Заголовок графика (например: "CPU Temperature за сутки").' },
-            ylabel: { type: 'string', description: 'Подпись оси Y (обычно — единица измерения, например "°C").' },
+            period: { type: 'string', description: 'Period: number + unit (m/h/d/w/y). Examples: "2h", "30m", "3d", "1y".' },
+            from: { type: 'number', description: 'Range start (unix timestamp, seconds). Use only if period does not fit.' },
+            to: { type: 'number', description: 'Range end (unix timestamp, seconds). Default — now.' },
+            title: { type: 'string', description: 'Chart title (e.g. "CPU Temperature over a day").' },
+            ylabel: { type: 'string', description: 'Y-axis label (usually the unit of measurement, e.g. "°C").' },
             chart_type: {
               type: 'string',
               enum: ['line', 'bar', 'area', 'point', 'histogram', 'heatmap', 'boxplot'],
               description:
-                'Тип графика. line — обычный время-ряд (default). bar — столбики (для дискретных событий). area — заливка под линией. ' +
-                'point — скаттер (выбросы). histogram — распределение значений (по бинам). ' +
-                'heatmap — плотность во времени (рисует «глазковую» — видно типовой уровень и выбросы). ' +
-                'boxplot — ящики с усами по периодам (час/день).',
+                'Chart type. line — a regular time series (default). bar — bars (for discrete events). area — fill under the line. ' +
+                'point — scatter (outliers). histogram — value distribution (by bins). ' +
+                'heatmap — density over time (draws an "eye" view — shows the typical level and outliers). ' +
+                'boxplot — box-and-whisker by periods (hour/day).',
             },
           },
           required: ['channels'],
@@ -805,22 +805,22 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'get_history_table',
-        description: 'Выгрузить историю MQTT-каналов в CSV. Возвращает CSV строкой. Используй когда пользователь хочет "сохранить", "выгрузить", "скинуть в Excel".',
+        description: 'Export the history of MQTT channels to CSV. Returns CSV as a string. Use it when the user wants to "save", "export", "dump to Excel".',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
             channels: {
               type: 'array',
-              description: 'Каналы для таблицы. Каждый элемент — пара [device_id, control_name].',
+              description: 'Channels for the table. Each element is a pair [device_id, control_name].',
               items: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 2 },
               minItems: 1,
             },
-            period: { type: 'string', description: 'Период: число + единица (m/h/d/w/y).' },
-            from: { type: 'number', description: 'Начало диапазона (unix timestamp).' },
-            to: { type: 'number', description: 'Конец диапазона (unix timestamp).' },
-            limit: { type: 'number', description: 'Максимум точек на канал. По умолчанию 10000.' },
-            min_interval: { type: 'number', description: 'Минимальный интервал между точками в секундах. 0 — все точки.' },
+            period: { type: 'string', description: 'Period: number + unit (m/h/d/w/y).' },
+            from: { type: 'number', description: 'Range start (unix timestamp).' },
+            to: { type: 'number', description: 'Range end (unix timestamp).' },
+            limit: { type: 'number', description: 'Maximum points per channel. Default 10000.' },
+            min_interval: { type: 'number', description: 'Minimum interval between points in seconds. 0 — all points.' },
           },
           required: ['channels'],
           additionalProperties: false,
@@ -831,7 +831,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'get_hardware_config',
-        description: 'Загрузить конфигурацию аппаратных модулей расширения контроллера (/etc/wb-hardware.conf) через confed RPC.',
+        description: 'Load the configuration of the controller hardware expansion modules (/etc/wb-hardware.conf) via confed RPC.',
         parameters: {
           type: 'object',
           properties: {
@@ -846,14 +846,14 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'save_hardware_config',
-        description: 'Установить модуль в слот контроллера и сохранить конфигурацию (/etc/wb-hardware.conf).',
+        description: 'Install a module into a controller slot and save the configuration (/etc/wb-hardware.conf).',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            slot_id: { type: 'string', description: 'Идентификатор слота из get_hardware_config (например: "mod1", "extio3").' },
-            module: { type: 'string', description: 'Идентификатор модуля. Пустая строка — убрать модуль из слота.' },
-            options: { type: 'object', description: 'Настройки модуля (опционально).' },
+            slot_id: { type: 'string', description: 'Slot identifier from get_hardware_config (e.g. "mod1", "extio3").' },
+            module: { type: 'string', description: 'Module identifier. An empty string removes the module from the slot.' },
+            options: { type: 'object', description: 'Module settings (optional).' },
           },
           required: ['slot_id', 'module'],
           additionalProperties: false,
@@ -864,7 +864,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'audit_controller',
-        description: 'Собрать текущее состояние контроллера: список manual-пакетов, enabled-сервисы, кастомные unit-файлы, cron, файлы в /opt и /usr/local, изменённые системные конфиги.',
+        description: 'Collect the current state of the controller: list of manually installed packages, enabled services, custom unit files, cron, files in /opt and /usr/local, modified system configs.',
         parameters: {
           type: 'object',
           properties: {
@@ -879,7 +879,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'save_state_for_diff',
-        description: 'Сохранить JSON-слепок текущего состояния контроллера в /mnt/data/ai/wb-ai-helper/snapshots/. Используется в паре с diff_snapshot.',
+        description: 'Save a JSON snapshot of the current controller state into /mnt/data/ai/wb-ai-helper/snapshots/. Used together with diff_snapshot.',
         parameters: {
           type: 'object',
           properties: {
@@ -894,12 +894,12 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'diff_snapshot',
-        description: 'Сравнить текущее состояние контроллера со слепком от save_state_for_diff и вернуть, что прибавилось/убавилось.',
+        description: 'Compare the current controller state with the snapshot from save_state_for_diff and return what was added/removed.',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            beforePath: { type: 'string', description: 'Абсолютный путь к JSON-слепку на контроллере.' },
+            beforePath: { type: 'string', description: 'Absolute path to the JSON snapshot on the controller.' },
           },
           required: ['beforePath'],
           additionalProperties: false,
@@ -910,13 +910,13 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'read_file',
-        description: 'Прочитать файл с контроллера (до 64KB). Удобно для конфигов в /etc/wb-* или /mnt/data.',
+        description: 'Read a file from the controller (up to 64KB). Handy for configs in /etc/wb-* or /mnt/data.',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            path: { type: 'string', description: 'Абсолютный путь к файлу.' },
-            maxBytes: { type: 'number', description: 'по умолчанию 64000' },
+            path: { type: 'string', description: 'Absolute path to the file.' },
+            maxBytes: { type: 'number', description: 'default 64000' },
           },
           required: ['path'],
           additionalProperties: false,
@@ -927,13 +927,13 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'fetch_from_controller',
-        description: 'Скачать файл с контроллера (через SFTP) и положить в вложения текущей сессии чата. Пользователь увидит его в UI как чип с кнопкой скачать. Используй для выгрузки готового бэкапа, архива конфигов, лога — всего, что пользователь хочет получить себе. Лимит 20MB; для больших файлов сначала сожми (tar czf) или раздели. Имя файла по умолчанию берётся из пути; при нужде переопредели параметром name.',
+        description: 'Download a file from the controller (via SFTP) and put it into the attachments of the current chat session. The user will see it in the UI as a chip with a download button. Use it to deliver a ready backup, a config archive, a log — anything the user wants to get. Limit 20MB; for large files first compress (tar czf) or split. The file name is taken from the path by default; override it with the name parameter if needed.',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            path: { type: 'string', description: 'Абсолютный путь к файлу на контроллере.' },
-            name: { type: 'string', description: 'Имя файла для сохранения (опционально, по умолчанию basename пути).' },
+            path: { type: 'string', description: 'Absolute path to the file on the controller.' },
+            name: { type: 'string', description: 'File name to save as (optional, default is the basename of the path).' },
           },
           required: ['path'],
           additionalProperties: false,
@@ -944,13 +944,13 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'upload_to_controller',
-        description: 'Записать вложение сессии (файл, который пользователь загрузил в чат) на контроллер в произвольный путь через SFTP. HITL: перед вызовом покажи пользователю, какой файл → в какой путь пойдёт, дождись подтверждения. Не перезаписывай критичные системные пути — избегай /etc/shadow, /etc/passwd, /etc/systemd/system/*.service без явной просьбы.',
+        description: 'Write a session attachment (a file the user uploaded to the chat) to the controller at an arbitrary path via SFTP. HITL: before the call, show the user which file -> which path it goes to, wait for confirmation. Do not overwrite critical system paths — avoid /etc/shadow, /etc/passwd, /etc/systemd/system/*.service without an explicit request.',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            fileId: { type: 'string', description: 'ID вложения из list_attachments.' },
-            path: { type: 'string', description: 'Абсолютный путь на контроллере для сохранения файла.' },
+            fileId: { type: 'string', description: 'Attachment ID from list_attachments.' },
+            path: { type: 'string', description: 'Absolute path on the controller to save the file to.' },
           },
           required: ['fileId', 'path'],
           additionalProperties: false,
@@ -961,7 +961,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'list_attachments',
-        description: 'Список файлов, прикреплённых пользователем к текущей сессии чата. Актуальный перечень также показан в системном сообщении перед каждым ходом — обычно отдельно звать не нужно; вызывай, если по ходу диалога нужно свериться с id/размерами.',
+        description: 'List of files attached by the user to the current chat session. The current list is also shown in the system message before each turn — usually no need to call it separately; call it if you need to double-check ids/sizes during the dialogue.',
         parameters: {
           type: 'object',
           properties: {},
@@ -973,7 +973,7 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'list_rules',
-        description: 'Список всех wb-rules скриптов с состоянием enabled/disabled и привязанными правилами. Обёртка над wbrules/Editor/List — не нужно знать RPC-синтаксис.',
+        description: 'List of all wb-rules scripts with their enabled/disabled state and associated rules. A wrapper over wbrules/Editor/List — no need to know the RPC syntax.',
         parameters: { type: 'object', properties: { ...CONTROLLER_TARGET_PROPS }, required: [], additionalProperties: false },
       },
     },
@@ -981,12 +981,12 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'load_rule',
-        description: 'Прочитать содержимое файла правила wb-rules. Имя — без пути и без расширения (например "wb-la-temp-relay"); .js добавится автоматически.',
+        description: 'Read the content of a wb-rules rule file. The name is without path and without extension (e.g. "wb-la-temp-relay"); .js is added automatically.',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            name: { type: 'string', description: 'Имя файла правила без расширения (например "wb-la-temp-relay").' },
+            name: { type: 'string', description: 'Rule file name without extension (e.g. "wb-la-temp-relay").' },
           },
           required: ['name'],
           additionalProperties: false,
@@ -997,13 +997,13 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'save_rule',
-        description: 'Создать или обновить файл правила wb-rules. Имя — без пути и без расширения. RPC валидирует JS и перезагружает движок атомарно. Используй вместо ручного mqtt_rpc("wbrules","Editor","Save").',
+        description: 'Create or update a wb-rules rule file. The name is without path and without extension. The RPC validates the JS and reloads the engine atomically. Use it instead of a manual mqtt_rpc("wbrules","Editor","Save").',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            name: { type: 'string', description: 'Имя файла без расширения (например "my-rule").' },
-            content: { type: 'string', description: 'Полный JS-код файла. ES5 (без let/const/arrow).' },
+            name: { type: 'string', description: 'File name without extension (e.g. "my-rule").' },
+            content: { type: 'string', description: 'Full JS code of the file. ES5 (no let/const/arrow).' },
           },
           required: ['name', 'content'],
           additionalProperties: false,
@@ -1014,12 +1014,12 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'delete_rule',
-        description: 'Удалить файл правила wb-rules. Сначала пробует wbrules/Editor/Remove; если демон отвечает "File not found" (рассинхрон кэша) — делает rm + reload-or-restart wb-rules через SSH. Требует явного подтверждения пользователя.',
+        description: 'Delete a wb-rules rule file. First tries wbrules/Editor/Remove; if the daemon replies "File not found" (cache desync) — does rm + reload-or-restart wb-rules over SSH. Requires explicit user confirmation.',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            name: { type: 'string', description: 'Имя файла без расширения.' },
+            name: { type: 'string', description: 'File name without extension.' },
           },
           required: ['name'],
           additionalProperties: false,
@@ -1030,12 +1030,12 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'disable_rule',
-        description: 'Отключить правило wb-rules через RPC `wbrules/Editor/ChangeState` (под капотом — переименование `<name>.js` → `<name>.js.disabled`). В отличие от `delete_rule` обратимо: чтобы включить обратно, удали суффикс `.disabled` (через write_file/ssh_exec) и вызови reload. На стабильных прошивках обратный `enabled:true` через тот же RPC возвращает `result:false` — это ограничение wb-rules engine, не нашей обёртки. Менее агрессивный путь, чем delete: подходит, чтобы временно вырубить правило для отладки. HITL: уточни у пользователя, действительно ли надо выключить.',
+        description: 'Disable a wb-rules rule via RPC `wbrules/Editor/ChangeState` (under the hood — renaming `<name>.js` -> `<name>.js.disabled`). Unlike `delete_rule` it is reversible: to enable it back, remove the `.disabled` suffix (via write_file/ssh_exec) and call reload. On stable firmware the reverse `enabled:true` via the same RPC returns `result:false` — this is a limitation of the wb-rules engine, not of our wrapper. A less aggressive path than delete: suitable for temporarily turning off a rule for debugging. HITL: check with the user whether it really should be turned off.',
         parameters: {
           type: 'object',
           properties: {
             ...CONTROLLER_TARGET_PROPS,
-            name: { type: 'string', description: 'Имя файла правила без расширения.' },
+            name: { type: 'string', description: 'Rule file name without extension.' },
           },
           required: ['name'],
           additionalProperties: false,
@@ -1046,12 +1046,12 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'read_attachment',
-        description: 'Прочитать содержимое файла, прикреплённого к сессии (до ~200KB). fileId — из list_attachments или системного сообщения про файлы. encoding="utf8" для текстовых (конфиги, логи, json); "base64" для бинарных (архивы, картинки — если нужно передать дальше).',
+        description: 'Read the content of a file attached to the session (up to ~200KB). fileId — from list_attachments or the system message about files. encoding="utf8" for text (configs, logs, json); "base64" for binary (archives, images — if you need to pass them along).',
         parameters: {
           type: 'object',
           properties: {
-            fileId: { type: 'string', description: 'ID вложения из list_attachments.' },
-            encoding: { type: 'string', enum: ['utf8', 'base64'], description: 'Кодировка: utf8 (по умолчанию) или base64.' },
+            fileId: { type: 'string', description: 'Attachment ID from list_attachments.' },
+            encoding: { type: 'string', enum: ['utf8', 'base64'], description: 'Encoding: utf8 (default) or base64.' },
           },
           required: ['fileId'],
           additionalProperties: false,
@@ -1062,11 +1062,11 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'list_archive_contents',
-        description: 'Показать листинг файлов внутри архива, прикреплённого к чату. Поддерживаются zip, tar, tar.gz/tgz (формат определяется автоматически по magic-bytes). Возвращает массив записей {path, size, isDir}. Используй чтобы понять что внутри прежде чем извлекать.',
+        description: 'Show a listing of files inside an archive attached to the chat. zip, tar, tar.gz/tgz are supported (the format is detected automatically by magic-bytes). Returns an array of entries {path, size, isDir}. Use it to understand what is inside before extracting.',
         parameters: {
           type: 'object',
           properties: {
-            fileId: { type: 'string', description: 'ID архива из list_attachments.' },
+            fileId: { type: 'string', description: 'Archive ID from list_attachments.' },
           },
           required: ['fileId'],
           additionalProperties: false,
@@ -1077,13 +1077,13 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'read_from_archive',
-        description: 'Прочитать один файл из архива (zip / tar / tar.gz / tgz) по path. encoding="utf8" для текста, "base64" для бинарного. Лимит ~200KB на файл — для больших используй extract_archive.',
+        description: 'Read a single file from an archive (zip / tar / tar.gz / tgz) by path. encoding="utf8" for text, "base64" for binary. Limit ~200KB per file — for larger ones use extract_archive.',
         parameters: {
           type: 'object',
           properties: {
-            fileId: { type: 'string', description: 'ID архива.' },
-            path: { type: 'string', description: 'Путь файла внутри архива (как из list_archive_contents).' },
-            encoding: { type: 'string', enum: ['utf8', 'base64'], description: 'Кодировка: utf8 (по умолчанию) или base64.' },
+            fileId: { type: 'string', description: 'Archive ID.' },
+            path: { type: 'string', description: 'File path inside the archive (as from list_archive_contents).' },
+            encoding: { type: 'string', enum: ['utf8', 'base64'], description: 'Encoding: utf8 (default) or base64.' },
           },
           required: ['fileId', 'path'],
           additionalProperties: false,
@@ -1094,12 +1094,12 @@ export function toolSchemas(): ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'extract_archive',
-        description: 'Извлечь файлы из архива (zip / tar / tar.gz / tgz) в attachments чата как отдельные файлы — каждый получает свой fileId, доступный для read_attachment / upload_to_controller. Параметр paths — массив конкретных путей для извлечения; если не задан или пуст — извлекается весь архив. Возвращает массив {path, fileId, name, size, mime}.',
+        description: 'Extract files from an archive (zip / tar / tar.gz / tgz) into the chat attachments as separate files — each gets its own fileId, available for read_attachment / upload_to_controller. The paths parameter is an array of specific paths to extract; if not set or empty — the whole archive is extracted. Returns an array {path, fileId, name, size, mime}.',
         parameters: {
           type: 'object',
           properties: {
-            fileId: { type: 'string', description: 'ID архива.' },
-            paths: { type: 'array', items: { type: 'string' }, description: 'Опционально: подмножество путей для извлечения. Если не указано — извлекается всё.' },
+            fileId: { type: 'string', description: 'Archive ID.' },
+            paths: { type: 'array', items: { type: 'string' }, description: 'Optional: a subset of paths to extract. If not specified — everything is extracted.' },
           },
           required: ['fileId'],
           additionalProperties: false,
@@ -1113,7 +1113,7 @@ type Ctx = {
   discovery: Discovery
   mqtt: MqttPool
   ssh: SshPool
-  /** SNs выбранные в текущем чате; если пусто — операции на массиве требуют явного sn. */
+  /** SNs selected in the current chat; if empty — array operations require an explicit sn. */
   contextSns: string[]
   db: DbHandle
   sessionId: string
@@ -1121,13 +1121,13 @@ type Ctx = {
   braveApiKey?: string
 }
 
-/** Унифицированная запись о файле в архиве: путь, размер, флаг директории
- * и raw-данные (загружаются по требованию). */
+/** Unified record of a file in an archive: path, size, directory flag
+ * and raw data (loaded on demand). */
 export type ArchiveEntry = { path: string; size: number; isDir: boolean; data: () => Promise<Buffer> }
 
-/** Открывает архив (zip / tar / tar.gz / tgz) и возвращает список записей.
- * Автодетект по magic-bytes: ZIP — `PK\x03\x04`, gzip — `1f 8b`, иначе пробуем
- * как plain tar. */
+/** Opens an archive (zip / tar / tar.gz / tgz) and returns a list of entries.
+ * Auto-detect by magic-bytes: ZIP — `PK\x03\x04`, gzip — `1f 8b`, otherwise we try
+ * it as plain tar. */
 export async function openArchive(buf: Buffer): Promise<ArchiveEntry[]> {
   // ZIP
   if (buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04) {
@@ -1142,7 +1142,7 @@ export async function openArchive(buf: Buffer): Promise<ArchiveEntry[]> {
     }
     return out
   }
-  // gzip — распаковываем и обрабатываем как tar
+  // gzip — decompress and process as tar
   let tarBuf = buf
   if (buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b) {
     tarBuf = gunzipSync(buf)
@@ -1266,12 +1266,12 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
       const blocked = isDestructiveCommand(command)
       if (blocked) return JSON.stringify({ error: blocked })
       if (isDockerComposeCommand(command)) {
-        return JSON.stringify({ error: 'docker-compose устарел. Используй «docker compose» (без дефиса).' })
+        return JSON.stringify({ error: 'docker-compose is deprecated. Use "docker compose" (without the hyphen).' })
       }
       if (/\bapt(-get)?\s+(update|install|remove|purge|upgrade|dist-upgrade|full-upgrade)\b/.test(command) ||
           /\bwb-release\s+(-\w+\s+)*-t\b/.test(command) ||
           /\bdocker\s+(run|pull|build|compose)\b/.test(command)) {
-        return JSON.stringify({ error: `Команда "${command}" может выполняться долго. Используй ssh_exec_async вместо ssh_exec.` })
+        return JSON.stringify({ error: `Command "${command}" may take a long time. Use ssh_exec_async instead of ssh_exec.` })
       }
       const results: { sn: string; stdout: string; stderr: string; code: number | null; truncated: boolean; error?: string }[] = []
       await Promise.all(
@@ -1284,15 +1284,15 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
           }
         }),
       )
-      // Hint когда модель спрашивает «есть ли обновления» через `apt list
-      // --upgradable` без предварительного `apt-get update` — список будет
-      // устаревший. Загрузить controller-update скилл — он покрывает сценарий.
+      // Hint when the model asks "are there updates" via `apt list
+      // --upgradable` without a prior `apt-get update` — the list will be
+      // stale. Load the controller-update skill — it covers this scenario.
       const isStaleAptCheck = /\bapt(?:-get)?\s+list\s+--upgradable\b/.test(command)
         || /\bapt-cache\s+(?:show|search|policy)\b/.test(command)
       const cleanedStderr = (s: string) =>
-        // apt при вызове из скрипта печатает «WARNING: apt does not have
-        // a stable CLI interface...» — известный шум, в нём нет полезной
-        // для модели информации, фильтруем чтобы не засорять контекст.
+        // When called from a script, apt prints "WARNING: apt does not have
+        // a stable CLI interface..." — known noise with no information useful
+        // to the model, we filter it out so as not to clutter the context.
         s.replace(/^WARNING: apt does not have a stable CLI interface\..*$/gm, '').trim()
       if (results.length === 1) {
         const r = results[0]!
@@ -1301,10 +1301,10 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
         if (r.stdout) parts.push(r.stdout)
         const stderr = cleanedStderr(r.stderr)
         if (stderr) parts.push(`[stderr]\n${stderr}`)
-        if (r.truncated) parts.push('[вывод обрезан]')
+        if (r.truncated) parts.push('[output truncated]')
         parts.push(`[exit: ${r.code}]`)
         if (isStaleAptCheck && r.code === 0) {
-          parts.push('[hint] Локальный кэш apt мог устареть. Перед итоговым ответом «есть/нет обновления» запусти `apt-get update -qq` через ssh_exec_async, потом повтори этот запрос. Для развёрнутых сценариев — load_skill("controller-update").')
+          parts.push('[hint] The local apt cache may be stale. Before a final "updates available/not" answer, run `apt-get update -qq` via ssh_exec_async, then repeat this query. For detailed scenarios — load_skill("controller-update").')
         }
         return parts.join('\n')
       }
@@ -1315,10 +1315,10 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
         if (r.stdout) parts.push(r.stdout)
         const stderr = cleanedStderr(r.stderr)
         if (stderr) parts.push(`[stderr]\n${stderr}`)
-        if (r.truncated) parts.push('[вывод обрезан]')
+        if (r.truncated) parts.push('[output truncated]')
         parts.push(`[exit: ${r.code}]`)
         if (isStaleAptCheck && r.code === 0) {
-          parts.push('[hint] Локальный кэш apt мог устареть. Перед итоговым ответом запусти `apt-get update -qq` через ssh_exec_async, потом повтори этот запрос.')
+          parts.push('[hint] The local apt cache may be stale. Before a final answer, run `apt-get update -qq` via ssh_exec_async, then repeat this query.')
         }
         return parts.join('\n')
       }).join('\n---\n')
@@ -1356,12 +1356,12 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
       for (const r of raw as Array<Record<string, unknown>>) {
         const content = typeof r?.['content'] === 'string' ? r['content'].trim() : ''
         const status = typeof r?.['status'] === 'string' ? r['status'] : ''
-        if (!content) return JSON.stringify({ error: 'каждый пункт должен иметь непустой content' })
-        if (!allowed.includes(status as TodoStatus)) return JSON.stringify({ error: `status должен быть pending|in_progress|completed` })
+        if (!content) return JSON.stringify({ error: 'each item must have a non-empty content' })
+        if (!allowed.includes(status as TodoStatus)) return JSON.stringify({ error: `status must be pending|in_progress|completed` })
         items.push({ content, status: status as TodoStatus })
       }
       const inProgress = items.filter((t) => t.status === 'in_progress').length
-      if (inProgress > 1) return JSON.stringify({ error: `ровно один пункт может быть in_progress, получил ${inProgress}` })
+      if (inProgress > 1) return JSON.stringify({ error: `exactly one item may be in_progress, got ${inProgress}` })
       setTodos(ctx.sessionId, items)
       return JSON.stringify({ count: items.length, plan: formatTodos(items) })
     }
@@ -1371,45 +1371,46 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
       if (!summary) return JSON.stringify({ error: 'summary required' })
       const currentTodos = getTodos(ctx.sessionId)
       const pending = currentTodos.filter((t) => t.status !== 'completed')
-      const todosPart = pending.length ? `\nОставшийся план:\n${formatTodos(pending)}` : ''
+      const todosPart = pending.length ? `\nRemaining plan:\n${formatTodos(pending)}` : ''
       ctx.agentState.checkpointSummary = summary + todosPart
-      // Авто-выгрузка всех загруженных скиллов: если модель сделала
-      // checkpoint — этап завершён, скиллы для следующей фазы скорее всего
-      // другие. Если они всё ещё нужны — модель сама перезагрузит. Иначе
-      // их content продолжал бы инжектиться в каждый turn и засорять контекст.
+      // Auto-unload all loaded skills: if the model made a
+      // checkpoint — the stage is finished, and the skills for the next phase
+      // are most likely different. If they are still needed — the model will
+      // reload them itself. Otherwise their content would keep being injected
+      // into every turn and clutter the context.
       const loaded = getLoadedSkills(ctx.sessionId)
       const unloadedNames: string[] = []
       for (const s of loaded) {
         if (unloadSkillFromSession(ctx.sessionId, s.name)) unloadedNames.push(s.name)
       }
       const unloadedPart = unloadedNames.length
-        ? ` Авто-выгружены скиллы: ${unloadedNames.join(', ')} — если они нужны для следующей фазы, перезагрузи через load_skill.`
+        ? ` Auto-unloaded skills: ${unloadedNames.join(', ')} — if they are needed for the next phase, reload them via load_skill.`
         : ''
-      return JSON.stringify({ ok: true, message: `Чекпоинт принят. Контекст будет сжат после этого хода.${unloadedPart}` })
+      return JSON.stringify({ ok: true, message: `Checkpoint accepted. The context will be compacted after this turn.${unloadedPart}` })
     }
 
     case 'load_skill': {
       const name = String(args['name'] ?? '').trim()
-      if (!SKILL_NAME_RE.test(name)) return JSON.stringify({ error: 'name должен быть kebab-case' })
+      if (!SKILL_NAME_RE.test(name)) return JSON.stringify({ error: 'name must be kebab-case' })
       const skill = getSkill(ctx.db, name)
-      if (!skill) return JSON.stringify({ error: `скилл "${name}" не найден` })
+      if (!skill) return JSON.stringify({ error: `skill "${name}" not found` })
       trackLoadedSkill(ctx.sessionId, skill.name, skill.content)
       return JSON.stringify({ name: skill.name, content: skill.content })
     }
 
     case 'unload_skill': {
       const name = String(args['name'] ?? '').trim()
-      if (!SKILL_NAME_RE.test(name)) return JSON.stringify({ error: 'name должен быть kebab-case' })
+      if (!SKILL_NAME_RE.test(name)) return JSON.stringify({ error: 'name must be kebab-case' })
       const removed = unloadSkillFromSession(ctx.sessionId, name)
-      if (!removed) return JSON.stringify({ error: `скилл "${name}" не был загружен` })
-      return JSON.stringify({ ok: true, message: `Скилл "${name}" выгружен.` })
+      if (!removed) return JSON.stringify({ error: `skill "${name}" was not loaded` })
+      return JSON.stringify({ ok: true, message: `Skill "${name}" unloaded.` })
     }
 
     case 'create_skill': {
       const name = String(args['name'] ?? '').trim()
       const content = String(args['content'] ?? '').trim()
-      if (!SKILL_NAME_RE.test(name)) return JSON.stringify({ error: 'name должен быть kebab-case (a-z, 0-9, "-"), 1-63 символа' })
-      if (content.length < 100) return JSON.stringify({ error: 'content слишком короткий (100+ символов)' })
+      if (!SKILL_NAME_RE.test(name)) return JSON.stringify({ error: 'name must be kebab-case (a-z, 0-9, "-"), 1-63 characters' })
+      if (content.length < 100) return JSON.stringify({ error: 'content is too short (100+ characters)' })
       let description: string
       try {
         description = extractDescription(content, name)
@@ -1423,7 +1424,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
 
     case 'delete_skill': {
       const name = String(args['name'] ?? '').trim()
-      if (!SKILL_NAME_RE.test(name)) return JSON.stringify({ error: 'name должен быть kebab-case' })
+      if (!SKILL_NAME_RE.test(name)) return JSON.stringify({ error: 'name must be kebab-case' })
       const r = deleteUserSkill(ctx.db, name)
       if (!r.ok) return JSON.stringify({ error: r.error })
       return JSON.stringify({ name, status: 'deleted' })
@@ -1498,10 +1499,10 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
 
     case 'network_status': {
       const c = resolve1(args, ctx)
-      // Whitelist hostname/IP-символы перед склейкой в shell. Защита поверх
-      // shellQuote: даже если кто-то по ошибке передаст `; rm -rf …` в
-      // pingTarget, regex обнулит всё лишнее. Допускаем точку, двоеточие
-      // (IPv6), дефис, подчёркивание (DNS) и буквы/цифры.
+      // Whitelist hostname/IP characters before concatenating into the shell.
+      // A safeguard on top of shellQuote: even if someone mistakenly passes
+      // `; rm -rf ...` into pingTarget, the regex strips everything extra. We
+      // allow a dot, colon (IPv6), hyphen, underscore (DNS) and letters/digits.
       const rawTarget = typeof args['pingTarget'] === 'string' ? (args['pingTarget'] as string) : ''
       const safeTarget = rawTarget.replace(/[^A-Za-z0-9.:_-]/g, '')
       const sh = [
@@ -1546,9 +1547,9 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
         'echo ===PROVIDERS===',
         'ls /var/lib/wb-cloud-agent/providers/ 2>/dev/null || true',
         'echo ===MQTT===',
-        // `system__wb-cloud-agent__+` невалидный wildcard для mosquitto (+ должен
-        // занимать целый level). Берём все /devices/+/controls/+ и фильтруем
-        // на стороне TS — иначе mosquitto_sub возвращает ошибку.
+        // `system__wb-cloud-agent__+` is an invalid wildcard for mosquitto (+ must
+        // occupy a whole level). We take all /devices/+/controls/+ and filter
+        // on the TS side — otherwise mosquitto_sub returns an error.
         "timeout 3 mosquitto_sub -F '%t\\t%p' -t '/devices/+/controls/+' 2>/dev/null | grep '^/devices/system__wb-cloud-agent__' || true",
       ].join('; ')
       const r = await ctx.ssh.exec(c, sh, 15000)
@@ -1578,8 +1579,8 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
       if (!ctx.braveApiKey) {
         return JSON.stringify({
           error:
-            'web_search недоступен: не задан BRAVE_SEARCH_API_KEY. ' +
-            'Используй web_fetch напрямую: web_fetch("https://wirenboard.com/wiki/Special:Search?search=...") для поиска по вики.'
+            'web_search is unavailable: BRAVE_SEARCH_API_KEY is not set. ' +
+            'Use web_fetch directly: web_fetch("https://wirenboard.com/wiki/Special:Search?search=...") to search the wiki.'
         })
       }
       const apiUrl = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=10`
@@ -1598,7 +1599,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
         }
         if (data.error) {
           console.error(`[web_search] Brave API error: ${data.error.code} ${data.error.detail}`)
-          return JSON.stringify({ error: `web_search ошибка: ${data.error.detail}. Используй web_fetch напрямую.` })
+          return JSON.stringify({ error: `web_search error: ${data.error.detail}. Use web_fetch directly.` })
         }
         const results = (data.web?.results ?? []).map(r => ({
           title: r.title,
@@ -1609,15 +1610,15 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
         if (results.length === 0) {
           return JSON.stringify({
             error:
-              `Поиск «${query}» не дал результатов. ` +
-              'НЕ повторяй поиск с другой формулировкой. ' +
-              'Используй web_fetch напрямую: web_fetch("https://wirenboard.com/wiki/Special:Search?search=...") или web_fetch("https://wirenboard.com/wiki/<Модель>").'
+              `The search "${query}" returned no results. ` +
+              'Do NOT repeat the search with a different wording. ' +
+              'Use web_fetch directly: web_fetch("https://wirenboard.com/wiki/Special:Search?search=...") or web_fetch("https://wirenboard.com/wiki/<Model>").'
           })
         }
         return JSON.stringify({ query, count: results.length, results }, null, 2)
       } catch (e) {
         console.error(`[web_search] error:`, e)
-        return JSON.stringify({ error: `web_search не смог подключиться: ${e instanceof Error ? e.message : String(e)}. Используй web_fetch напрямую.` })
+        return JSON.stringify({ error: `web_search could not connect: ${e instanceof Error ? e.message : String(e)}. Use web_fetch directly.` })
       }
     }
 
@@ -1647,7 +1648,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
       const WEB_FETCH_MAX = 20_000
       const truncated = text.length > WEB_FETCH_MAX
         ? text.slice(0, WEB_FETCH_MAX) +
-          `\n…[обрезано: показано ${WEB_FETCH_MAX} из ${text.length} символов]`
+          `\n…[truncated: showing ${WEB_FETCH_MAX} of ${text.length} characters]`
         : text
       return JSON.stringify({ url, status: res.status, contentType: ct, body: truncated }, null, 2)
     }
@@ -1690,18 +1691,18 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
       const c = resolve1(args, ctx)
       let command = String(args['command'] ?? '')
       const label = typeof args['label'] === 'string' ? args['label'] : undefined
-      if (!command.trim()) return JSON.stringify({ error: 'ssh_exec_async: пустая команда' })
+      if (!command.trim()) return JSON.stringify({ error: 'ssh_exec_async: empty command' })
       const blocked = isDestructiveCommand(command)
       if (blocked) return JSON.stringify({ error: blocked })
       if (isDockerComposeCommand(command)) {
-        return JSON.stringify({ error: 'docker-compose устарел. Используй «docker compose» (без дефиса).' })
+        return JSON.stringify({ error: 'docker-compose is deprecated. Use "docker compose" (without the hyphen).' })
       }
       const running = getRunningJobForSn(c.sn)
       if (running) {
-        return JSON.stringify({ error: `На контроллере ${c.sn} уже выполняется фоновая задача: "${running.label}" (jobId=${running.jobId}). Дождись её завершения или отмени через job_cancel (с подтверждением пользователя — прерывание apt/wb-release может сломать систему).` })
+        return JSON.stringify({ error: `Controller ${c.sn} already has a background job running: "${running.label}" (jobId=${running.jobId}). Wait for it to finish or cancel it via job_cancel (with user confirmation — interrupting apt/wb-release can break the system).` })
       }
-      // Auto-нормализация apt: DEBIAN_FRONTEND=noninteractive + -y. Подробности
-      // и причина — в src/server/apt-defaults.ts.
+      // Auto-normalize apt: DEBIAN_FRONTEND=noninteractive + -y. Details
+      // and rationale — in src/server/apt-defaults.ts.
       command = normalizeAptCommand(command)
       const r = await ctx.ssh.jobStart(c, command, label)
       console.log(`[ssh_exec_async] jobId=${r.jobId}, sn=${c.sn}, session=${ctx.sessionId}`)
@@ -1893,7 +1894,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
         }
       })()
 
-      return JSON.stringify({ jobId, ports, configs, scanType, note: `Сканирование ${ports.length} порт(ов) × ${configs.length} скорост(ей) займёт около 40 секунд. Скажи об этом пользователю.` }, null, 2)
+      return JSON.stringify({ jobId, ports, configs, scanType, note: `Scanning ${ports.length} port(s) × ${configs.length} baud rate(s) will take about 40 seconds. Tell the user about this.` }, null, 2)
     }
 
     case 'wb_add_devices': {
@@ -1901,7 +1902,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
 
       // 1. Read scan results from /wb-device-manager/state
       const stateRaw = await ctx.mqtt.readTopic(c, '/wb-device-manager/state')
-      if (!stateRaw) return JSON.stringify({ error: 'Нет данных сканирования. Сначала выполни wb_bus_scan.' })
+      if (!stateRaw) return JSON.stringify({ error: 'No scan data. Run wb_bus_scan first.' })
       const state = JSON.parse(stateRaw) as {
         devices: Array<{
           title: string; sn: string; device_signature: string; fw_signature: string;
@@ -1919,7 +1920,7 @@ export async function dispatch(name: string, argsJson: string, ctx: Ctx): Promis
           seen.add(key)
           return true
         })
-      if (scannedDevices.length === 0) return JSON.stringify({ error: 'Скан не нашёл устройств. Сначала выполни wb_bus_scan.' })
+      if (scannedDevices.length === 0) return JSON.stringify({ error: 'The scan found no devices. Run wb_bus_scan first.' })
 
       // 2. Load current config
       const cfgResult = await ctx.ssh.mqttRpc(c, 'wb-mqtt-serial', 'config', 'Load', {}, 10) as {
@@ -1971,21 +1972,21 @@ import json as j; print(j.dumps(m))
         const portPath = dev.port.path
         const port = ports.find(p => p.path === portPath)
         if (!port) {
-          skipped.push(`${dev.title} slave=${dev.cfg.slave_id}: порт ${portPath} не в конфиге`)
+          skipped.push(`${dev.title} slave=${dev.cfg.slave_id}: port ${portPath} not in config`)
           continue
         }
 
         // Check if already configured
         const ids = configuredIds.get(portPath) ?? new Set()
         if (ids.has(dev.cfg.slave_id)) {
-          skipped.push(`${dev.title} slave=${dev.cfg.slave_id}: уже в конфиге`)
+          skipped.push(`${dev.title} slave=${dev.cfg.slave_id}: already in config`)
           continue
         }
 
         // Resolve device_type
         const tmpl = templateMap[dev.device_signature]
         if (!tmpl) {
-          skipped.push(`${dev.title} slave=${dev.cfg.slave_id}: шаблон для ${dev.device_signature} не найден`)
+          skipped.push(`${dev.title} slave=${dev.cfg.slave_id}: template for ${dev.device_signature} not found`)
           continue
         }
 
@@ -2054,7 +2055,7 @@ import json as j; print(j.dumps(m))
       }
 
       if (added.length === 0) {
-        return JSON.stringify({ added: [], skipped, errors: setupErrors, message: 'Нечего добавлять — все устройства уже в конфиге или пропущены.' }, null, 2)
+        return JSON.stringify({ added: [], skipped, errors: setupErrors, message: 'Nothing to add — all devices are already in the config or were skipped.' }, null, 2)
       }
 
       // 6. Save config via confed/Editor/Save
@@ -2064,10 +2065,10 @@ import json as j; print(j.dumps(m))
           content: config
         }, 15)
       } catch (e) {
-        return JSON.stringify({ error: `Ошибка сохранения конфига: ${e instanceof Error ? e.message : String(e)}` })
+        return JSON.stringify({ error: `Error saving config: ${e instanceof Error ? e.message : String(e)}` })
       }
 
-      return JSON.stringify({ added, skipped, errors: setupErrors, message: `Добавлено ${added.length} устройств. wb-mqtt-serial перезапущен.` }, null, 2)
+      return JSON.stringify({ added, skipped, errors: setupErrors, message: `Added ${added.length} device(s). wb-mqtt-serial restarted.` }, null, 2)
     }
 
     case 'modbus_device_info': {
@@ -2083,7 +2084,7 @@ import json as j; print(j.dumps(m))
         stop_bits: typeof args['stop_bits'] === 'number' ? (args['stop_bits'] as number) : undefined,
       })
       if (!params) {
-        return JSON.stringify({ error: 'Нужен либо device_id (имя в MQTT, например wb-mr6c_138), либо явные path + slave_id.' })
+        return JSON.stringify({ error: 'Need either device_id (the MQTT name, e.g. wb-mr6c_138), or explicit path + slave_id.' })
       }
       try {
         const r = await ctx.ssh.mqttRpc(c, 'wb-mqtt-serial', 'device', 'LoadConfig', params, 10)
@@ -2098,7 +2099,7 @@ import json as j; print(j.dumps(m))
       const path = typeof args['path'] === 'string' ? (args['path'] as string) : ''
       const slave_id = typeof args['slave_id'] === 'number' ? (args['slave_id'] as number) : NaN
       if (!path || Number.isNaN(slave_id)) {
-        return JSON.stringify({ error: 'path и slave_id обязательны.' })
+        return JSON.stringify({ error: 'path and slave_id are required.' })
       }
       const params: Record<string, unknown> = {
         path,
@@ -2133,7 +2134,7 @@ import json as j; print(j.dumps(m))
         return JSON.stringify({ filter, count: matched.length, templates: matched }, null, 2)
       }
       const groups = summarizeByGroup(list)
-      return JSON.stringify({ totalCount: list.length, groups, hint: 'Без filter возвращается сводка по группам. Передай filter (подстрока) чтобы получить плоский список matched.' }, null, 2)
+      return JSON.stringify({ totalCount: list.length, groups, hint: 'Without filter a summary by groups is returned. Pass filter (substring) to get a flat list of matches.' }, null, 2)
     }
 
     case 'modbus_template': {
@@ -2141,37 +2142,37 @@ import json as j; print(j.dumps(m))
       const deviceType = typeof args['device_type'] === 'string' ? (args['device_type'] as string).trim() : ''
       let mqttId = typeof args['mqtt_id'] === 'string' ? (args['mqtt_id'] as string).trim() : ''
       if (!deviceType && !mqttId) {
-        return JSON.stringify({ error: 'Нужен device_type или mqtt_id.' })
+        return JSON.stringify({ error: 'Need device_type or mqtt_id.' })
       }
-      // Резолв device_type → mqtt-id через Load.types если mqtt_id не задан.
+      // Resolve device_type -> mqtt-id via Load.types if mqtt_id is not set.
       if (!mqttId) {
         const result = await ctx.ssh.mqttRpc(c, 'wb-mqtt-serial', 'config', 'Load', {}, 10) as { types?: unknown }
         const list = parseTemplatesList({ types: (result.types as any) ?? [] })
         const target = deviceType.toLowerCase()
         const match = list.find((t) => t.type.toLowerCase() === target || t.mqttId.toLowerCase() === target)
         if (!match) {
-          // Подсказка с близкими: substring-фильтр
+          // Hint with close matches: substring filter
           const close = filterTemplates(list, deviceType).slice(0, 5).map((t) => t.type)
-          return JSON.stringify({ error: `Шаблон не найден: ${deviceType}`, hint: close.length ? `Возможно вы имели в виду: ${close.join(', ')}` : 'Получи полный список через modbus_templates_list.' })
+          return JSON.stringify({ error: `Template not found: ${deviceType}`, hint: close.length ? `Maybe you meant: ${close.join(', ')}` : 'Get the full list via modbus_templates_list.' })
         }
         mqttId = match.mqttId
       }
-      // Чтение файла шаблона. Стандартный путь wb-mqtt-serial.
+      // Read the template file. The standard wb-mqtt-serial path.
       const filePath = `/usr/share/wb-mqtt-serial/templates/config-${mqttId}.json`
       let raw: string
       try {
-        // 1 МБ — некоторые шаблоны (WB-MR6C, WB-MAP6S, WB-MCM8) больше 256КБ
-        // из-за translations + многоканальной meta. Вычитаем заведомо больше,
-        // чтобы не упереться в truncate'нутый JSON.
+        // 1 MB — some templates (WB-MR6C, WB-MAP6S, WB-MCM8) are larger than 256KB
+        // because of translations + multi-channel meta. We read deliberately more
+        // so as not to run into truncated JSON.
         raw = (await ctx.ssh.readFile(c, filePath, 1024 * 1024)).content
       } catch (e: unknown) {
-        return JSON.stringify({ error: `Не удалось прочитать ${filePath}: ${e instanceof Error ? e.message : String(e)}. Возможно для этого устройства файл шаблона устаревшей структуры или с другим mqtt-id — посмотри modbus_templates_list.` })
+        return JSON.stringify({ error: `Could not read ${filePath}: ${e instanceof Error ? e.message : String(e)}. The template file for this device may have a legacy structure or a different mqtt-id — check modbus_templates_list.` })
       }
       let tmpl: Record<string, unknown>
       try {
         tmpl = JSON.parse(raw)
       } catch (e: unknown) {
-        return JSON.stringify({ error: `Шаблон ${filePath} не парсится как JSON: ${e instanceof Error ? e.message : String(e)}` })
+        return JSON.stringify({ error: `Template ${filePath} does not parse as JSON: ${e instanceof Error ? e.message : String(e)}` })
       }
       const view = (typeof args['view'] === 'string' ? args['view'] : 'summary') as 'summary' | 'full' | 'channels-only' | 'meta-only'
       const enabledOnly = args['enabledOnly'] === true
@@ -2182,9 +2183,9 @@ import json as j; print(j.dumps(m))
     case 'get_history': {
       const c = resolve1(args, ctx)
       const channels = args['channels'] as [string, string][]
-      if (!Array.isArray(channels) || channels.length === 0) return JSON.stringify({ error: 'channels обязателен' })
+      if (!Array.isArray(channels) || channels.length === 0) return JSON.stringify({ error: 'channels is required' })
       const { from, to } = resolveTimeRange(args)
-      if (!from) return JSON.stringify({ error: 'укажи period (например: 2h, 6h, 24h, 7d) или from (unix timestamp)' })
+      if (!from) return JSON.stringify({ error: 'specify period (e.g.: 2h, 6h, 24h, 7d) or from (unix timestamp)' })
       const validationErr = await validateHistoryChannels(ctx, c, channels)
       if (validationErr) return JSON.stringify({ error: validationErr })
       const result = await fetchHistory(ctx, c, channels, from, to)
@@ -2194,9 +2195,9 @@ import json as j; print(j.dumps(m))
     case 'get_history_chart': {
       const c = resolve1(args, ctx)
       const channels = args['channels'] as [string, string][]
-      if (!Array.isArray(channels) || channels.length === 0) return JSON.stringify({ error: 'channels обязателен' })
+      if (!Array.isArray(channels) || channels.length === 0) return JSON.stringify({ error: 'channels is required' })
       const { from, to } = resolveTimeRange(args)
-      if (!from) return JSON.stringify({ error: 'укажи period (например: 2h, 6h, 24h, 7d) или from (unix timestamp)' })
+      if (!from) return JSON.stringify({ error: 'specify period (e.g.: 2h, 6h, 24h, 7d) or from (unix timestamp)' })
       const validationErr = await validateHistoryChannels(ctx, c, channels)
       if (validationErr) return JSON.stringify({ error: validationErr })
       const title = typeof args['title'] === 'string' ? args['title'] : ''
@@ -2220,27 +2221,27 @@ import json as j; print(j.dumps(m))
             min: s.min, max: s.max, avg: s.avg,
           })),
           total_points: totalPoints,
-          note: 'График сохранён как вложение SVG. Пользователь видит его в чате как картинку.',
+          note: 'The chart is saved as an SVG attachment. The user sees it in the chat as an image.',
         }, null, 2)
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e)
-        return JSON.stringify({ error: `Ошибка рендера графика: ${msg}` })
+        return JSON.stringify({ error: `Chart render error: ${msg}` })
       }
     }
 
     case 'get_history_table': {
       const c = resolve1(args, ctx)
       const channels = args['channels'] as [string, string][]
-      if (!Array.isArray(channels) || channels.length === 0) return JSON.stringify({ error: 'channels обязателен' })
+      if (!Array.isArray(channels) || channels.length === 0) return JSON.stringify({ error: 'channels is required' })
       const { from, to } = resolveTimeRange(args)
-      if (!from) return JSON.stringify({ error: 'укажи period (например: 2h, 6h, 24h, 7d) или from (unix timestamp)' })
+      if (!from) return JSON.stringify({ error: 'specify period (e.g.: 2h, 6h, 24h, 7d) or from (unix timestamp)' })
       const validationErr = await validateHistoryChannels(ctx, c, channels)
       if (validationErr) return JSON.stringify({ error: validationErr })
       const limitOverride = typeof args['limit'] === 'number' ? Math.max(1, Math.min(100000, Number(args['limit']))) : 10000
       const minIntervalOverride = typeof args['min_interval'] === 'number' ? Math.max(0, Number(args['min_interval'])) : 0
       const histData = await fetchHistory(ctx, c, channels, from, to, { limitOverride, minIntervalOverride })
       const csv = historyToCsv(histData)
-      const truncatedCsv = csv.length > 50000 ? csv.slice(0, 50000) + '\n... (обрезано)' : csv
+      const truncatedCsv = csv.length > 50000 ? csv.slice(0, 50000) + '\n... (truncated)' : csv
       const totalPoints = histData.series.reduce((n, s) => n + s.points.length, 0)
       return JSON.stringify({
         csv: truncatedCsv,
@@ -2268,12 +2269,12 @@ import json as j; print(j.dumps(m))
       const slotId = String(args['slot_id'] ?? '')
       const module = String(args['module'] ?? '')
       const options = (args['options'] && typeof args['options'] === 'object') ? args['options'] : {}
-      if (!slotId) return JSON.stringify({ error: 'slot_id обязателен (например: "mod1", "extio3", "rs485-1")' })
+      if (!slotId) return JSON.stringify({ error: 'slot_id is required (e.g.: "mod1", "extio3", "rs485-1")' })
       const loaded = await ctx.ssh.mqttRpc(c, 'confed', 'Editor', 'Load', { path: '/etc/wb-hardware.conf' }, 10) as { content?: { slots?: Array<{ id: string; module: string; options: unknown }> } }
       const content = loaded?.content
-      if (!content || !Array.isArray(content.slots)) return JSON.stringify({ error: 'Не удалось загрузить текущий конфиг wb-hardware.conf' })
+      if (!content || !Array.isArray(content.slots)) return JSON.stringify({ error: 'Could not load the current wb-hardware.conf config' })
       const slot = content.slots.find((s) => s.id === slotId)
-      if (!slot) return JSON.stringify({ error: `Слот "${slotId}" не найден. Доступные: ${content.slots.map((s) => s.id).join(', ')}` })
+      if (!slot) return JSON.stringify({ error: `Slot "${slotId}" not found. Available: ${content.slots.map((s) => s.id).join(', ')}` })
       const prevModule = slot.module
       slot.module = module
       slot.options = options
@@ -2294,7 +2295,7 @@ import json as j; print(j.dumps(m))
     case 'diff_snapshot': {
       const c = resolve1(args, ctx)
       const beforePath = String(args['beforePath'] ?? '')
-      if (!beforePath.startsWith('/')) return JSON.stringify({ error: 'beforePath должен быть абсолютным путём' })
+      if (!beforePath.startsWith('/')) return JSON.stringify({ error: 'beforePath must be an absolute path' })
       return JSON.stringify(await runDiffSnapshot(ctx.ssh, c, beforePath), null, 2)
     }
 
@@ -2320,7 +2321,7 @@ import json as j; print(j.dumps(m))
         const fileName = name || basename(path) || 'file'
         const r = saveAttachment(ctx.sessionId, fileName, buf, 'assistant')
         if (!r.ok) return JSON.stringify({ error: r.error })
-        return JSON.stringify({ fileId: r.meta.id, fileName: r.meta.name, mime: r.meta.mime, size: r.meta.size, note: 'Файл сохранён как вложение. Пользователь видит его в UI и может скачать.' })
+        return JSON.stringify({ fileId: r.meta.id, fileName: r.meta.name, mime: r.meta.mime, size: r.meta.size, note: 'The file is saved as an attachment. The user sees it in the UI and can download it.' })
       } catch (e: any) {
         return JSON.stringify({ error: e?.message ?? String(e) })
       }
@@ -2352,7 +2353,7 @@ import json as j; print(j.dumps(m))
     case 'load_rule': {
       const c = resolve1(args, ctx)
       const name = ruleNameToPath(args['name'])
-      if (!name) return JSON.stringify({ error: 'name обязателен' })
+      if (!name) return JSON.stringify({ error: 'name is required' })
       const r = await ctx.ssh.mqttRpc(c, 'wbrules', 'Editor', 'Load', { path: name }, 10)
       return JSON.stringify(r, null, 2)
     }
@@ -2361,8 +2362,8 @@ import json as j; print(j.dumps(m))
       const c = resolve1(args, ctx)
       const name = ruleNameToPath(args['name'])
       const content = String(args['content'] ?? '')
-      if (!name) return JSON.stringify({ error: 'name обязателен' })
-      if (!content) return JSON.stringify({ error: 'content обязателен' })
+      if (!name) return JSON.stringify({ error: 'name is required' })
+      if (!content) return JSON.stringify({ error: 'content is required' })
       try {
         const r = await ctx.ssh.mqttRpc(c, 'wbrules', 'Editor', 'Save', { path: name, content }, 15)
         return JSON.stringify({ ok: true, ...((r && typeof r === 'object') ? r : {}) }, null, 2)
@@ -2374,7 +2375,7 @@ import json as j; print(j.dumps(m))
     case 'delete_rule': {
       const c = resolve1(args, ctx)
       const name = ruleNameToPath(args['name'])
-      if (!name) return JSON.stringify({ error: 'name обязателен' })
+      if (!name) return JSON.stringify({ error: 'name is required' })
       try {
         await ctx.ssh.mqttRpc(c, 'wbrules', 'Editor', 'Remove', { path: name }, 10)
         return JSON.stringify({ ok: true, via: 'wbrules.Editor.Remove', name }, null, 2)
@@ -2385,7 +2386,7 @@ import json as j; print(j.dumps(m))
         if (/file not found|EditorError/i.test(msg)) {
           const escaped = name.replace(/'/g, "'\\''")
           const r = await ctx.ssh.exec(c, `rm -f '/etc/wb-rules/${escaped}' && systemctl reload-or-restart wb-rules`, 15_000)
-          if (r.code === 0) return JSON.stringify({ ok: true, via: 'ssh_rm', name, note: 'Editor.Remove ответил File not found, удалил через rm + reload-or-restart wb-rules.' }, null, 2)
+          if (r.code === 0) return JSON.stringify({ ok: true, via: 'ssh_rm', name, note: 'Editor.Remove replied File not found, deleted via rm + reload-or-restart wb-rules.' }, null, 2)
           return JSON.stringify({ error: `rm fallback failed: ${r.stderr.trim() || `exit ${r.code}`}` })
         }
         return JSON.stringify({ error: msg })
@@ -2395,7 +2396,7 @@ import json as j; print(j.dumps(m))
     case 'disable_rule': {
       const c = resolve1(args, ctx)
       const name = ruleNameToPath(args['name'])
-      if (!name) return JSON.stringify({ error: 'name обязателен' })
+      if (!name) return JSON.stringify({ error: 'name is required' })
       try {
         const r = await ctx.ssh.mqttRpc(
           c,
@@ -2411,7 +2412,7 @@ import json as j; print(j.dumps(m))
             via: 'wbrules.Editor.ChangeState',
             name,
             disabledFile: `${name}.disabled`,
-            note: 'Файл переименован в <name>.js.disabled. Чтобы включить обратно — на стабильных прошивках обратный enabled:true через тот же RPC возвращает result:false; убери суффикс .disabled через write_file/ssh_exec и сделай reload-or-restart wb-rules.',
+            note: 'The file was renamed to <name>.js.disabled. To enable it back — on stable firmware the reverse enabled:true via the same RPC returns result:false; remove the .disabled suffix via write_file/ssh_exec and do a reload-or-restart wb-rules.',
             ...((r && typeof r === 'object') ? r : {}),
           },
           null,
@@ -2453,7 +2454,7 @@ import json as j; print(j.dumps(m))
           entries: entries.map(({ path, size, isDir }) => ({ path, size, isDir })),
         })
       } catch (e: any) {
-        return JSON.stringify({ error: `Не удалось прочитать архив (поддерживаются zip, tar, tar.gz/tgz): ${e?.message ?? String(e)}` })
+        return JSON.stringify({ error: `Could not read the archive (zip, tar, tar.gz/tgz are supported): ${e?.message ?? String(e)}` })
       }
     }
 
@@ -2467,14 +2468,14 @@ import json as j; print(j.dumps(m))
       try {
         const entries = await openArchive(buf)
         const entry = entries.find((e) => e.path === innerPath && !e.isDir)
-        if (!entry) return JSON.stringify({ error: `«${innerPath}» в архиве не найден` })
+        if (!entry) return JSON.stringify({ error: `"${innerPath}" not found in the archive` })
         const data = await entry.data()
         const MAX_READ = 200 * 1024
-        if (data.length > MAX_READ) return JSON.stringify({ error: `file too large for context (${data.length} bytes, limit ${MAX_READ}). Используй extract_archive чтобы вытащить как отдельный attachment.` })
+        if (data.length > MAX_READ) return JSON.stringify({ error: `file too large for context (${data.length} bytes, limit ${MAX_READ}). Use extract_archive to pull it out as a separate attachment.` })
         const content = encoding === 'base64' ? data.toString('base64') : data.toString('utf8')
         return JSON.stringify({ fileId, path: innerPath, size: data.length, encoding, content })
       } catch (e: any) {
-        return JSON.stringify({ error: `Не удалось прочитать архив: ${e?.message ?? String(e)}` })
+        return JSON.stringify({ error: `Could not read the archive: ${e?.message ?? String(e)}` })
       }
     }
 
@@ -2499,10 +2500,10 @@ import json as j; print(j.dumps(m))
             out.push({ path: entry.path, fileId: '', name: baseName, size: data.length, mime: 'error: ' + r.error } as any)
           }
         }
-        if (!out.length) return JSON.stringify({ error: 'Архив пуст или указанные paths не найдены.' })
+        if (!out.length) return JSON.stringify({ error: 'The archive is empty or the specified paths were not found.' })
         return JSON.stringify({ fileId, extracted: out })
       } catch (e: any) {
-        return JSON.stringify({ error: `Не удалось прочитать архив: ${e?.message ?? String(e)}` })
+        return JSON.stringify({ error: `Could not read the archive: ${e?.message ?? String(e)}` })
       }
     }
   }
@@ -2510,16 +2511,16 @@ import json as j; print(j.dumps(m))
 }
 
 /** Resolve a single target controller from tool args. Accepts either `sn`
- *  (registry key — обычно WB-серийник из list_controllers) or `host`
- *  (IP/hostname/host:port для ad-hoc). Host выигрывает если задан, потому что
- *  модель использует его именно когда явно хочет адресовать что-то вне реестра
- *  (нестандартный порт, временный IP в чате). Fallback на первый
- *  `ctx.contextSns` если ни sn ни host не переданы. */
+ *  (registry key — usually a WB serial from list_controllers) or `host`
+ *  (IP/hostname/host:port for ad-hoc). Host wins if set, because the model uses
+ *  it precisely when it explicitly wants to address something outside the
+ *  registry (a non-standard port, a temporary IP in the chat). Falls back to the
+ *  first `ctx.contextSns` if neither sn nor host is passed. */
 function resolve1(args: Record<string, unknown>, ctx: Ctx): Controller {
   const target = pickTarget(args, ctx)
-  if (!target) throw new Error('не указан контроллер: передай `sn` или `host`, или выбери контроллер в правой панели')
+  if (!target) throw new Error('no controller specified: pass `sn` or `host`, or select a controller in the right panel')
   const c = ctx.discovery.get(target) ?? ctx.discovery.getOrCreate(target) ?? adHocController(target)
-  if (!c) throw new Error(`контроллер ${target} не найден (не подходит как SN/IP/hostname)`)
+  if (!c) throw new Error(`controller ${target} not found (does not match as SN/IP/hostname)`)
   return c
 }
 
@@ -2541,12 +2542,12 @@ function checkBlockedRpc(
   params: Record<string, unknown>
 ): string | null {
   if (BLOCKED_RPC_DRIVERS.has(driver) && BLOCKED_RPC_WRITE_METHODS.has(method)) {
-    return `RPC заблокирован — изменение сетевых настроек через ${driver}/${_service}/${method} запрещено. Просмотр (Load, Get, List) разрешён.`
+    return `RPC blocked — changing network settings via ${driver}/${_service}/${method} is not allowed. Viewing (Load, Get, List) is allowed.`
   }
   if (driver === 'confed' && method === 'Save') {
     const path = String(params['path'] ?? '')
     if (/wb-connection-manager|network/i.test(path)) {
-      return `RPC заблокирован — сохранение сетевого конфига (${path}) запрещено.`
+      return `RPC blocked — saving the network config (${path}) is not allowed.`
     }
   }
   return null
@@ -2655,7 +2656,7 @@ export function isDestructiveCommand(command: string): string | null {
   const cmd = command.trim()
   for (const pat of DESTRUCTIVE_PATTERNS) {
     if (pat.test(cmd)) {
-      return `Команда заблокирована — потенциально деструктивная операция: "${cmd}". Такие команды запрещены даже с подтверждением пользователя.`
+      return `Command blocked — a potentially destructive operation: "${cmd}". Such commands are forbidden even with user confirmation.`
     }
   }
   return null
@@ -2728,13 +2729,13 @@ export function diagnoseHistoryChannels(
   for (const [device, requestedCtrls] of byDevice) {
     const avail = available.get(device) ?? []
     if (avail.length === 0) {
-      errs.push(`device_id "${device}" не найден на контроллере. Проверь через mqtt_list_topics(prefix="/devices/+/meta/name") и повтори.`)
+      errs.push(`device_id "${device}" not found on the controller. Check via mqtt_list_topics(prefix="/devices/+/meta/name") and retry.`)
       continue
     }
     const availSet = new Set(avail)
     const missing = requestedCtrls.filter(ch => !availSet.has(ch))
     if (missing.length) {
-      errs.push(`канал(ы) у "${device}" не найден(ы): [${missing.join(', ')}]. Доступные у этого устройства: [${avail.join(', ')}]`)
+      errs.push(`channel(s) for "${device}" not found: [${missing.join(', ')}]. Available on this device: [${avail.join(', ')}]`)
     }
   }
   return errs.length ? errs.join(' | ') : null
@@ -2880,7 +2881,7 @@ function historyToCsv(result: HistoryResult): string {
 }
 
 /** Multi-target version of resolve1. Accepts `sn`/`host` as string or array.
- *  Host array merges with sn array; if both пустые — fallback на ctx.contextSns. */
+ *  Host array merges with sn array; if both are empty — fall back to ctx.contextSns. */
 function resolveTargets(args: Record<string, unknown>, ctx: Ctx): Controller[] {
   const toKeys = (raw: unknown): string[] => {
     if (Array.isArray(raw)) return raw.map(String).map((s) => s.trim()).filter(Boolean)

@@ -1,57 +1,57 @@
 # bugreport
 
-Составление багрепорта для службы поддержки Wiren Board. Подгружай когда пользователь просит: «составь багрепорт», «напиши отчёт об ошибке», «помоги оформить баг», «нужно отправить в поддержку», или когда в ходе диагностики найдена проблема которую нельзя решить на месте.
+Composing a bug report for Wiren Board support. Load it when the user asks: "compose a bug report", "write an error report", "help me file a bug", "I need to send this to support", or when diagnostics turn up a problem that can't be solved on the spot.
 
-## Прежде чем писать багрепорт
+## Before writing a bug report
 
-Прочитай документацию на то, что сломалось — там часто есть раздел с известными проблемами. Например, Docker — `web_fetch('https://wiki.wirenboard.com/wiki/Docker')`, Modbus — `web_fetch('https://wiki.wirenboard.com/wiki/Modbus')`. Ищи блоки "Известные проблемы", "Ограничения", "Troubleshooting".
+Read the documentation for whatever broke — it often has a section on known issues. For example, Docker — `web_fetch('https://wiki.wirenboard.com/wiki/Docker')`, Modbus — `web_fetch('https://wiki.wirenboard.com/wiki/Modbus')`. Look for "Known issues", "Limitations", "Troubleshooting" blocks.
 
-Если решение найдено в документации — предложи применить его. Если можешь сделать сам — сделай с подтверждением пользователя. Багрепорт не нужен если проблема решается.
+If a solution is found in the documentation — suggest applying it. If you can do it yourself — do it with the user's confirmation. No bug report is needed if the problem gets solved.
 
-## Принцип
+## Principle
 
-Максимум собери сам, минимум спрашивай. Спрашивай только то, что невозможно узнать с контроллера: как подключено физически, что пользователь видит в браузере/на экране, что делал руками вне контроллера.
+Gather as much as you can yourself, ask as little as possible. Only ask what cannot be learned from the controller: how it is physically connected, what the user sees in the browser/on the screen, what they did by hand outside the controller.
 
-## Порядок работы
+## Workflow
 
-### 1. Собери всё что можешь сам
+### 1. Gather everything you can yourself
 
-Одной командой через `ssh_exec`:
+In a single command via `ssh_exec`:
 ```bash
 echo "=== HW ==="; cat /var/lib/wirenboard/short_sn 2>/dev/null; wb-release 2>&1 | head -5; echo "Kernel: $(uname -r)"; echo "FW: $(cat /etc/wb-fw-version 2>/dev/null)"; echo "Uptime:"; uptime; echo "=== DISK ==="; df -h / /mnt/data; echo "=== FAILED ==="; systemctl --failed --no-pager; echo "=== ERRORS ==="; journalctl -p err --since '1 hour ago' -n 30 --no-pager
 ```
 
-Если проблема с конкретным сервисом — его логи: `journalctl -u <unit> -n 100 --no-pager`.
+If the problem is with a specific service — its logs: `journalctl -u <unit> -n 100 --no-pager`.
 
 Kernel mismatch: `uname -r` vs `dpkg -l linux-image-wb*`.
 
-### 2. Собери диагностический архив (обязательно для багрепорта)
+### 2. Collect a diagnostic archive (mandatory for a bug report)
 
-Используй скилл `diagnostic-archive` — он делает ровно это: запускает `wb-diag-collect`, забирает zip. К багрепорту прикрепи получившийся архив.
+Use the `diagnostic-archive` skill — it does exactly this: runs `wb-diag-collect`, fetches the zip. Attach the resulting archive to the bug report.
 
-### 3. Опиши что произошло
+### 3. Describe what happened
 
-Из контекста диалога ты уже знаешь: какие действия привели к проблеме, что ожидалось, что произошло. Опиши это сам, не переспрашивая.
+From the dialogue context you already know: what actions led to the problem, what was expected, what happened. Describe it yourself, without asking again.
 
-### 4. Спроси только то, что не можешь узнать
+### 4. Ask only what you cannot find out
 
-- Физическое подключение (если проблема с оборудованием/шиной)
-- Что пользователь видит в браузере/на экране (если проблема с UI)
-- Воспроизводится ли проблема и как часто
-- Можно ли отключить лишнее оборудование для упрощения
+- Physical connection (if the problem is with hardware/the bus)
+- What the user sees in the browser/on the screen (if the problem is with the UI)
+- Whether the problem reproduces and how often
+- Whether unnecessary hardware can be disconnected to simplify
 
-Спрашивай коротко, одним списком, не по одному вопросу.
+Ask briefly, in a single list, not one question at a time.
 
-### 5. Оформи багрепорт
+### 5. File the bug report
 
-Шаблон:
+Template:
 
-1. **Оборудование** — SN, релиз, ядро, fw, что подключено
-2. **Действия** — что делали
-3. **Ожидание** — что должно было быть
-4. **Факт** — что произошло (с логами/данными)
-5. **Воспроизводимость** — да/нет, как часто
-6. **Минимальная конфигурация** — что можно отключить
-7. **Диагностика** — архив, версии пакетов, логи
+1. **Hardware** — SN, release, kernel, fw, what's connected
+2. **Actions** — what was done
+3. **Expectation** — what should have happened
+4. **Fact** — what actually happened (with logs/data)
+5. **Reproducibility** — yes/no, how often
+6. **Minimal configuration** — what can be disconnected
+7. **Diagnostics** — archive, package versions, logs
 
-Покажи пользователю для проверки. Кратко, по делу, без воды.
+Show it to the user for review. Concise, to the point, no fluff.

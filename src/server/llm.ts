@@ -30,15 +30,15 @@ export type StreamEvent =
 export class LlmClient {
   private client: OpenAI
   readonly model: string
-  /** Запрос `usage.cost` (USD) у провайдеров, которым нужен явный флаг
-   * `usage: { include: true }` в теле запроса — например OpenRouter. */
+  /** Request `usage.cost` (USD) from providers needing explicit
+   * `usage: { include: true }` in the body — e.g. OpenRouter. */
   private readonly includeUsageAccounting: boolean
-  /** OpenRouter middle-out: `transforms: ["middle-out"]` в теле запроса. */
+  /** OpenRouter middle-out: `transforms: ["middle-out"]` in the body. */
   private readonly middleOut: boolean
-  /** Минимальный интервал между запросами в миллисекундах (опциональный
-   * клиентский троттлинг чтобы не быть забаненным строгими провайдерами). */
+  /** Min interval between requests (ms) — optional client-side
+   * throttle to avoid bans from strict providers. */
   private readonly minRequestIntervalMs: number
-  /** Время последнего запроса (Date.now()) для троттлинга. */
+  /** Last request time (Date.now()) for throttling. */
   private lastRequestAt: number = 0
 
   constructor(opts: { apiKey: string; baseURL?: string; model?: string; llmProxy?: string; llmProxyUser?: string; llmProxyPassword?: string; tlsInsecure?: boolean; caCert?: string; apiFormat?: 'openai'; includeUsageAccounting?: boolean; middleOut?: boolean; minRequestIntervalMs?: number | null }) {
@@ -78,11 +78,13 @@ export class LlmClient {
       modelOverride?: string
       /** Sampling temperature (0..2). Undefined → omit, provider chooses default. */
       temperature?: number
-      /** Loader для image-вложений: id → buffer/mime. Если задан — `[file:id:name]`
-       * токены в user-сообщениях для image-расширений преобразуются в
-       * multi-modal content (`type: 'image_url'`), модель получает картинку
-       * нативно через vision-API. Для не-image файлов и при отсутствии
-       * loader токены остаются в тексте. */
+      /** Builds the post-checkpoint «continue» system message from the summary.
+       * Caller supplies it so the text follows the UI/assistant language. */
+      checkpointMessage?: (summary: string) => string
+      /** Loader for image attachments: id → buffer/mime. If set, `[file:id:name]`
+       * tokens in user messages for image extensions become multi-modal
+       * content (`type: 'image_url'`) — model gets the image natively via
+       * vision API. For non-image files or without a loader, tokens stay in text. */
       loadAttachmentBuffer?: (id: string) => { buffer: Buffer; mime: string } | null
     },
   ): AsyncGenerator<StreamEvent> {
@@ -108,7 +110,7 @@ export class LlmClient {
       if (isLastTurn) {
         injected.push({
           role: 'system',
-          content: '⚠ ПОСЛЕДНЯЯ ИТЕРАЦИЯ АГЕНТНОГО ЦИКЛА. НЕ вызывай инструменты. Дай финальный ответ на основе уже собранной информации.',
+          content: '⚠ LAST ITERATION OF THE AGENT LOOP. Do NOT call tools. Give the final answer based on the information already gathered.',
         })
       }
       const messagesForApi: ChatCompletionMessageParam[] = messages.length > 0
@@ -124,13 +126,13 @@ export class LlmClient {
         stream_options: { include_usage: true },
       }
       if (temperature !== undefined) createBody['temperature'] = temperature
-      // OpenRouter: явно запрашиваем `cost` в usage.
+      // OpenRouter: explicitly request `cost` in usage.
       if (this.includeUsageAccounting) createBody['usage'] = { include: true }
-      // OpenRouter middle-out — серверное сжатие при переполнении окна.
+      // OpenRouter middle-out — server-side compaction on window overflow.
       if (this.middleOut) createBody['transforms'] = ['middle-out']
 
-      // Клиентский троттлинг — не чаще одного запроса раз в N мс.
-      // Помогает избежать бана у строгих провайдеров.
+      // Client-side throttle — at most one request per N ms.
+      // Helps avoid bans from strict providers.
       if (this.minRequestIntervalMs > 0) {
         const since = Date.now() - this.lastRequestAt
         if (since < this.minRequestIntervalMs) {
@@ -139,9 +141,9 @@ export class LlmClient {
       }
       this.lastRequestAt = Date.now()
 
-      // Retry на 429 (rate limit) с backoff. Free-tier модели OpenRouter
-      // часто упираются в upstream-лимит провайдера — даём шанс пройти.
-      // Backoff фиксированный: 3с / 8с / 20с (3 попытки).
+      // Retry on 429 (rate limit) with backoff. Free-tier OpenRouter models
+      // often hit the provider's upstream limit — give it a chance to pass.
+      // Fixed backoff: 3s / 8s / 20s (3 attempts).
       const RETRY_DELAYS = [3000, 8000, 20000]
       let attempt = 0
       let createError: unknown = null
@@ -188,18 +190,18 @@ export class LlmClient {
             totalCompletionTokens += chunk.usage.completion_tokens ?? 0
             totalCachedTokens += chunk.usage.prompt_tokens_details?.cached_tokens ?? 0
             lastPromptTokens = chunk.usage.prompt_tokens ?? lastPromptTokens
-            // Server-side billing in the provider's currency. Разные
-            // шлюзы используют разные имена поля:
+            // Server-side billing in the provider's currency. Gateways
+            // use different field names:
             //   VseGPT — total_cost (USD)
             //   AITunnel — cost_rub (RUB)
-            //   OpenRouter — cost (USD), требует `usage: { include: true }`
-            //     в запросе, иначе поле не приходит.
-            // Одно поле во frontend как tokensCost, валюта — из PROVIDER_INFO.
+            //   OpenRouter — cost (USD), requires `usage: { include: true }`
+            //     in the request, else the field is absent.
+            // Single tokensCost field on the frontend, currency from PROVIDER_INFO.
             const u = chunk.usage as { total_cost?: number; cost_rub?: number; cost?: number }
             const c = u.total_cost ?? u.cost_rub ?? u.cost
             if (typeof c === 'number') totalCost += c
-            // Эмитим прогресс сразу — frontend обновит счётчики в шапке
-            // в реальном времени, не дожидаясь конца agent-loop'а.
+            // Emit progress immediately — frontend updates header counters
+            // in real time, without waiting for the agent loop to finish.
             yield {
               type: 'usage',
               promptTokens: totalPromptTokens,
@@ -280,17 +282,19 @@ export class LlmClient {
         const sysMsg = messages[0]
         messages.length = 0
         if (sysMsg) messages.push(sysMsg)
-        // Внедряем явный пинок: после checkpoint модель часто выдаёт текст
-        // вида «дальше проверю...» и останавливается, ожидая что юзер
-        // ткнёт. Чёткое указание продолжать или давать финальный ответ
-        // удерживает агентный цикл живым без user-input'а.
+        // Inject an explicit nudge: after a checkpoint the model often emits
+        // «I'll check next...» and stops, waiting for the user to poke it. A
+        // clear instruction to continue or give a final answer keeps the
+        // agent loop alive without user input.
         messages.push({
           role: 'system',
-          content: `Чекпоинт — итог предыдущего этапа:\n${summary}\n\n` +
-            'Сделан checkpoint, история сжата. ПРОДОЛЖАЙ выполнение текущей задачи: ' +
-            'следующий шаг по плану через нужный инструмент. Если задача полностью ' +
-            'завершена и больше делать нечего — дай финальный ответ пользователю. ' +
-            'Не пиши «дальше проверю / посмотрю / попробую» как обещание — сразу делай.',
+          content: opts?.checkpointMessage
+            ? opts.checkpointMessage(summary)
+            : `Чекпоинт — итог предыдущего этапа:\n${summary}\n\n` +
+              'Сделан checkpoint, история сжата. ПРОДОЛЖАЙ выполнение текущей задачи: ' +
+              'следующий шаг по плану через нужный инструмент. Если задача полностью ' +
+              'завершена и больше делать нечего — дай финальный ответ пользователю. ' +
+              'Не пиши «дальше проверю / посмотрю / попробую» как обещание — сразу делай.',
         })
         messages.push(...thisRound)
       }
@@ -304,16 +308,16 @@ export class LlmClient {
 }
 
 /**
- * Превращает ошибку OpenAI SDK / fetch в человекочитаемое сообщение.
- * Покрывает специфичные коды AITunnel ([docs](https://docs.aitunnel.ru/api/errors.html)),
- * ровно те же коды у других OpenAI-совместимых шлюзов трактуются так же.
+ * Turns an OpenAI SDK / fetch error into a human-readable message.
+ * Covers AITunnel-specific codes ([docs](https://docs.aitunnel.ru/api/errors.html));
+ * the same codes from other OpenAI-compatible gateways are treated identically.
  *
- * Структура ответа AITunnel: `{ error: { code: number, message: string, metadata? } }`,
- * у OpenAI — `{ error: { message, type, code? } }`. Достаём оба варианта.
+ * AITunnel response shape: `{ error: { code: number, message: string, metadata? } }`,
+ * OpenAI: `{ error: { message, type, code? } }`. Handles both.
  */
 export function formatLlmError(e: unknown): string {
   const err = e as { status?: number; message?: string; error?: any; cause?: any }
-  // OpenAI SDK кладёт parsed body в `err.error`
+  // OpenAI SDK puts the parsed body in `err.error`
   const body = err?.error
   const status = err?.status
   const innerCode = (typeof body?.code === 'number' ? body.code : undefined)
@@ -326,7 +330,7 @@ export function formatLlmError(e: unknown): string {
     case 400: return `Неверный запрос (400): ${detail}`
     case 401: return `Недействительный API-ключ (401). Проверь ключ в настройках. ${detail}`
     case 402: {
-      // У AITunnel 402 = недостаточно средств; meta может содержать `provider_name`
+      // AITunnel 402 = insufficient funds; meta may carry `provider_name`
       return `Недостаточно средств на счёте провайдера (402). ${detail}`
     }
     case 403: {
@@ -368,10 +372,10 @@ function buildProxyUrl(proxy: string, user?: string, password?: string): string 
   }
 }
 
-/** Расширения которые мы передаём как image через vision-API. */
+/** Extensions we pass as images via the vision API. */
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp)$/i
 
-/** Detect mime-type из имени файла для data:URL. */
+/** Detect mime-type from filename for a data: URL. */
 function imageMime(name: string): string {
   const ext = name.toLowerCase().match(/\.(png|jpe?g|gif|webp)$/)?.[1] ?? 'png'
   if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg'
@@ -401,10 +405,9 @@ function toApi(
   }
   if (t.role === 'system') return { role: 'system', content: t.content }
 
-  // user. Парсим токены `[file:id:name]` — для image-расширений преобразуем
-  // в multi-modal content (vision API), для остальных — оставляем токен в
-  // тексте, чтобы модель видела что прикреплено и при необходимости вызывала
-  // read_attachment.
+  // user. Parse `[file:id:name]` tokens — image extensions become
+  // multi-modal content (vision API); others keep the token in text so the
+  // model sees what's attached and can call read_attachment if needed.
   if (loadAttachment) {
     const re = /\[file:([^:\]]+):([^\]]+)\]\s*/g
     const images: { id: string; name: string }[] = []

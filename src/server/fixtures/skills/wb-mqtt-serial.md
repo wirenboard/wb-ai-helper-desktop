@@ -1,116 +1,116 @@
 # wb-mqtt-serial
 
-Драйвер Modbus/RS-485. Конфиг `/etc/wb-mqtt-serial.conf`, шаблоны `/usr/share/wb-mqtt-serial/templates/` (пакетные, не трогай) и `/etc/wb-mqtt-serial.conf.d/templates/` (свои). Доступ через RPC `wb-mqtt-serial/...`, не через файлы. Подгружай на: «канал не публикуется», «не вижу устройство на шине», «опрос замер», «включи канал X», «просканируй шину», «slave_id / холдинг / coil / input регистр», включение/отключение каналов, добавление/удаление/правка устройств в конфиге wb-mqtt-serial, «добавь modbus-устройство», «удали устройство», «очисти список устройств», «измени конфиг serial», «wb-mqtt-serial.conf», правка ports/devices в конфиге.
+Modbus/RS-485 driver. Config `/etc/wb-mqtt-serial.conf`, templates `/usr/share/wb-mqtt-serial/templates/` (packaged, don't touch) and `/etc/wb-mqtt-serial.conf.d/templates/` (your own). Access via RPC `wb-mqtt-serial/...`, not through files. Load this skill on: "channel is not published", "I don't see the device on the bus", "polling froze", "enable channel X", "scan the bus", "slave_id / holding / coil / input register", enabling/disabling channels, adding/removing/editing devices in the wb-mqtt-serial config, "add a modbus device", "delete a device", "clear the device list", "change the serial config", "wb-mqtt-serial.conf", editing ports/devices in the config.
 
-**Граница скиллов:** если нужно создать шаблон для устройства которого нет в встроенных — это скилл `wb-mqtt-serial-template`. Если проблема с сигналом/CRC/таймаутами — `troubleshooting-serial` (или `rs485-diagnose` если есть OWON).
+**Skill boundary:** if you need to create a template for a device that isn't among the built-in ones — that's the `wb-mqtt-serial-template` skill. If the problem is with signal/CRC/timeouts — `troubleshooting-serial` (or `rs485-diagnose` if there's an OWON).
 
-## RPC, не файлы
+## RPC, not files
 
-Шаблон с прошивки → `device/LoadConfig`. Конфиг → `config/Load`. Запись → `confed/Editor/Save` (валидация + рестарт сервиса атомарно; битый JSON не пишется, опрос шины жив). Прямой `write_file` в `.conf` — только с бэкапом и осознанно.
+Template from firmware → `device/LoadConfig`. Config → `config/Load`. Write → `confed/Editor/Save` (validation + service restart atomically; broken JSON isn't written, bus polling stays alive). A direct `write_file` into `.conf` — only with a backup and deliberately.
 
-- **«Канала нет в MQTT» ≠ «не поддерживается».** Многие каналы шаблонов идут с `"enabled": false` (Uptime, Counter, Total, Serial). Сначала `device/LoadConfig`, потом выводы.
-- **Шаблон ищи на контроллере, не на GitHub.** На железке — актуальный под прошивку. `web_fetch` шаблонов почти всегда зря.
-- **Кастомный шаблон — последнее средство.** Сначала проверь встроенный.
-- **Скан шины медленный.** `port/Scan mode=all` идёт 5-30 сек, ставь `timeoutSec ≥ 30`.
+- **"Channel not in MQTT" ≠ "not supported".** Many template channels ship with `"enabled": false` (Uptime, Counter, Total, Serial). First `device/LoadConfig`, then conclusions.
+- **Look for the template on the controller, not on GitHub.** The one on the device is current for the firmware. A `web_fetch` of templates is almost always wasted.
+- **A custom template is a last resort.** First check the built-in one.
+- **The bus scan is slow.** `port/Scan mode=all` takes 5-30 sec, set `timeoutSec ≥ 30`.
 
-## RPC через mqtt_rpc
+## RPC via mqtt_rpc
 
-`params` — вложенный объект, обязательное поле (даже пустой `{}`).
+`params` — a nested object, a required field (even an empty `{}`).
 
 ```jsonc
-// Шаблон устройства — все каналы, включая enabled:false
+// Device template — all channels, including enabled:false
 mqtt_rpc({ sn, driver: "wb-mqtt-serial", service: "device", method: "LoadConfig",
   params: { device_id: "wb-mr6c_138" }
-  // или по адресу: { path: "/dev/ttyRS485-1", baud_rate: 9600, parity: "N",
+  // or by address: { path: "/dev/ttyRS485-1", baud_rate: 9600, parity: "N",
   //                  data_bits: 8, stop_bits: 2, slave_id: 138, device_type: "WB-MR6C" }
 })
 
-// Текущий конфиг
+// Current config
 mqtt_rpc({ sn, driver: "wb-mqtt-serial", service: "config", method: "Load", params: {} })
 
-// Сохранить конфиг (валидация + рестарт)
+// Save the config (validation + restart)
 mqtt_rpc({ sn, driver: "confed", service: "Editor", method: "Save",
-  params: { path: "/etc/wb-mqtt-serial.conf", content: "<обновлённый JSON целиком>" }
+  params: { path: "/etc/wb-mqtt-serial.conf", content: "<the entire updated JSON>" }
 })
 
-// Скан шины (Fast Modbus)
+// Bus scan (Fast Modbus)
 mqtt_rpc({ sn, driver: "wb-mqtt-serial", service: "port", method: "Scan",
   params: { path: "/dev/ttyRS485-1", baud_rate: 9600, mode: "all" }, timeoutSec: 30
 })
 
-// Точечная проверка slave_id
+// Targeted slave_id check
 mqtt_rpc({ sn, driver: "wb-mqtt-serial", service: "port", method: "Probe",
   params: { path: "/dev/ttyRS485-1", baud_rate: 9600, slave_id: 138 }
 })
 ```
 
-Прочее: `device/Load` — живые значения каналов; `device/Set` — записать `{"channel_name": value}` (только по явной просьбе пользователя).
+Other: `device/Load` — live channel values; `device/Set` — write `{"channel_name": value}` (only on an explicit user request).
 
-## Сценарий «включи канал X на устройстве Y»
+## Scenario "enable channel X on device Y"
 
-1. `mqtt_list_topics(sn, prefix="/devices/+/meta/name")` — найди `device_id`.
-2. `device/LoadConfig({device_id})` — все каналы и их `enabled`.
-3. `config/Load({})` — найди устройство в `ports[*].devices[*]`.
-4. Правь JSON — добавь/обнови запись канала, поставь `"enabled": true`.
-5. Покажи пользователю diff, предупреди про рестарт wb-mqtt-serial (опрос замрёт ~5-10 сек).
-6. `confed/Editor/Save` с полным новым JSON.
-7. Через 10-20 сек: `mqtt_read(sn, "/devices/<device_id>/controls/<channel>")`.
+1. `mqtt_list_topics(sn, prefix="/devices/+/meta/name")` — find the `device_id`.
+2. `device/LoadConfig({device_id})` — all channels and their `enabled`.
+3. `config/Load({})` — find the device in `ports[*].devices[*]`.
+4. Edit the JSON — add/update the channel entry, set `"enabled": true`.
+5. Show the user the diff, warn about the wb-mqtt-serial restart (polling freezes for ~5-10 sec).
+6. `confed/Editor/Save` with the full new JSON.
+7. After 10-20 sec: `mqtt_read(sn, "/devices/<device_id>/controls/<channel>")`.
 
-## Сценарий «что подключено на шине»
+## Scenario "what is connected on the bus"
 
-1. Порты: `ssh_exec(sn, "ls /dev/ttyRS485-* /dev/ttyMOD*")` или из `config/Load`.
-2. `port/Scan` (`wb-mqtt-serial/port/Scan`) с `timeoutSec=30` на каждом порту — показывает что видит драйвер. Находит только WB и Onokom (Fast Modbus).
-3. Сравни с `config/Load` — что уже описано, что добавить.
+1. Ports: `ssh_exec(sn, "ls /dev/ttyRS485-* /dev/ttyMOD*")` or from `config/Load`.
+2. `port/Scan` (`wb-mqtt-serial/port/Scan`) with `timeoutSec=30` on each port — shows what the driver sees. Finds only WB and Onokom (Fast Modbus).
+3. Compare with `config/Load` — what is already described, what to add.
 
-> `port/Scan` (этот скилл) — управленческий инструмент драйвера. `wb_bus_scan` (скилл `troubleshooting-serial`) — диагностический тул через `wb-device-manager`. Разные службы, разные цели — не путай.
+> `port/Scan` (this skill) — a management tool of the driver. `wb_bus_scan` (the `troubleshooting-serial` skill) — a diagnostic tool via `wb-device-manager`. Different services, different purposes — don't confuse them.
 
-## Error-флаги канала (WB MQTT Conventions)
+## Channel error flags (WB MQTT Conventions)
 
-У каждого контрола есть мета-топик `/devices/<dev>/controls/<ch>/meta/error` со строкой из символов:
+Each control has a meta-topic `/devices/<dev>/controls/<ch>/meta/error` with a string of characters:
 
-| Флаг | Значение |
+| Flag | Meaning |
 |---|---|
-| `r` | read error — последний опрос регистра не удался (CRC, таймаут, exception) |
-| `w` | write error — запись в регистр не прошла |
-| `p` | period miss — драйвер не успевает опрашивать с заданной частотой (медленные регистры, занятая шина) |
+| `r` | read error — the last register poll failed (CRC, timeout, exception) |
+| `w` | write error — the write to the register didn't go through |
+| `p` | period miss — the driver can't keep up polling at the set rate (slow registers, busy bus) |
 
-Пустая строка / нет топика = всё в порядке. Несколько флагов идут подряд (`rp`, `rwp`).
+An empty string / no topic = everything is fine. Multiple flags come in a row (`rp`, `rwp`).
 
-**Важно:** при `r` значение в `/devices/<dev>/controls/<ch>` — это **последнее успешно прочитанное** (last-known-good), НЕ свежее. Не читай контрол без проверки `meta/error` — рискуешь принять устаревшее значение за актуальное.
+**Important:** with `r`, the value in `/devices/<dev>/controls/<ch>` is the **last successfully read** one (last-known-good), NOT fresh. Don't read a control without checking `meta/error` — you risk taking a stale value for the current one.
 
 ```jsonc
-// Сценарий «проверь живой ли канал»:
+// Scenario "check whether the channel is alive":
 mqtt_read(sn, "/devices/wb-mr6c_138/controls/Input 1/meta/error")
-// → "" — ок, значение свежее
-// → "r" — последний read провалился, значение устарело
-// → "p" — драйвер не успевает; либо опрос медленный, либо шина перегружена
+// → "" — ok, the value is fresh
+// → "r" — the last read failed, the value is stale
+// → "p" — the driver can't keep up; either polling is slow, or the bus is overloaded
 
-mqtt_read(sn, "/devices/wb-mr6c_138/controls/Input 1")  // last-known-good если r=true
+mqtt_read(sn, "/devices/wb-mr6c_138/controls/Input 1")  // last-known-good if r=true
 ```
 
-**Где видно в UI:** на странице Devices контрол с активным error-флагом подсвечивается жёлтым/красным.
+**Where it's visible in the UI:** on the Devices page, a control with an active error flag is highlighted yellow/red.
 
-**Что делать при `r`/`rp`:** см. `troubleshooting-serial` — обычно физика шины (терминаторы, длина, контакт) или коллизия `slave_id`. При только `p` — увеличь `read_rate_limit_ms` для тяжёлых каналов или сократи опрос неиспользуемых.
+**What to do on `r`/`rp`:** see `troubleshooting-serial` — usually bus physics (terminators, length, contact) or a `slave_id` collision. With only `p` — increase `read_rate_limit_ms` for heavy channels or reduce polling of unused ones.
 
-## Прямая правка файла — бэкап обязателен
+## Direct file editing — a backup is mandatory
 
-Если без `confed/Editor/Save` (через `write_file` или `ssh_exec`) — сначала бэкап, потом `systemctl restart wb-mqtt-serial`:
+If done without `confed/Editor/Save` (via `write_file` or `ssh_exec`) — back up first, then `systemctl restart wb-mqtt-serial`:
 
 ```bash
 ssh_exec(sn, "cp /etc/wb-mqtt-serial.conf /etc/wb-mqtt-serial.conf.bak-$(date +%s)")
 ```
 
-## Грабли
+## Pitfalls
 
-- «Канал не поддерживается» по `mqtt_list_topics` без `LoadConfig` — см. выше, `enabled:false` не публикуется.
-- `web_fetch` шаблона с GitHub вместо `LoadConfig` — на железе актуальнее.
-- Кастомный шаблон до проверки встроенного.
-- Прямой `write_file` в `.conf` без валидации — битый JSON положит опрос шины.
-- Правка пакетных шаблонов в `/usr/share/...` — перезапишутся апдейтом. Кастом — только в `/etc/wb-mqtt-serial.conf.d/templates/`.
-- `port/Scan` без `timeoutSec ≥ 30` → таймаут, частичный ответ.
+- "Channel not supported" based on `mqtt_list_topics` without `LoadConfig` — see above, `enabled:false` is not published.
+- `web_fetch` of a template from GitHub instead of `LoadConfig` — the one on the device is more current.
+- A custom template before checking the built-in one.
+- A direct `write_file` into `.conf` without validation — broken JSON will kill bus polling.
+- Editing packaged templates in `/usr/share/...` — they get overwritten by an update. Custom ones — only in `/etc/wb-mqtt-serial.conf.d/templates/`.
+- `port/Scan` without `timeoutSec ≥ 30` → timeout, partial response.
 
-## Документация
+## Documentation
 
 - Wiki: <https://wirenboard.com/wiki/wb-mqtt-serial>
-- Исходники + шаблоны: <https://github.com/wirenboard/wb-mqtt-serial>
-- Страницы модулей: `https://wirenboard.com/wiki/<Модель>` (WB-MR6C, WB-MSW_v.4 и т.п.)
+- Sources + templates: <https://github.com/wirenboard/wb-mqtt-serial>
+- Module pages: `https://wirenboard.com/wiki/<Model>` (WB-MR6C, WB-MSW_v.4, etc.)
