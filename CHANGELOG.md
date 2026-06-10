@@ -7,6 +7,8 @@ versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-06-10
+
 ### Changed
 - **Model-facing text is now English-first (single language).** The persona
   system prompt and the other strings the model reads — the force-compaction
@@ -786,7 +788,8 @@ The backlog from `wb-ai-skills/wb-ai-helper-analysis.md` is closed.
   CLI interface...`; for `apt list --upgradable` without a fresh `apt-get
   update` it suggests refreshing the cache and loading the `controller-update` skill.
 
-[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.22...HEAD
+[Unreleased]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.22...v0.14.0
 [0.13.22]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.21...v0.13.22
 [0.13.21]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.20...v0.13.21
 [0.13.20]: https://github.com/wirenboard/wb-ai-helper-desktop/compare/v0.13.19...v0.13.20
