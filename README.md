@@ -1,7 +1,5 @@
 # WB AI Helper — desktop AI assistant for Wiren Board
 
-**English** · [Русский](README.ru.md)
-
 > **Prototype / experimental project.**
 > An early version for internal testing, not ready for use in critical production environments.
 > The tool has direct access to controllers over MQTT and SSH — including writing topics, running arbitrary commands and background jobs via `systemd-run`. Use it deliberately and at your own risk.
