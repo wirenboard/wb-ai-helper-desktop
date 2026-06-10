@@ -114,7 +114,7 @@ async function retryLastMessage() {
   if (live) {
     for (let i = live.length - 1; i >= 0; i--) {
       const t = live[i]
-      if (t?.role === 'user' && t.content.startsWith('[Система] ⏳')) {
+      if (t?.role === 'user' && t.content.startsWith('[System] ⏳')) {
         live.splice(i, 1)
       }
       // Удаляем оборванный пустой assistant turn от прошлой попытки —
@@ -278,7 +278,7 @@ const currentContextUsage = computed(() => {
 //      сохранить важное в summary до hard-режима.
 //   2. HARD (≥ HARD_COMPACT_RATIO, 0.90): backend обрезает историю в DB
 //      без участия модели. Сохраняет system + последний user-assistant pair,
-//      на месте обрезанного — synthetic [Система] notice. Деструктивно для
+//      на месте обрезанного — synthetic [System] notice. Деструктивно для
 //      tool-results, но без него ratio растёт пока не вылетит за окно.
 const HARD_COMPACT_RATIO = 0.9
 
@@ -644,7 +644,7 @@ function handleStreamEvent(chatId: string, event: string, data: any) {
   if (event === 'retry-wait') {
     // Бэк сообщил что провайдер вернул 429 и мы ждём перед повтором.
     // Пишем как system_event прямо в чат (turnsToItems рендерит user-turn
-    // c префиксом «[Система]» компактно с шестерёнкой) — тосты сжимаются
+    // c префиксом «[System]» компактно с шестерёнкой) — тосты сжимаются
     // друг друга и юзер видит только последний, а так остаётся след
     // всех попыток в истории чата для текущего стрима.
     const sec = Math.round((data.delayMs ?? 0) / 1000)

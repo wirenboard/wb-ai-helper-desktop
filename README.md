@@ -187,7 +187,7 @@ Principle: **user-facing text is bilingual; model-facing text is single-language
 - **UI** — `src/web/i18n.ts`: a lightweight module without vue-i18n (`t()`/`plural()`/`fmtSize()`, reactive `lang`, autodetect from `localStorage('wb-lang')` + `navigator.language`). Components import `t`/`plural` directly. To add a string — put the key into both `ru`/`en` blocks and use `t('group.key')`.
 - **`settings.uiLanguage`** (shared field, `WB_HELPER_LANGUAGE` env) sets the UI language and the few server strings the user sees: the system-prompt language directive (`LANG_DIRECTIVE` in `chats.ts` — a top-priority block prepended to the system prompt that forces the model to **reply strictly in the UI language**, overriding the Russian persona body), welcome/fallback/checkpoint messages and `getExtraSystemMsgs` (via the `L()` helper in `index.ts`).
 - **Skills (`fixtures/skills/*.md`) and tool descriptions (`tools.ts`) are English-only, a single set.** These are model-facing instructions, never shown verbatim to the user; the model reads English and still replies in the UI language. No `.en.md` variants, no `toolSchemas(lang)`. The `{en, ru}` / `translations.ru` blocks inside `wb-rules.md` and `wb-serial-templates.md` are intentional — they document those skills' own bilingual APIs.
-- The `[Система]` prefix is a technical protocol sentinel, not translated (the frontend strips it before display).
+- The `[System]` prefix is a technical protocol sentinel, not translated (the frontend strips it before display).
 
 ## Environment variables
 

@@ -35,8 +35,8 @@ export function turnsToItems(turns: ChatTurn[], chatId: string): ChatItem[] {
   for (let i = 0; i < turns.length; i++) {
     const t = turns[i]!
     if (t.role === 'user') {
-      if (t.content.startsWith('[Система]')) {
-        items.push({ type: 'system_event', text: t.content.slice('[Система]'.length).trim().split('\n')[0]! })
+      if (t.content.startsWith('[System]')) {
+        items.push({ type: 'system_event', text: t.content.slice('[System]'.length).trim().split('\n')[0]! })
         continue
       }
       // Парсим токены вложений `[file:id:name]` (вставляются ChatInputArea
@@ -451,7 +451,7 @@ export const api = {
     fetch(`/api/chats/${id}`, { method: 'DELETE' }).then((r) => json<{ ok: true }>(r)),
   /** Принудительное сжатие истории чата (деструктивно). Сохраняет system-турн +
    *  последний user-msg и всё после него; промежуточные turns заменяются одним
-   *  synthetic [Система] уведомлением. Возвращает количество удалённых turns
+   *  synthetic [System] уведомлением. Возвращает количество удалённых turns
    *  и обновлённый chat. Вызывается фронтом при ratio >= HARD_COMPACT_RATIO. */
   forceCompact: (id: string, reason: string) =>
     fetch(`/api/chats/${id}/force-compact`, {

@@ -20,7 +20,7 @@ const SYSTEM_PROMPT = `Ты — десктопный помощник интег
 Стиль работы:
 - **Всегда действуешь сам.** Пользователь дал задачу — ты её решаешь. Не спрашиваешь «а вы хотели именно X?», «попробовать ли мне Y?», «стоит ли проверить Z?» — берёшь и делаешь.
 - **Сказал — сделал в этом же ходу. Без обещаний на потом.** Если в ответе ты пишешь «сейчас проверю», «начну с», «попробую», «дальше посмотрю», «сразу сделаю» — **сразу же в этом же turn'е** вызывай нужный инструмент. Не отдавай управление пользователю с фразой-обещанием — стрим завершится и пользователю придётся вручную писать «продолжай». Текст-обещание без последующего tool call — это баг твоего поведения. Либо делай, либо явно скажи «нужно ваше решение по X» с конкретным вопросом.
-- **Запустил фоновую задачу — заверши ход и жди.** После \`ssh_exec_async\` (или другого инструмента, возвращающего jobId) **не цикли** \`job_status\`/\`job_tail\` ради ожидания завершения. Сделай 1 проверку статуса чтобы убедиться что задача стартовала, и заверши свой ход коротким текстом юзеру: «Запустил в фоне jobId=X («apt update»), сообщу результат когда закончится». Сервер автоматически пнёт тебя сообщением \`[Система] Фоновая задача завершена: jobId=...\` — тогда и сделаешь \`job_tail\` и финальный ответ. **Не давай финальный ответ как-будто работа завершена пока задача активна** — данные могут быть устаревшими (\`apt list --upgradable\` до завершения \`apt update\`, старый \`journalctl\` до рестарта сервиса и т.п.).
+- **Запустил фоновую задачу — заверши ход и жди.** После \`ssh_exec_async\` (или другого инструмента, возвращающего jobId) **не цикли** \`job_status\`/\`job_tail\` ради ожидания завершения. Сделай 1 проверку статуса чтобы убедиться что задача стартовала, и заверши свой ход коротким текстом юзеру: «Запустил в фоне jobId=X («apt update»), сообщу результат когда закончится». Сервер автоматически пнёт тебя сообщением \`[System] Фоновая задача завершена: jobId=...\` — тогда и сделаешь \`job_tail\` и финальный ответ. **Не давай финальный ответ как-будто работа завершена пока задача активна** — данные могут быть устаревшими (\`apt list --upgradable\` до завершения \`apt update\`, старый \`journalctl\` до рестарта сервиса и т.п.).
 - **Если задача непонятна** — один раз в самом начале: коротко проговариваешь как понял, и сразу приступаешь. Не ждёшь подтверждения — если понял правильно, пользователь молчит; если нет — поправит на ходу.
 - **Встречаешь проблему — решаешь её, а не докладываешь о ней.** Ошибка на шаге 2 — не повод остановиться и спросить. Попробуй альтернативу, зайди с другой стороны, разберись в причине. Пользователь ждёт результата, а не списка препятствий.
 - **Не сдаёшься.** Команда не прошла — читаешь ошибку, понимаешь что пошло не так, пробуешь иначе. Сервис не отвечает — проверяешь логи, статус, конфиг. Тупик — редкость, не норма.
@@ -237,7 +237,7 @@ export class ChatStore {
   /** Принудительно обрезать историю чата: оставить system-турн + последние
    *  `keepLast` турн'ов (по умолчанию 6 — обычно хватает чтобы остался
    *  последний user-msg, его tool-iterations и финальный assistant-ответ).
-   *  Всё что между — заменить одним synthetic `[Система]` уведомлением.
+   *  Всё что между — заменить одним synthetic `[System]` уведомлением.
    *
    *  Используется когда `currentContextUsage.ratio >= HARD_COMPACT_RATIO` (0.9)
    *  — модель была попрошена вызвать checkpoint, не вняла, контекст растёт.
@@ -276,8 +276,8 @@ export class ChatStore {
     if (middle.length === 0) return { removed: 0 }
     const droppedAssistants = middle.filter((r) => r.role === 'assistant').length
     const droppedTools = middle.filter((r) => r.role === 'tool').length
-    const droppedUserReal = middle.filter((r) => r.role === 'user' && !r.content.startsWith('[Система]')).length
-    const droppedUserSystem = middle.filter((r) => r.role === 'user' && r.content.startsWith('[Система]')).length
+    const droppedUserReal = middle.filter((r) => r.role === 'user' && !r.content.startsWith('[System]')).length
+    const droppedUserSystem = middle.filter((r) => r.role === 'user' && r.content.startsWith('[System]')).length
     // Bulk DELETE через IN(...) — bun:sqlite не поддерживает массивы напрямую.
     const placeholders = middle.map(() => '?').join(',')
     this.db
@@ -292,7 +292,7 @@ export class ChatStore {
     if (droppedAssistants) parts.push(`${droppedAssistants} ответов модели`)
     if (droppedTools) parts.push(`${droppedTools} tool-результатов`)
     if (droppedUserSystem) parts.push(`${droppedUserSystem} system-уведомлений`)
-    const synthetic = `[Система] 🗜 Принудительное сжатие истории (${reason}). Выкинуто: ${parts.join(', ')}. Если нужны детали из выкинутого — спроси заново или прочитай актуальное состояние с контроллера.`
+    const synthetic = `[System] 🗜 Принудительное сжатие истории (${reason}). Выкинуто: ${parts.join(', ')}. Если нужны детали из выкинутого — спроси заново или прочитай актуальное состояние с контроллера.`
     this.db
       .query(
         `INSERT INTO turns (chat_id, ord, role, content, tool_call_id, tool_calls, tokens_prompt, tokens_completion, tokens_cached, total_cost, created_at, provider, model)
@@ -341,15 +341,15 @@ export class ChatStore {
   }
 
   private maybeAutoTitle(chatId: string, content: string) {
-    // Турны с префиксом «[Система]» — это ⚙ system_event'ы (welcome line,
+    // Турны с префиксом «[System]» — это ⚙ system_event'ы (welcome line,
     // 429-retry-баннеры, уведомления о завершении джобы), а не настоящие
     // пользовательские сообщения. Не считаем их за обычный user-turn ни
     // в условии срабатывания, ни как источник заголовка — иначе чат уезжает
-    // с заголовком вида «[Система] OpenAI · gpt-5.4-mini · …».
-    if (content.startsWith('[Система]')) return
+    // с заголовком вида «[System] OpenAI · gpt-5.4-mini · …».
+    if (content.startsWith('[System]')) return
     const r = this.db
       .query<{ n: number }, [string]>(
-        `SELECT COUNT(*) AS n FROM turns WHERE chat_id = ? AND role = 'user' AND content NOT LIKE '[Система]%'`,
+        `SELECT COUNT(*) AS n FROM turns WHERE chat_id = ? AND role = 'user' AND content NOT LIKE '[System]%'`,
       )
       .get(chatId)
     if ((r?.n ?? 0) === 1) {

@@ -338,7 +338,7 @@ The backlog from `wb-ai-skills/wb-ai-helper-analysis.md` is closed.
   2. **HARD (≥ 0.9)** — the backend itself truncates the history in the DB via a new
      endpoint `POST /api/chats/:id/force-compact`: it keeps the system turn
      and the last user message + everything after it; intermediate turns
-     are replaced by a single synthetic `[Система] 🗜 Forced compaction…`
+     are replaced by a single synthetic `[System] 🗜 Forced compaction…`
      notice with a counter of what was dropped. Destructive for tool-results
      — but without it the ratio grows without limit.
   The gate resets on every user `sendMessage` — each new
@@ -491,8 +491,8 @@ The backlog from `wb-ai-skills/wb-ai-helper-analysis.md` is closed.
 ### Fixed
 - Regression in v0.13.6: the welcome system_event on chat creation broke two things.
   (1) The chat title was auto-generated from the first user turn, and it turned out to be
-  `[Система] OpenAI · gpt-5.4-mini · …` — in the chat sidebar and header. Now
-  `maybeAutoTitle` skips turns with the `[Система]` prefix: the counter and the
+  `[System] OpenAI · gpt-5.4-mini · …` — in the chat sidebar and header. Now
+  `maybeAutoTitle` skips turns with the `[System]` prefix: the counter and the
   title itself are computed over "real" user messages. (2) In an empty
   chat the suggestion buttons (Overview / Diagnostics / Data) disappeared, because
   the welcome turn made `items.length` non-zero; ChatMessageList now
@@ -587,7 +587,7 @@ The backlog from `wb-ai-skills/wb-ai-helper-analysis.md` is closed.
     the stream hangs on a promise.
   - **"Started a background job — finish the turn and wait."** After `ssh_exec_async`
     don't loop `job_status` — 1 check, a short reply to the user, finish the stream.
-    The server automatically pings via `[Система] The background job
+    The server automatically pings via `[System] The background job
     is done…` when the job → `exited`. This saves tokens and prevents
     giving an answer on a stale cache (`apt list --upgradable` before
     `apt update` finishes).

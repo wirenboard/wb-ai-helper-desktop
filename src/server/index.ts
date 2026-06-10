@@ -343,7 +343,7 @@ app.post('/api/chats', async (c) => {
   // Приветственный system_event с тем, что юзер должен видеть до первого
   // сообщения: что за модель, сколько инструментов и скиллов сейчас заряжено.
   // Тот же канал, что у уведомлений «джоба завершилась» (user-turn с префиксом
-  // «[Система]» рендерится фронтом как ⚙ system_event). Если скиллов 0 —
+  // «[System]» рендерится фронтом как ⚙ system_event). Если скиллов 0 —
   // сразу пишем предупреждение в этой же строке: иначе про багу сборки никто
   // не узнает (console.error на сервере в Electron-приложении не виден).
   const systemSkills = listSkills(db).filter((s) => s.origin === 'system').length
@@ -355,7 +355,7 @@ app.post('/api/chats', async (c) => {
     ? `${providerLabel} · ${llm.model} · ${en ? 'tools' : 'инструменты'}: ${toolsCount} · ${en ? 'skills' : 'скиллы'}: ${systemSkills}`
     : `${providerLabel} (${en ? 'not configured' : 'не настроен'}) · ${en ? 'tools' : 'инструменты'}: ${toolsCount} · ${en ? 'skills' : 'скиллы'}: ${systemSkills}`
   const warning = systemSkills === 0 ? (en ? ' ⚠ system skills not loaded (build bug)' : ' ⚠ системные скиллы не загружены (бага сборки)') : ''
-  chats.appendTurn(chat.id, { role: 'user', content: `[Система] ${head}${warning}` })
+  chats.appendTurn(chat.id, { role: 'user', content: `[System] ${head}${warning}` })
   return c.json(chats.get(chat.id))
 })
 
@@ -366,7 +366,7 @@ app.get('/api/chats/:id', (c) => {
 
 // Принудительное сжатие истории чата — деструктивно. Сохраняет только
 // system-турн и последний user-msg + всё после него, на месте обрезанного
-// — synthetic [Система] уведомление. Используется фронтом когда автосжатие
+// — synthetic [System] уведомление. Используется фронтом когда автосжатие
 // уже попросило модель, та не сжала, а ratio переполз HARD_COMPACT_RATIO.
 app.post('/api/chats/:id/force-compact', async (c) => {
   const id = c.req.param('id')

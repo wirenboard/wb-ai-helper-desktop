@@ -86,11 +86,11 @@ const messages = {
       forceCompactFailed: 'force-compact failed: {msg}',
     },
     // Сообщения, уходящие модели / рендерящиеся как ⚙ system_event. Префикс
-    // «[Система]» — технический сентинел (api.ts срезает его перед показом,
+    // «[System]» — технический сентинел (api.ts срезает его перед показом,
     // chats.ts детектит system-event'ы), он НЕ переводится.
     system: {
-      retry429: '[Система] ⏳ Провайдер вернул 429 (rate limit). Попытка {attempt}/{max}, жду {sec}с…',
-      jobDone: '[Система] Фоновая задача завершена: jobId={id}, "{label}", контроллер {sn}. Проверь результат через job_tail и сообщи пользователю итог.',
+      retry429: '[System] ⏳ Провайдер вернул 429 (rate limit). Попытка {attempt}/{max}, жду {sec}с…',
+      jobDone: '[System] Фоновая задача завершена: jobId={id}, "{label}", контроллер {sn}. Проверь результат через job_tail и сообщи пользователю итог.',
     },
     // Промты клиентского авто-сжатия — уходят модели как user-сообщение.
     compact: {
@@ -356,8 +356,8 @@ const messages = {
       forceCompactFailed: 'force-compact failed: {msg}',
     },
     system: {
-      retry429: '[Система] ⏳ Provider returned 429 (rate limit). Attempt {attempt}/{max}, waiting {sec}s…',
-      jobDone: '[Система] Background task completed: jobId={id}, "{label}", controller {sn}. Check the result via job_tail and report the outcome to the user.',
+      retry429: '[System] ⏳ Provider returned 429 (rate limit). Attempt {attempt}/{max}, waiting {sec}s…',
+      jobDone: '[System] Background task completed: jobId={id}, "{label}", controller {sn}. Check the result via job_tail and report the outcome to the user.',
     },
     compact: {
       soft: 'The context is approaching the window limit. Call checkpoint(summary=...) now, before it is too late. IMPORTANT: if you do not call it yourself, at 90% we will truncate history forcibly — tool-results and details may be lost. Your summary is safer than automatic truncation.',

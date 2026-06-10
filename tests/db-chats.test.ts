@@ -221,15 +221,15 @@ describe('ChatStore', () => {
   })
 
   // Auto-title (v0.13.7): welcome system_event и retry-баннеры приходят как
-  // user-турны с префиксом «[Система]» — в качестве заголовка чата они не
+  // user-турны с префиксом «[System]» — в качестве заголовка чата они не
   // годятся, его должна давать первая «настоящая» реплика юзера.
-  test('auto-title skips [Система] user-turns', () => {
+  test('auto-title skips [System] user-turns', () => {
     const chat = store.create()
     expect(chat.title).toBe('Новый чат')
     // Welcome system_event при создании чата — не должен становиться заголовком.
     store.appendTurn(chat.id, {
       role: 'user',
-      content: '[Система] OpenAI · gpt-5.4-mini · инструменты: 50 · скиллы: 17',
+      content: '[System] OpenAI · gpt-5.4-mini · инструменты: 50 · скиллы: 17',
     })
     let fetched = store.get(chat.id)!
     expect(fetched.title).toBe('Новый чат')
@@ -239,12 +239,12 @@ describe('ChatStore', () => {
     expect(fetched.title).toBe('Какая версия прошивки?')
   })
 
-  test('auto-title triggers on FIRST real user message even if [Система] turns precede it', () => {
+  test('auto-title triggers on FIRST real user message even if [System] turns precede it', () => {
     const chat = store.create()
     // Несколько подряд welcome/retry баннеров — title должен оставаться дефолтным.
-    store.appendTurn(chat.id, { role: 'user', content: '[Система] welcome line' })
-    store.appendTurn(chat.id, { role: 'user', content: '[Система] ⏳ retry-wait 10s' })
-    store.appendTurn(chat.id, { role: 'user', content: '[Система] ещё одно уведомление' })
+    store.appendTurn(chat.id, { role: 'user', content: '[System] welcome line' })
+    store.appendTurn(chat.id, { role: 'user', content: '[System] ⏳ retry-wait 10s' })
+    store.appendTurn(chat.id, { role: 'user', content: '[System] ещё одно уведомление' })
     let fetched = store.get(chat.id)!
     expect(fetched.title).toBe('Новый чат')
     // Первая реальная реплика юзера — title апдейтится.
@@ -254,7 +254,7 @@ describe('ChatStore', () => {
   })
 
   // Принудительное сжатие (v0.13.12). Стратегия — keep system + last K turns
-  // (default K=6), всё что между — synthetic [Система] уведомление. Это
+  // (default K=6), всё что между — synthetic [System] уведомление. Это
   // покрывает оба сценария:
   //   а) много вопросов: остаётся последний user-msg и его ответ.
   //   б) один длинный вопрос с цепочкой tool-iterations: остаются последние
@@ -282,7 +282,7 @@ describe('ChatStore', () => {
     expect(after.turns[0]?.role).toBe('system')
     const notice = after.turns[1]
     expect(notice?.role).toBe('user')
-    expect(notice?.content).toMatch(/^\[Система\] 🗜 Принудительное сжатие/)
+    expect(notice?.content).toMatch(/^\[System\] 🗜 Принудительное сжатие/)
     expect(notice?.content).toContain('ratio=0.95')
     // Хвост — последние 6 турнов (user msg 4..6 + assistants).
     expect(after.turns.slice(2).map((t) => (t.role === 'user' ? t.content : `[a]${t.content}`))).toEqual([
@@ -304,7 +304,7 @@ describe('ChatStore', () => {
       toolCalls: [{ id: 't1', name: 'foo', arguments: '{}' }],
     })
     store.appendTurn(chat.id, { role: 'tool', toolCallId: 't1', content: 'res1' })
-    store.appendTurn(chat.id, { role: 'user', content: '[Система] welcome' })
+    store.appendTurn(chat.id, { role: 'user', content: '[System] welcome' })
     // Final keepLast=2 кусок:
     store.appendTurn(chat.id, { role: 'user', content: 'last user' })
     store.appendTurn(chat.id, { role: 'assistant', content: 'last answer' })
