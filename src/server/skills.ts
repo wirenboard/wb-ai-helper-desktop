@@ -113,20 +113,19 @@ function pruneSystemSkillsNotIn(db: DbHandle, names: string[]): void {
 
 /** Seed system skills into the DB. Called at startup. Returns the loaded count.
  *
- *  Источник может быть один из двух:
- *    - SKILL_FILES (из embed-skills-manifest.ts) — заполняется на сборке скриптом
- *      build.ts через `import … with { type: 'text' }`, и `bun --compile` встраивает
- *      содержимое как строки. Это путь скомпилированного бинаря и AppImage.
- *    - readdirSync(SKILLS_DIR) — dev-режим, когда manifest пуст. Удобно для горячей
- *      правки .md (рестарт сервера → re-seed).
+ *  The source is one of two:
+ *    - SKILL_FILES (from embed-skills-manifest.ts) — populated at build time by
+ *      build.ts via `import … with { type: 'text' }`, and `bun --compile`
+ *      embeds the content as strings. This is the compiled-binary / AppImage path.
+ *    - readdirSync(SKILLS_DIR) — dev mode, when the manifest is empty. Handy for
+ *      hot-editing .md (restart server → re-seed).
  *
- *  ENOENT в dev-режиме раньше глотался молча, и БД оставалась пустой без признаков
- *  ошибки. Теперь:
- *    - на сервере — `console.error`;
- *    - возвращаемый count позволяет вызывающему (index.ts) выкинуть warning в чат
- *      через SSE `error` event — пользователь увидит «⚠ …» прямо при первом
- *      запросе, а не будет ловить ENOENT в логах сервера, в которые никто не
- *      заглядывает.
+ *  ENOENT in dev mode used to be swallowed silently, leaving the DB empty with
+ *  no sign of error. Now:
+ *    - on the server — `console.error`;
+ *    - the returned count lets the caller (index.ts) emit a warning into the
+ *      chat via an SSE `error` event — the user sees "⚠ …" right on the first
+ *      request instead of ENOENT buried in server logs no one reads.
  */
 export function seedSystemSkills(db: DbHandle): number {
   const embedded = Object.keys(SKILL_FILES).length > 0

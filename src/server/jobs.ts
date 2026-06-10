@@ -37,15 +37,15 @@ export function removeJob(jobId: string): void {
 }
 
 /**
- * Фоновый трекер running-задач. Раз в `intervalMs` дёргает `getStatus(j)`
- * для каждой running-job и обновляет state. Никогда не выкидывает —
- * SSH-ошибка (контроллер перезагружается, sshd не отвечает) трактуется
- * как «состояние неизвестно, оставляем running, попробуем снова».
+ * Background tracker for running jobs. Every `intervalMs` calls `getStatus(j)`
+ * for each running job and updates state. Never throws — an SSH error
+ * (controller rebooting, sshd unresponsive) is treated as "state unknown, keep
+ * running, retry later".
  *
- * Отвязан от UI polling: UI читает только in-memory state и не висит
- * на SSH handshake-таймаутах. Состояние «running → exited» приходит
- * сюда в фоне; UI следующим тиком видит его и поднимает баннер
- * «завершена».
+ * Decoupled from UI polling: the UI reads only in-memory state and never hangs
+ * on SSH handshake timeouts. The "running → exited" transition lands here in
+ * the background; the UI sees it on the next tick and raises the "finished"
+ * banner.
  */
 let trackerTimer: ReturnType<typeof setInterval> | null = null
 export function startJobTracker(
@@ -62,7 +62,7 @@ export function startJobTracker(
           const next = await getStatus(j)
           if (next === 'exited' || next === 'running') updateJobState(j.jobId, next)
         } catch {
-          // транзиент: оставляем как есть, попробуем на следующем тике
+          // transient: leave as-is, retry next tick
         }
       }),
     )

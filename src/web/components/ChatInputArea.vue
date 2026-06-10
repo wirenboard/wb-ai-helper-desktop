@@ -7,10 +7,10 @@ const props = defineProps<{
   disabled: boolean
   llmConfigured: boolean
   chatId: string
-  /** Количество фоновых задач этого чата (running ssh_exec_async / wb_bus_scan
-   *  / serial_debug_collect и т.п.). Рендерится мелким индикатором рядом с
-   *  «Ctrl+J — скачанные файлы», чтобы юзер видел: «модель свободна, но
-   *  что-то ещё крутится в фоне на контроллере». 0 — индикатор скрыт. */
+  /** Count of background jobs for this chat (running ssh_exec_async / wb_bus_scan
+   *  / serial_debug_collect etc.). Rendered as a small indicator next to the
+   *  «Ctrl+J — downloads» hint so the user sees: model is idle, but something is
+   *  still running in the background on the controller. 0 hides the indicator. */
   runningJobsCount?: number
 }>()
 const emit = defineEmits<{ send: [text: string]; abort: [] }>()
@@ -39,9 +39,9 @@ function setQuote(q: string) {
 }
 defineExpose({ setQuote })
 
-// Inline-уведомление под textarea — показываем мягкую подсказку когда юзер
-// нажал Enter во время стрима. Текстарея специально не блокируется:
-// можно набирать следующий вопрос пока модель отвечает.
+// Inline notice under the textarea — a soft hint shown when the user hits
+// Enter mid-stream. The textarea is deliberately not disabled: you can type
+// the next question while the model is responding.
 const streamingNotice = ref<string | null>(null)
 let noticeTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -51,7 +51,7 @@ function flashNotice(msg: string, ms = 5000) {
   noticeTimer = setTimeout(() => { streamingNotice.value = null }, ms)
 }
 
-// Когда стрим закончился — подсказка больше не нужна, прячем сразу.
+// Stream ended — the hint is no longer needed, hide it immediately.
 watch(() => props.disabled, (now) => {
   if (!now && streamingNotice.value) {
     streamingNotice.value = null
@@ -63,14 +63,14 @@ function submit() {
   const v = text.value.trim()
   if (!v && !items.value.length) return
   if (props.disabled) {
-    // Модель отвечает — не теряем введённый текст, объясняем что делать.
+    // Model is responding — don't lose typed text, explain what to do.
     flashNotice(t('input.streamingNotice'))
     return
   }
-  // Прикреплённые файлы кодируем токенами `[file:id:name]` в начало
-  // content — фронт парсит и рисует превью (img для image-расширений,
-  // chip для остальных). Модель тоже видит этот токен и понимает что
-  // есть вложение; для содержимого использует read_attachment.
+  // Encode attached files as `[file:id:name]` tokens at the start of content —
+  // the frontend parses them and renders previews (img for image extensions,
+  // chip otherwise). The model also sees these tokens and knows an attachment
+  // exists; it uses read_attachment for the content.
   const fileTokens = items.value.map(a => `[file:${a.id}:${a.name}]`).join(' ')
   const body = quote.value ? `> ${quote.value.replace(/\n/g, '\n> ')}\n\n${v}` : v
   const msg = [fileTokens, body].filter(Boolean).join(' ').trim()

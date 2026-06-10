@@ -160,10 +160,10 @@ describe('ChatStore', () => {
     expect(prompt).toContain('SN2')
   })
 
-  // Per-turn provider/model attribution (v0.13.8). Цель — чтобы подвал
-  // ассистент-сообщения показывал того провайдера/модель/валюту, кем оно
-  // было реально сгенерено, а не текущие глобальные settings. После
-  // переключения провайдера прошлые сообщения должны остаться без изменений.
+  // Per-turn provider/model attribution (v0.13.8). The assistant message footer
+  // must show the provider/model/currency that actually generated it, not the
+  // current global settings. After switching providers, past messages stay
+  // unchanged.
   test('appendTurn() persists provider/model attribution on assistant turn', () => {
     const chat = store.create('Attribution test')
     store.appendTurn(
@@ -198,8 +198,8 @@ describe('ChatStore', () => {
     const fetched = store.get(chat.id)!
     const user = fetched.turns.find((t) => t.role === 'user')
     const tool = fetched.turns.find((t) => t.role === 'tool')
-    // Attribution имеет смысл только на assistant-турнах, в подвале которых
-    // она и рендерится. На user/tool — лишние данные, не пишем.
+    // Attribution only matters on assistant turns, where the footer renders it.
+    // On user/tool turns it's redundant — don't persist it.
     expect((user as any)?.provider).toBeUndefined()
     expect((tool as any)?.provider).toBeUndefined()
   })
@@ -210,7 +210,7 @@ describe('ChatStore', () => {
       chat.id,
       { role: 'assistant', content: 'reply' },
       { promptTokens: 10, completionTokens: 5 },
-      // attribution не передаётся — должно работать как до v0.13.8
+      // attribution omitted — must work as before v0.13.8
     )
     const fetched = store.get(chat.id)!
     const asst = fetched.turns.find((t) => t.role === 'assistant')
@@ -220,20 +220,20 @@ describe('ChatStore', () => {
     }
   })
 
-  // Auto-title (v0.13.7): welcome system_event и retry-баннеры приходят как
-  // user-турны с префиксом «[System]» — в качестве заголовка чата они не
-  // годятся, его должна давать первая «настоящая» реплика юзера.
+  // Auto-title (v0.13.7): welcome system_event and retry banners arrive as
+  // user turns prefixed with "[System]" — unfit as a chat title, which should
+  // come from the first real user message.
   test('auto-title skips [System] user-turns', () => {
     const chat = store.create()
     expect(chat.title).toBe('Новый чат')
-    // Welcome system_event при создании чата — не должен становиться заголовком.
+    // Welcome system_event on chat creation must not become the title.
     store.appendTurn(chat.id, {
       role: 'user',
       content: '[System] OpenAI · gpt-5.4-mini · инструменты: 50 · скиллы: 17',
     })
     let fetched = store.get(chat.id)!
     expect(fetched.title).toBe('Новый чат')
-    // Real user message — должна выставить title.
+    // Real user message — sets the title.
     store.appendTurn(chat.id, { role: 'user', content: 'Какая версия прошивки?' })
     fetched = store.get(chat.id)!
     expect(fetched.title).toBe('Какая версия прошивки?')
@@ -241,27 +241,27 @@ describe('ChatStore', () => {
 
   test('auto-title triggers on FIRST real user message even if [System] turns precede it', () => {
     const chat = store.create()
-    // Несколько подряд welcome/retry баннеров — title должен оставаться дефолтным.
+    // Several consecutive welcome/retry banners — title stays default.
     store.appendTurn(chat.id, { role: 'user', content: '[System] welcome line' })
     store.appendTurn(chat.id, { role: 'user', content: '[System] ⏳ retry-wait 10s' })
     store.appendTurn(chat.id, { role: 'user', content: '[System] ещё одно уведомление' })
     let fetched = store.get(chat.id)!
     expect(fetched.title).toBe('Новый чат')
-    // Первая реальная реплика юзера — title апдейтится.
+    // First real user message — title updates.
     store.appendTurn(chat.id, { role: 'user', content: 'привет' })
     fetched = store.get(chat.id)!
     expect(fetched.title).toBe('привет')
   })
 
-  // Принудительное сжатие (v0.13.12). Стратегия — keep system + last K turns
-  // (default K=6), всё что между — synthetic [System] уведомление. Это
-  // покрывает оба сценария:
-  //   а) много вопросов: остаётся последний user-msg и его ответ.
-  //   б) один длинный вопрос с цепочкой tool-iterations: остаются последние
-  //      несколько iter'ов которые показывают актуальное состояние.
+  // Forced compaction (v0.13.12). Strategy: keep system + last K turns
+  // (default K=6), replace everything in between with a synthetic [System]
+  // notice. Covers both scenarios:
+  //   a) many questions: the last user-msg and its answer survive.
+  //   b) one long question with a chain of tool iterations: the last few
+  //      iterations survive, reflecting current state.
   test('forceCompact() drops middle, keeps system + last K turns + inserts synthetic', () => {
     const chat = store.create('compact test')
-    // Длинная цепочка чтобы было что сжимать (1 system + 14 turns).
+    // Long chain so there's something to compact (1 system + 14 turns).
     for (let i = 0; i < 7; i++) {
       store.appendTurn(chat.id, { role: 'user', content: `user msg ${i}` })
       store.appendTurn(chat.id, {
@@ -274,17 +274,17 @@ describe('ChatStore', () => {
     expect(before.turns.length).toBe(15) // 1 system + 14 turns
 
     const result = store.forceCompact(chat.id, 'ratio=0.95', 6)
-    expect(result.removed).toBe(15 - 1 - 6) // = 8 (всё кроме system + last 6)
+    expect(result.removed).toBe(15 - 1 - 6) // = 8 (all but system + last 6)
 
     const after = store.get(chat.id)!
-    // system + synthetic notice + 6 хвостовых turns = 8
+    // system + synthetic notice + 6 tail turns = 8
     expect(after.turns.length).toBe(8)
     expect(after.turns[0]?.role).toBe('system')
     const notice = after.turns[1]
     expect(notice?.role).toBe('user')
     expect(notice?.content).toMatch(/^\[System\] 🗜 Forced history compaction/)
     expect(notice?.content).toContain('ratio=0.95')
-    // Хвост — последние 6 турнов (user msg 4..6 + assistants).
+    // Tail — last 6 turns (user msg 4..6 + assistants).
     expect(after.turns.slice(2).map((t) => (t.role === 'user' ? t.content : `[a]${t.content}`))).toEqual([
       'user msg 4',
       '[a]assistant 4',
@@ -305,14 +305,14 @@ describe('ChatStore', () => {
     })
     store.appendTurn(chat.id, { role: 'tool', toolCallId: 't1', content: 'res1' })
     store.appendTurn(chat.id, { role: 'user', content: '[System] welcome' })
-    // Final keepLast=2 кусок:
+    // Final keepLast=2 chunk:
     store.appendTurn(chat.id, { role: 'user', content: 'last user' })
     store.appendTurn(chat.id, { role: 'assistant', content: 'last answer' })
 
     store.forceCompact(chat.id, 'manual', 2)
     const after = store.get(chat.id)!
     const notice = after.turns[1]!
-    // Все типы выкинутого должны быть в сводке
+    // Every dropped type must appear in the summary
     expect(notice.content).toContain('1 user messages')
     expect(notice.content).toContain('1 model replies')
     expect(notice.content).toContain('1 tool results')
@@ -323,7 +323,7 @@ describe('ChatStore', () => {
     const chat = store.create('small')
     store.appendTurn(chat.id, { role: 'user', content: 'q1' })
     store.appendTurn(chat.id, { role: 'assistant', content: 'a1' })
-    // 1 system + 2 turns = 3 < 1 + 6 = 7 → no-op
+    // 1 system + 2 turns = 3 < 1 + 6 = 7 -> no-op
     const result = store.forceCompact(chat.id, 'manual')
     expect(result.removed).toBe(0)
     const after = store.get(chat.id)!

@@ -34,7 +34,7 @@ describe('pickContextLength', () => {
   })
 
   it('первое валидное поле побеждает', () => {
-    // context_length перед top_provider в порядке кандидатов
+    // context_length precedes top_provider in candidate order
     expect(pickContextLength({
       context_length: 128000,
       top_provider: { context_length: 999999 },

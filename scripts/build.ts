@@ -63,11 +63,10 @@ async function main() {
     if (existsSync(finalPath)) await rm(finalPath)
     if (existsSync(tmpPath)) await rm(tmpPath)
     console.log(`▸ Сборка бинарника: ${target} → ${outName}`)
-    // Bun 1.3.13 на этом ядре иногда роняет финальную запись ELF/PE-секции
-    // ("failed to get path for fd: Unexpected"). Эмпирически:
-    //   • с --target=bun-... запись надёжная;
-    //   • без --target (host) запись флакает.
-    // Поэтому всегда передаём явный таргет и оставляем ретраи на случай редких сбоев.
+    // Bun 1.3.13 sometimes fails the final ELF/PE section write on this kernel
+    // ("failed to get path for fd: Unexpected"). Explicit --target=bun-... is
+    // reliable; host (no --target) flakes. So always pass an explicit target and
+    // keep retries for the rare remaining failures.
     const args = [
       'build',
       path.join(ROOT, 'src/server/index.ts'),
@@ -118,7 +117,7 @@ async function main() {
     ].join('\n'),
   )
 
-  // Восстановим пустой манифест чтобы dev-сборка не тащила хэшированные имена в репо.
+  // Restore empty manifest so dev builds don't drag hashed names into the repo.
   await writeFile(
     MANIFEST_PATH,
     `// Auto-generated; cleared after build. dev-режим отдаст placeholder.\nexport const FILES: Record<string, string> = {}\n`,
@@ -144,11 +143,11 @@ async function writeManifest() {
   await writeFile(MANIFEST_PATH, content)
 }
 
-// Генерим параллельный манифест для системных скиллов из fixtures/skills/*.md.
-// `bun --compile` встраивает их как inline-строки (with { type: 'text' }), поэтому
-// в скомпилированном бинаре seedSystemSkills сидит БД из этих констант, а не пытается
-// читать каталог fixtures, который в бинарь не попадает.
-// В dev SKILL_FILES пуст — seedSystemSkills падает обратно на чтение с диска.
+// Generate a parallel manifest for system skills from fixtures/skills/*.md.
+// `bun --compile` inlines them as strings (with { type: 'text' }), so in the
+// compiled binary seedSystemSkills seeds the DB from these constants instead of
+// reading the fixtures dir (which isn't bundled). In dev SKILL_FILES is empty —
+// seedSystemSkills falls back to reading from disk.
 async function writeSkillsManifest() {
   if (!existsSync(SKILLS_DIR)) {
     throw new Error(`нет каталога ${SKILLS_DIR} — без него системные скиллы не попадут в бинарь`)

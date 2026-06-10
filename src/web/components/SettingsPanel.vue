@@ -7,10 +7,10 @@ import ComboboxSearch from './ComboboxSearch.vue'
 const props = defineProps<{ settings: Settings | null; open: boolean; version?: string; fontSize?: number }>()
 const emit = defineEmits<{
   close: []
-  /** Юзер нажал «Сохранить» — родитель может закрыть окно. */
+  /** User clicked «Save» — parent may close the panel. */
   saved: [Settings]
-  /** Авто-сохранение (ключ / провайдер) — родитель только обновляет
-   * локальный state, окно НЕ закрывает (юзер ещё в процессе настройки). */
+  /** Auto-save (key / provider) — parent only updates local state, does NOT
+   * close the panel (user is still configuring). */
   autoSaved: [Settings]
   fontSizeChange: [number]
 }>()
@@ -34,8 +34,8 @@ const autoCompact = ref(true)
 const autoCompactThreshold = ref(0.85)
 const temperature = ref<number | null>(null)
 const minRequestIntervalMs = ref<number | null>(null)
-/** id → context length, заполняется после fetchModels(); используется как
- * подсказка/auto-fill для contextWindow. */
+/** id → context length, filled after fetchModels(); used as a hint/auto-fill
+ * for contextWindow. */
 const contextLengths = ref<Record<string, number>>({})
 
 const providerInfo = computed(() => PROVIDER_INFO[provider.value])
@@ -103,10 +103,10 @@ async function onProviderChange(next: LlmProvider) {
   aitunnelInfoError.value = null
   openrouterInfo.value = null
   openrouterInfoError.value = null
-  // Сохраняем выбор провайдера на бэке немедленно — иначе info-эндпоинты
-  // (`/api/aitunnel/info`, `/api/openrouter/info`) возвращают 400 «провайдер
-  // не <name>». Это согласуется с auto-save API-ключа. Эмитим autoSaved,
-  // чтобы родитель не закрывал окно настроек посреди работы юзера.
+  // Save the provider choice to the backend immediately — else the info
+  // endpoints (`/api/aitunnel/info`, `/api/openrouter/info`) return 400 "provider
+  // not <name>". Consistent with API-key auto-save. Emit autoSaved so the parent
+  // doesn't close the settings panel mid-task.
   try {
     const saved = await api.saveSettings({ provider: next })
     emit('autoSaved', saved)
@@ -131,14 +131,14 @@ const loadingModels = ref(false)
 const saving = ref(false)
 const saveError = ref<string | null>(null)
 
-// AITunnel-specific: баланс / статистика / email — выводим в шапку настроек
-// провайдера, чтобы юзер сразу видел сколько у него на счету.
+// AITunnel-specific: balance / stats / email — shown atop the provider settings
+// so the user immediately sees their balance.
 const aitunnelInfo = ref<AitunnelInfo | null>(null)
 const aitunnelInfoError = ref<string | null>(null)
 const loadingAitunnelInfo = ref(false)
 
-/** Сколько дней хватит баланса при текущем среднем расходе. Возвращает null
- * если расход 0 (нет истории) или баланс отсутствует. */
+/** How many days the balance lasts at the current average spend. Returns null
+ * if spend is 0 (no history) or there's no balance. */
 const aitunnelDaysLeft = computed<number | null>(() => {
   const info = aitunnelInfo.value
   if (!info?.balance || !info.stats) return null
@@ -162,7 +162,7 @@ async function refreshAitunnelInfo() {
   }
 }
 
-// OpenRouter-specific: credits + лимиты ключа
+// OpenRouter-specific: credits + key limits
 const openrouterInfo = ref<OpenRouterInfo | null>(null)
 const openrouterInfoError = ref<string | null>(null)
 const loadingOpenrouterInfo = ref(false)
@@ -191,8 +191,8 @@ const openrouterLowBalance = computed(() => {
   return r !== null && r < 1
 })
 
-/** Контекстное окно текущей модели по данным от провайдера (если он
- * вернул их в /v1/models). Пусто = автоопределение недоступно. */
+/** Current model's context window per provider data (if returned in /v1/models).
+ * Empty = auto-detection unavailable. */
 const detectedContextWindow = computed<number | null>(() => {
   const m = model.value
   if (!m) return null
@@ -208,18 +208,17 @@ function applyDetectedContextWindow() {
   if (detectedContextWindow.value) contextWindow.value = detectedContextWindow.value
 }
 
-/** Провайдер умеет сжимать контекст на своей стороне — тогда чекбокс
- * `autoCompact` работает как переключатель: off = серверное сжатие,
- * on = клиентский checkpoint (серверное в этом случае отключаем
- * на стороне backend, чтобы не было двойной обработки).
- * AITunnel: server-side всегда, флаг работает как «доп. checkpoint».
- * OpenRouter: middle-out управляется backend'ом из !autoCompact. */
+/** Provider can compact context on its side — then the `autoCompact` checkbox
+ * acts as a toggle: off = server-side compaction, on = client checkpoint (server
+ * compaction is disabled in the backend in that case to avoid double processing).
+ * AITunnel: always server-side, the flag works as an "extra checkpoint".
+ * OpenRouter: middle-out is driven by the backend from !autoCompact. */
 const providerHasServerCompaction = computed(() =>
   provider.value === 'aitunnel' || provider.value === 'openrouter',
 )
 
-// Если провайдер не сжимает сам — клиентское авто-сжатие принудительно ВКЛ
-// (без него длинный чат просто упадёт при переполнении окна).
+// If the provider doesn't compact itself — client auto-compaction is forced ON
+// (without it a long chat just crashes when the window overflows).
 watch(providerHasServerCompaction, (has) => {
   if (!has && !autoCompact.value) autoCompact.value = true
 }, { immediate: true })
@@ -274,8 +273,7 @@ async function importSettings(file: File) {
     })
     if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text().catch(() => '')}`)
     const next = await r.json() as Settings
-    // autoSaved — окно не закрываем, юзер только что импортировал
-    // и может ещё подправить.
+    // autoSaved — don't close the panel; the user just imported and may tweak.
     emit('autoSaved', next)
     // Re-load the form from imported state
     provider.value = next.provider
@@ -313,8 +311,8 @@ async function fetchModels() {
   loadingModels.value = true
   modelsError.value = null
   try {
-    // Если юзер успел вставить ключ и сразу нажать кнопку до debounce —
-    // дописываем его в этот же запрос, чтобы запрос моделей точно увидел свежий ключ.
+    // If the user pasted a key and hit the button before the debounce — include
+    // it in this request so the models fetch definitely sees the fresh key.
     if (apiKey.value) {
       const patch: any = { provider: provider.value, apiKey: apiKey.value }
       if (providerInfo.value.baseURLEditable) patch.baseURL = baseURL.value
@@ -338,11 +336,11 @@ async function fetchModels() {
 }
 
 /**
- * Авто-сохранение API-ключа после ввода (debounce 600ms). Очищаем поле и
- * показываем «(сохранён)» сразу — иначе юзер видит как поле опустошается
- * после нажатия «обновить список» и думает что ключ потерян.
+ * Auto-save the API key after entry (600ms debounce). Clear the field and show
+ * "(saved)" right away — else the user sees the field empty after hitting
+ * "refresh list" and thinks the key was lost.
  *
- * Опустошение поля игнорируем — для удаления есть отдельная кнопка.
+ * Clearing the field is ignored — there's a separate button for removal.
  */
 let apiKeySaveTimer: ReturnType<typeof setTimeout> | null = null
 watch(apiKey, (v) => {
@@ -366,7 +364,7 @@ async function autoSaveApiKey() {
     const next = await api.saveSettings(patch)
     apiKey.value = ''
     emit('autoSaved', next)
-    // С новым ключом сразу подтягиваем модели и провайдерскую info
+    // With the new key, immediately pull models and provider info
     void fetchModels()
     void refreshAitunnelInfo()
     void refreshOpenrouterInfo()

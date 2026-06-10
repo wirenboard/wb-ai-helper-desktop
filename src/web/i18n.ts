@@ -85,14 +85,14 @@ const messages = {
       retryTooltip: 'Повторить отправку с теми же параметрами',
       forceCompactFailed: 'force-compact failed: {msg}',
     },
-    // Сообщения, уходящие модели / рендерящиеся как ⚙ system_event. Префикс
-    // «[System]» — технический сентинел (api.ts срезает его перед показом,
-    // chats.ts детектит system-event'ы), он НЕ переводится.
+    // Messages sent to the model / rendered as a ⚙ system_event. The `[System]`
+    // prefix is a protocol sentinel (api.ts strips it before display, chats.ts
+    // detects system events) — it is NOT translated.
     system: {
       retry429: '[System] ⏳ Провайдер вернул 429 (rate limit). Попытка {attempt}/{max}, жду {sec}с…',
       jobDone: '[System] Фоновая задача завершена: jobId={id}, "{label}", контроллер {sn}. Проверь результат через job_tail и сообщи пользователю итог.',
     },
-    // Промты клиентского авто-сжатия — уходят модели как user-сообщение.
+    // Client-side auto-compaction prompts — sent to the model as a user message.
     compact: {
       soft: 'Контекст приближается к лимиту окна. Вызови checkpoint(summary=...) сейчас, пока не поздно. ВАЖНО: если не вызовешь сам, при достижении 90% мы обрежем историю принудительно — tool-results и детали могут потеряться. Твой summary безопаснее автоматической обрезки.',
       hardWarning: 'Контекст уже превысил 90% лимита окна. Вызови СЕЙЧАС checkpoint(summary=...) с кратким итогом этапа — это твой последний шанс сохранить важные детали (tool-results, наблюдения, план). Если не вызовешь — на следующем сообщении мы принудительно обрежем историю, и всё кроме system-promt и последнего обмена будет потеряно.',

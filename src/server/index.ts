@@ -74,10 +74,9 @@ function resolveBaseUrl(s: Settings): string | undefined {
   return def || undefined
 }
 
-// Возврат seedSystemSkills используется в POST /api/chats: при создании чата
-// юзеру в первой строке (system_event) показывается «Модель: X · инструменты:
-// N · скиллы: M», а если M=0 — рядом ⚠ предупреждение о баге сборки. Так
-// проблема видна в UI без копания в логах сервера.
+// seedSystemSkills feeds the chat's first system_event line «Model: X · tools:
+// N · skills: M»; M=0 surfaces a ⚠ build-bug warning, making the issue visible
+// in the UI without digging through server logs.
 seedSystemSkills(db)
 
 const discovery = new Discovery(db)
@@ -101,13 +100,13 @@ function buildLlmClient(s: Settings): LlmClient | null {
     tlsInsecure: cur.tlsInsecure,
     caCert: cur.caCert || undefined,
     apiFormat: cur.apiFormat,
-    // OpenRouter возвращает usage.cost (USD) только если в теле явно
-    // передан `usage: { include: true }`.
+    // OpenRouter returns usage.cost (USD) only when the body explicitly
+    // sends `usage: { include: true }`.
     includeUsageAccounting: s.provider === 'openrouter',
-    // OpenRouter middle-out: серверное сжатие включается одной общей
-    // галочкой autoCompact (как у AITunnel). autoCompact=off → серверное
-    // сжатие провайдера; autoCompact=on → клиентский checkpoint, а
-    // серверный middle-out отключён, чтобы не было двойной обработки.
+    // OpenRouter middle-out: server-side compaction toggled by the shared
+    // autoCompact flag (like AITunnel). autoCompact=off → provider-side
+    // compaction; autoCompact=on → client checkpoint, server middle-out
+    // disabled to avoid double processing.
     middleOut: s.provider === 'openrouter' && !cur.autoCompact,
     minRequestIntervalMs: cur.minRequestIntervalMs,
   })
@@ -124,8 +123,8 @@ settingsStore.onChange((s) => {
 
 discovery.start(settings.discoveryInterval)
 
-// Background-poller, обновляющий состояние running-задач из памяти. UI
-// poll читает уже актуальный state без блокирующего SSH в http-обработчике.
+// Background poller that refreshes running-job state in memory, so the UI poll
+// reads a current state without blocking SSH inside the HTTP handler.
 startJobTracker(async (job) => {
   const ctrl = discovery.get(job.sn)
   if (!ctrl) return null
@@ -214,8 +213,8 @@ app.delete('/api/settings/api-key', async (c) => {
 })
 
 /**
- * AITunnel-specific: баланс + сводная статистика + email юзера. Доступно только
- * когда активный провайдер — `aitunnel` (используем его apiKey/baseURL).
+ * AITunnel-specific: balance + summary stats + user email. Only available when
+ * the active provider is `aitunnel` (uses its apiKey/baseURL).
  */
 app.get('/api/aitunnel/info', async (c) => {
   const s = settingsStore.get()
@@ -246,8 +245,8 @@ app.get('/api/aitunnel/info', async (c) => {
 })
 
 /**
- * OpenRouter-specific: total credits / total usage / лимиты ключа.
- * Доступно только когда активный провайдер — `openrouter`.
+ * OpenRouter-specific: total credits / total usage / key limits.
+ * Only available when the active provider is `openrouter`.
  */
 app.get('/api/openrouter/info', async (c) => {
   const s = settingsStore.get()
@@ -340,12 +339,11 @@ app.get('/api/chats', (c) => c.json({ chats: chats.list() }))
 app.post('/api/chats', async (c) => {
   const body = await c.req.json().catch(() => ({}))
   const chat = chats.create(body.title, Array.isArray(body.contextSns) ? body.contextSns : [])
-  // Приветственный system_event с тем, что юзер должен видеть до первого
-  // сообщения: что за модель, сколько инструментов и скиллов сейчас заряжено.
-  // Тот же канал, что у уведомлений «джоба завершилась» (user-turn с префиксом
-  // «[System]» рендерится фронтом как ⚙ system_event). Если скиллов 0 —
-  // сразу пишем предупреждение в этой же строке: иначе про багу сборки никто
-  // не узнает (console.error на сервере в Electron-приложении не виден).
+  // Welcome system_event shown before the first message: which model, how many
+  // tools and skills are loaded. Same channel as «job finished» notifications
+  // (a user-turn prefixed «[System]» renders as ⚙ system_event). If 0 skills,
+  // warn inline — otherwise the build bug goes unnoticed (server console.error
+  // is invisible inside the Electron app).
   const systemSkills = listSkills(db).filter((s) => s.origin === 'system').length
   const settings = settingsStore.get()
   const toolsCount = toolSchemas().length
@@ -364,10 +362,10 @@ app.get('/api/chats/:id', (c) => {
   return chat ? c.json(chat) : c.json({ error: 'not found' }, 404)
 })
 
-// Принудительное сжатие истории чата — деструктивно. Сохраняет только
-// system-турн и последний user-msg + всё после него, на месте обрезанного
-// — synthetic [System] уведомление. Используется фронтом когда автосжатие
-// уже попросило модель, та не сжала, а ratio переполз HARD_COMPACT_RATIO.
+// Force-compact chat history — destructive. Keeps only the system turn and the
+// last user message + everything after it; the truncated part is replaced by a
+// synthetic [System] notice. Used by the frontend when auto-compact already
+// asked the model, it didn't compact, and ratio crossed HARD_COMPACT_RATIO.
 app.post('/api/chats/:id/force-compact', async (c) => {
   const id = c.req.param('id')
   const body = await c.req.json().catch(() => ({}))
@@ -398,13 +396,13 @@ app.delete('/api/chats/:id', (c) => {
 
 app.get('/api/chats/:id/jobs', (c) => {
   const id = c.req.param('id')
-  // ВАЖНО: не дёргаем SSH из этого endpoint. Раньше на каждый polling
-  // (раз в 3 сек) делали `ssh.jobStatus(ctrl, jobId)` для всех running —
-  // и когда контроллер был недоступен (например, во время `apt upgrade`
-  // с обновлением ядра и reboot), SSH висел до handshake-таймаута,
-  // параллельные запросы с разных тиков пересекались, баннер мерцал/пропадал.
-  // Состояние job обновляется штатно — когда модель вызывает `job_status`
-  // как tool (см. tools.ts), это транзитом дёргает updateJobState.
+  // IMPORTANT: never touch SSH from this endpoint. It used to call
+  // `ssh.jobStatus(ctrl, jobId)` for every running job on each poll (every 3s);
+  // when the controller was unreachable (e.g. during `apt upgrade` with a kernel
+  // update and reboot), SSH hung until the handshake timeout, overlapping ticks
+  // collided, and the banner flickered/vanished. Job state is updated normally
+  // when the model calls the `job_status` tool (see tools.ts), which routes
+  // through updateJobState.
   return c.json({ jobs: getJobsForSession(id) })
 })
 
@@ -443,10 +441,10 @@ app.post('/api/chats/:id/message', async (c) => {
   const settingsAtRequest = settingsStore.get()
   const cur = settingsAtRequest.providers[settingsAtRequest.provider]
   const modelOverride = compactRequested && cur.compactModel ? cur.compactModel : undefined
-  // Атрибуция, которая прибивается к каждому сохраняемому assistant-turn'у:
-  // подвал в UI (ChatMessage.vue) теперь читает provider/model из самого
-  // turn'а, а не из текущих settings — иначе после переключения провайдера
-  // прошлые сообщения переименовывались (см. screenshot: AITunnel ₽ → OpenAI $).
+  // Attribution stamped onto every saved assistant turn: the UI footer
+  // (ChatMessage.vue) reads provider/model from the turn itself, not from
+  // current settings — otherwise switching providers relabeled past messages
+  // (e.g. AITunnel ₽ → OpenAI $).
   const turnAttribution = {
     provider: settingsAtRequest.provider,
     model: modelOverride || activeLlm.model,
@@ -456,9 +454,9 @@ app.post('/api/chats/:id/message', async (c) => {
       ? cur.temperature
       : undefined
 
-  // retryLast: не добавляем user-turn повторно — берём последний из DB.
-  // Используется кнопкой «Повторить» в баннере ошибок: текст уже сохранён
-  // в чате при первой попытке, дубль не нужен.
+  // retryLast: don't re-append a user turn — take the last one from DB. Used by
+  // the «Retry» button in the error banner: the text was already saved on the
+  // first attempt, no duplicate needed.
   const chatWithUser = retryLast
     ? chats.get(id)!
     : chats.appendTurn(id, { role: 'user', content: userText })!
@@ -507,11 +505,10 @@ app.post('/api/chats/:id/message', async (c) => {
               'complete and there is nothing left to do — give the final answer to the user. ' +
               'Do not write «I will check / look / try next» as a promise — just do it.',
           ),
-          // Vision: при отправке user-сообщения с прикреплёнными
-          // картинками llm.ts превратит токены `[file:id:name]` для
-          // image-расширений в multi-modal content (image_url + base64).
-          // Если модель не vision-capable, провайдер вернёт ошибку —
-          // formatLlmError её распарсит для пользователя.
+          // Vision: when a user message has attached images, llm.ts turns
+          // `[file:id:name]` tokens for image extensions into multi-modal
+          // content (image_url + base64). If the model isn't vision-capable,
+          // the provider returns an error that formatLlmError parses for the user.
           loadAttachmentBuffer: (id: string) => {
             const meta = getAttachment(id, id) ?? getAttachment(chat.id, id)
             const buf = readAttachment(chat.id, id)
@@ -607,8 +604,8 @@ app.post('/api/chats/:id/message', async (c) => {
         turnAttribution,
       )
     }
-    // Если агент упёрся в max_turns без финального текста — пишем явное
-    // системное сообщение, чтобы пользователь не сидел перед пустым чатом.
+    // If the agent hit max_turns without final text, write an explicit system
+    // message so the user isn't left staring at an empty chat.
     if (finishReason === 'max_turns' && !assistantText) {
       const hint = L(
         'Агент исчерпал бюджет шагов (20 итераций) и не успел подвести итог. Скажи «продолжай» — я продолжу с того места, или переформулируй задачу.',

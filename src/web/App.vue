@@ -91,25 +91,24 @@ const chats = ref<Chat[]>([])
 const activeChatId = ref<string | null>(null)
 const activeChat = ref<Chat | null>(null)
 const liveTurns = reactive<{ [chatId: string]: ChatTurn[] }>({})
-// Индекс первого turn'а текущего стрима в liveTurns. Нужен, чтобы при
-// прилёте `usage` события (cumulative-снимок) занулить токены на
-// предыдущих assistant-турнах ТОГО же стрима — иначе при многошаговом
-// agent-loop'е каждый tool-call создаёт новый empty-assistant в buf, на
-// него уходит новый снимок cumulative, и итоговая сумма токенов в шапке
-// чата раздувается в N раз. Турны прошлых стримов / persisted из БД сюда
-// не входят — у них уже корректные delta-токены.
+// Index of the current stream's first turn in liveTurns. Needed so that on a
+// `usage` event (cumulative snapshot) we zero out tokens on earlier assistant
+// turns of the SAME stream — otherwise in a multi-step agent loop each tool-call
+// creates a new empty-assistant in buf, gets its own cumulative snapshot, and
+// the chat-header token total inflates N×. Turns from previous streams /
+// persisted from DB are excluded — they already have correct delta tokens.
 const streamStartIdx = reactive<{ [chatId: string]: number }>({})
 const streaming = ref(false)
 const scanning = ref(false)
 const errorBanner = ref<string | null>(null)
-/** Параметры последней отправки — чтобы кнопка «Повторить» в баннере
- * ошибки могла переотправить тот же запрос. */
+/** Last-send params — so the error-banner «Повторить» button can resend the
+ * same request. */
 const lastSentMessage = ref<{ text: string; opts?: { compact?: boolean } } | null>(null)
 
 async function retryLastMessage() {
   if (!lastSentMessage.value || streaming.value || !activeChat.value) return
   errorBanner.value = null
-  // Очищаем retry-events предыдущей попытки из live — без них чат чище.
+  // Clear the previous attempt's retry-events from live — keeps the chat cleaner.
   const live = liveTurns[activeChat.value.id]
   if (live) {
     for (let i = live.length - 1; i >= 0; i--) {
@@ -117,19 +116,19 @@ async function retryLastMessage() {
       if (t?.role === 'user' && t.content.startsWith('[System] ⏳')) {
         live.splice(i, 1)
       }
-      // Удаляем оборванный пустой assistant turn от прошлой попытки —
-      // новый стрим напишет в свой свежий пустой assistant.
+      // Drop the aborted empty assistant turn from the previous attempt —
+      // the new stream writes into its own fresh empty assistant.
       else if (t?.role === 'assistant' && !t.content && (!('toolCalls' in t) || !t.toolCalls?.length)) {
         live.splice(i, 1)
       }
     }
   }
-  // retryLast: backend НЕ дублирует user-turn в DB. Локально user-msg
-  // в live тоже уже на месте, так что просто запускаем стрим заново.
+  // retryLast: backend does NOT duplicate the user turn in DB. The user msg is
+  // already in live locally too, so just restart the stream.
   const id = activeChat.value.id
   const opts = { ...(lastSentMessage.value.opts ?? {}), retryLast: true }
   streaming.value = true
-  // Добавляем «свежий» пустой assistant в конец live, куда придёт ответ.
+  // Append a fresh empty assistant at the end of live for the response.
   if (live) live.push({ role: 'assistant', content: '' })
   abortStream = new AbortController()
   try {
@@ -163,11 +162,11 @@ async function retryLastMessage() {
   }
 }
 
-/** Разделяем баннер ошибки на «заголовок» и «детали».
- * formatLlmError на бэке возвращает строки вида:
- *   «Недостаточно средств на счёте провайдера (402). <upstream-текст>»
- *   «LLM error: <текст>»
- * Берём первую часть как title (до первой точки или ":"), остальное — detail. */
+/** Split the error banner into «title» and «detail».
+ * Backend formatLlmError returns strings like:
+ *   «Недостаточно средств на счёте провайдера (402). <upstream text>»
+ *   «LLM error: <text>»
+ * Take the first part as title (up to the first period or ":"), rest is detail. */
 function errorTitle(msg: string): string {
   // 1) «… (NNN). xxx» → «… (NNN)»
   const m = msg.match(/^(.+?\(\d{3}\))\.\s/)
@@ -175,7 +174,7 @@ function errorTitle(msg: string): string {
   // 2) «Foo: bar» → «Foo»
   const idx = msg.indexOf(':')
   if (idx > 0 && idx < 60) return msg.slice(0, idx)
-  // fallback: первое предложение, не длиннее 80 символов
+  // fallback: first sentence, no longer than 80 chars
   const dot = msg.indexOf('. ')
   if (dot > 0 && dot < 80) return msg.slice(0, dot)
   return msg.length > 80 ? msg.slice(0, 80) + '…' : msg
@@ -187,9 +186,8 @@ function errorDetail(msg: string): string {
   return msg.slice(t.length).replace(/^[.:\s]+/, '').trim()
 }
 
-/** Превращает упоминания http(s)-URL в кликабельные ссылки. Безопасно: всё
- * остальное эскейпится. Используется только на текстах, которые приходят
- * с нашего бэкенда (formatLlmError) — не от модели. */
+/** Turns http(s) URLs into clickable links. Safe: everything else is escaped.
+ * Used only on text from our own backend (formatLlmError) — not from the model. */
 function linkifyError(text: string): string {
   const escape = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!))
   const parts: string[] = []
@@ -221,10 +219,9 @@ let abortStream: AbortController | null = null
 
 const selectedSns = computed(() => activeChat.value?.contextSns ?? [])
 
-/** Источник правды для всех агрегированных счётчиков чата: liveTurns
- * (там аккумулируется свежее состояние стрима + token-данные после in-place
- * merge), с fallback на activeChat.turns для случая «чат только что выбран
- * и live ещё не сформирован». */
+/** Source of truth for all aggregated chat counters: liveTurns (accumulates the
+ * fresh stream state + token data after in-place merge), falling back to
+ * activeChat.turns for the case "chat just selected, live not built yet". */
 function turnsForCounters(): ChatTurn[] {
   if (!activeChat.value) return []
   return liveTurns[activeChat.value.id] ?? activeChat.value.turns
@@ -252,8 +249,8 @@ const currentChatTokensCost = computed(() => {
   )
 })
 
-/** Заполнение контекстного окна: берём prompt_tokens ПОСЛЕДНЕГО ответа,
- * а не сумму — это и есть размер текущего активного контекста. */
+/** Context-window fill: take prompt_tokens of the LAST response, not the sum —
+ * that's the size of the current active context. */
 const currentContextUsage = computed(() => {
   if (!settings.value || !activeChat.value) return null
   const ctx = contextWindowOf(settings.value.model, settings.value.contextWindow)
@@ -271,20 +268,20 @@ const currentContextUsage = computed(() => {
   return { used: last, total: ctx, ratio: last / ctx }
 })
 
-// Сжатие контекста — два уровня:
-//   1. SOFT (≥ autoCompactThreshold, default 0.85): просим модель саму вызвать
-//      checkpoint с summary. Промт жёсткий — явно говорим, что иначе будет
-//      принудительное сжатие и контекст потеряется. Это даёт модели один шанс
-//      сохранить важное в summary до hard-режима.
-//   2. HARD (≥ HARD_COMPACT_RATIO, 0.90): backend обрезает историю в DB
-//      без участия модели. Сохраняет system + последний user-assistant pair,
-//      на месте обрезанного — synthetic [System] notice. Деструктивно для
-//      tool-results, но без него ratio растёт пока не вылетит за окно.
+// Context compaction — two levels:
+//   1. SOFT (≥ autoCompactThreshold, default 0.85): ask the model to call
+//      checkpoint with a summary itself. The prompt is firm — we explicitly warn
+//      that otherwise compaction will be forced and context lost. Gives the model
+//      one chance to save what matters into a summary before hard mode.
+//   2. HARD (≥ HARD_COMPACT_RATIO, 0.90): backend trims DB history without the
+//      model. Keeps system + the last user-assistant pair; the trimmed part is
+//      replaced by a synthetic [System] notice. Destructive for tool-results, but
+//      without it ratio keeps growing until it overflows the window.
 const HARD_COMPACT_RATIO = 0.9
 
 function compactContext(softReason: 'soft' | 'hard-warning' = 'soft') {
-  // Просим модель сжать историю — вызвать tool `checkpoint`.
-  // `compact: true` — backend подменит модель на configured compactModel.
+  // Ask the model to compact history — call the `checkpoint` tool.
+  // `compact: true` — backend swaps to the configured compactModel.
   const msg = softReason === 'hard-warning' ? t('compact.hardWarning') : t('compact.soft')
   void sendMessage(msg, { compact: true })
 }
@@ -294,7 +291,7 @@ async function forceCompact(reason: string) {
   const id = activeChat.value.id
   try {
     await api.forceCompact(id, reason)
-    // После force-compact перезагружаем чат — turns в DB изменились.
+    // After force-compact reload the chat — turns in DB changed.
     const fresh = await api.getChat(id)
     activeChat.value = fresh
     delete liveTurns[id]
@@ -304,10 +301,10 @@ async function forceCompact(reason: string) {
   }
 }
 
-// Состояние gate'а автосжатия — выставлено при `compactContext()`, сброшено
-// при следующем юзерском sendMessage или после force-compact'а. Используется:
-//   - чтобы не триггерить compactContext повторно на каждом тике watch'а
-//   - чтобы UI показал индикатор «ждём checkpoint от модели»
+// Auto-compact gate state — set on `compactContext()`, reset on the next user
+// sendMessage or after force-compact. Used to:
+//   - avoid re-triggering compactContext on every watch tick
+//   - show the "waiting for model's checkpoint" indicator in the UI
 const autoCompactPending = ref(false)
 let autoCompactTriggeredForRatio = 0
 function resetAutoCompactGate() {
@@ -322,12 +319,12 @@ watch(currentContextUsage, (u) => {
     resetAutoCompactGate()
     return
   }
-  // HARD: ratio ≥ 0.9 — принудительная обрезка через backend.
+  // HARD: ratio ≥ 0.9 — forced trim via backend.
   if (u.ratio >= HARD_COMPACT_RATIO) {
     void forceCompact(`ratio=${u.ratio.toFixed(2)} превысил ${HARD_COMPACT_RATIO}`)
     return
   }
-  // SOFT: просим модель. Дважды на одном «пике» не дёргаем.
+  // SOFT: ask the model. Don't fire twice on the same peak.
   if (autoCompactTriggeredForRatio > 0) return
   autoCompactTriggeredForRatio = u.ratio
   autoCompactPending.value = true
@@ -390,8 +387,8 @@ async function onSettingsSaved(next: Settings) {
   if (next.apiKeyConfigured && next.model) settingsOpen.value = false
 }
 
-/** Авто-сохранение из SettingsPanel (смена провайдера, ввод ключа,
- * импорт, удаление ключа) — обновляем state, окно НЕ закрываем. */
+/** Auto-save from SettingsPanel (provider switch, key entry, import, key
+ * removal) — update state, do NOT close the panel. */
 async function onSettingsAutoSaved(next: Settings) {
   settings.value = next
   health.value = await api.health()
@@ -423,9 +420,9 @@ async function refreshChats() {
 }
 
 async function newChat() {
-  // Каждый новый чат — отдельная задача: контекст не наследуется от
-  // предыдущего активного чата. Иначе SN «прилипает» из закрытого чата
-  // и кажется что приложение само его выбрало.
+  // Each new chat is a separate task: context isn't inherited from the
+  // previously active chat. Otherwise an SN "sticks" from a closed chat and it
+  // looks like the app selected it itself.
   const c = await api.createChat([])
   chats.value = [c, ...chats.value.filter((x) => x.id !== c.id)]
   await selectChat(c.id)
@@ -436,12 +433,11 @@ async function selectChat(id: string) {
   activeChatId.value = id
   const c = await api.getChat(id)
   activeChat.value = c
-  // Live теперь всегда инициализируется полной историей чата (без system),
-  // и единственный источник правды для visibleTurns. Без этого пустой live
-  // + новый user-msg «затирали» персистентную историю в UI, а после
-  // стрима activeChat.turns не обновлялся in-place — UI показывал старое.
-  // Копируем каждый turn неглубоко, чтобы мутации в стриме (push,
-  // content +=) не задевали activeChat.turns.
+  // Live is always initialized with the full chat history (minus system) and is
+  // the sole source of truth for visibleTurns. Without this an empty live + a new
+  // user msg would "overwrite" persisted history in the UI, and after a stream
+  // activeChat.turns wasn't updated in place — UI showed stale data. Shallow-copy
+  // each turn so stream mutations (push, content +=) don't touch activeChat.turns.
   liveTurns[id] = c.turns
     .filter((t) => t.role !== 'system')
     .map((t) => ({ ...t }))
@@ -548,9 +544,9 @@ async function sendMessage(text: string, opts?: { compact?: boolean }) {
   streaming.value = true
   errorBanner.value = null
   lastSentMessage.value = { text, ...(opts ? { opts } : {}) }
-  // Сбрасываем gate автосжатия — каждое юзерское сообщение даёт авто-сжатию
-  // свежий шанс попробовать. Не сбрасываем для opts.compact (это сам же
-  // компакт — gate уже выставлен, чтобы не было двойного триггера).
+  // Reset the auto-compact gate — each user message gives auto-compaction a fresh
+  // chance. Don't reset for opts.compact (that's the compaction itself — the gate
+  // is already set to avoid a double trigger).
   if (!opts?.compact) resetAutoCompactGate()
   const prevHistory = liveTurns[id] ?? activeChat.value.turns.filter((t) => t.role !== 'system')
   liveTurns[id] = [
@@ -558,15 +554,14 @@ async function sendMessage(text: string, opts?: { compact?: boolean }) {
     { role: 'user', content: text },
     { role: 'assistant', content: '' },
   ]
-  // Запоминаем границу стрима — handleStreamEvent('usage') обнуляет токены
-  // только на assistant-турнах от этого индекса до конца buf, не трогая
-  // persisted-турны прошлых стримов с уже корректными значениями.
+  // Record the stream boundary — handleStreamEvent('usage') zeroes tokens only on
+  // assistant turns from this index to the end of buf, leaving persisted turns
+  // from previous streams (already correct) untouched.
   streamStartIdx[id] = prevHistory.length
-  // Гарантируем, что Vue отрисует user-сообщение ДО того, как начнёт
-  // приходить первый text-delta стрима. Без этого — если модель отвечает
-  // мгновенно, оба обновления (user-msg + первый delta) попадают в один
-  // тик и юзер видит свой текст одновременно с ответом, а кажется — что
-  // сообщение появилось «после» ответа.
+  // Ensure Vue renders the user message BEFORE the stream's first text-delta
+  // arrives. Without this, if the model responds instantly both updates (user msg
+  // + first delta) land in one tick and the user sees their text and the response
+  // together, making it look like the message appeared "after" the response.
   await nextTick()
   abortStream = new AbortController()
   try {
@@ -581,11 +576,11 @@ async function sendMessage(text: string, opts?: { compact?: boolean }) {
     if (e?.name !== 'AbortError') errorBanner.value = e.message
   } finally {
     abortStream = null
-    // Делаем in-place merge вместо полной замены activeChat — иначе
-    // Vue пересоздаёт массив turns, ChatMessageList перерендеривает
-    // markdown/highlight/mermaid → видимое «дёрганье» чата после стрима.
-    // Live-state уже валиден (бэкенд сохранил каждый turn по ходу), нам
-    // нужны только агрегированные counters + tokens на последнем assistant.
+    // In-place merge instead of fully replacing activeChat — otherwise Vue
+    // recreates the turns array, ChatMessageList re-renders
+    // markdown/highlight/mermaid → visible chat "jitter" after a stream. Live
+    // state is already valid (backend saved each turn along the way); we only need
+    // the aggregated counters + tokens on the last assistant.
     if (activeChatId.value === id && activeChat.value?.id === id) {
       const c = await api.getChat(id).catch(() => null)
       if (c) {
@@ -595,7 +590,7 @@ async function sendMessage(text: string, opts?: { compact?: boolean }) {
         cur.tokensCached = c.tokensCached
         cur.totalCost = c.totalCost
         cur.title = c.title
-        // Прокидываем tokens на последний assistant_text в liveTurns
+        // Propagate tokens to the last assistant_text in liveTurns
         const live = liveTurns[id]
         if (live) {
           for (let i = live.length - 1; i >= 0; i--) {
@@ -615,9 +610,9 @@ async function sendMessage(text: string, opts?: { compact?: boolean }) {
             }
           }
         }
-        // НЕ делаем delete liveTurns[id] — оставляем live как источник
-        // правды. При перезагрузке страницы / переключении чата selectChat
-        // дёрнет api.getChat и наполнит persisted, тогда live можно сбросить.
+        // Do NOT delete liveTurns[id] — keep live as the source of truth. On page
+        // reload / chat switch, selectChat calls api.getChat and fills persisted,
+        // at which point live can be reset.
       }
     }
     streaming.value = false
@@ -642,11 +637,11 @@ function handleStreamEvent(chatId: string, event: string, data: any) {
     return
   }
   if (event === 'retry-wait') {
-    // Бэк сообщил что провайдер вернул 429 и мы ждём перед повтором.
-    // Пишем как system_event прямо в чат (turnsToItems рендерит user-turn
-    // c префиксом «[System]» компактно с шестерёнкой) — тосты сжимаются
-    // друг друга и юзер видит только последний, а так остаётся след
-    // всех попыток в истории чата для текущего стрима.
+    // Backend reported the provider returned 429 and we're waiting before retry.
+    // Write it as a system_event straight into the chat (turnsToItems renders a
+    // user turn with the «[System]» prefix compactly, with a gear icon) — toasts
+    // collapse over each other so the user sees only the last one; this way a
+    // trace of all attempts stays in the chat history for the current stream.
     const sec = Math.round((data.delayMs ?? 0) / 1000)
     buf.push({
       role: 'user',
@@ -655,18 +650,18 @@ function handleStreamEvent(chatId: string, event: string, data: any) {
     return
   }
   if (event === 'usage') {
-    // Бэк присылает CUMULATIVE-снимок usage'а после каждой итерации
-    // agent-loop'а. Каждый `tool-call` event между итерациями пушит в buf
-    // новый empty-assistant, и если просто писать снимок на «последний
-    // assistant», на промежуточных empty'ах копятся стейл cumulative-
-    // значения от прошлых итераций. `currentChatTokens.reduce` суммирует
-    // по всем assistant-турнам — и шапка чата раздувается в N раз
-    // (см. v0.13.7 баг: $0.29 в шапке против $0.08 в sidebar/per-message).
+    // Backend sends a CUMULATIVE usage snapshot after each agent-loop iteration.
+    // Each `tool-call` event between iterations pushes a new empty-assistant into
+    // buf, and if we just wrote the snapshot onto "the last assistant", the
+    // intermediate empties would accumulate stale cumulative values from past
+    // iterations. `currentChatTokens.reduce` sums across all assistant turns — so
+    // the chat header inflates N× (see v0.13.7 bug: $0.29 in header vs $0.08 in
+    // sidebar/per-message).
     //
-    // Фикс: в пределах ТЕКУЩЕГО стрима (от streamStartIdx до конца buf)
-    // обнуляем токены на ВСЕХ assistant'ах кроме последнего, а на
-    // последний пишем актуальный cumulative. Тогда сумма live-турнов
-    // в этом стриме == cumulative последней итерации == реальный billing.
+    // Fix: within the CURRENT stream (streamStartIdx to end of buf), zero tokens
+    // on ALL assistants except the last, and write the actual cumulative onto the
+    // last. Then the sum of live turns in this stream == last iteration's
+    // cumulative == real billing.
     const start = streamStartIdx[chatId] ?? 0
     let lastAssistantIdx = -1
     for (let i = buf.length - 1; i >= start; i--) {
@@ -763,9 +758,9 @@ async function refreshJobs() {
     const prevRunning = new Set(runningJobs.value.map((j) => j.jobId))
     const nowRunning = r.jobs.filter((j) => j.state === 'running')
     const nowExited = r.jobs.filter((j) => j.state !== 'running' && prevRunning.has(j.jobId))
-    // Не пересоздавать массив на каждом тике, если состав не изменился —
-    // иначе Vue реактивность каждые 3 секунды дёргает компоненты с
-    // running-баннером (computed groupRunningJobs пересчитывается).
+    // Don't recreate the array each tick if the contents are unchanged —
+    // otherwise Vue reactivity nudges components with the running banner every
+    // 3s (computed groupRunningJobs recomputes).
     const same = nowRunning.length === runningJobs.value.length
       && nowRunning.every((j, i) => runningJobs.value[i]?.jobId === j.jobId
         && runningJobs.value[i]?.state === j.state)
@@ -786,10 +781,9 @@ async function refreshJobs() {
       stopJobPolling()
     }
   } catch (e) {
-    // Транзиентная ошибка (сеть/таймаут) — НЕ сбрасываем runningJobs,
-    // иначе баннер «моргает» (исчезает на 1-2 секунды до следующего успешного
-    // poll). Реальное завершение задачи приходит штатным ответом, не через
-    // catch.
+    // Transient error (network/timeout) — do NOT reset runningJobs, else the
+    // banner "blinks" (vanishes for 1-2s until the next successful poll). Real job
+    // completion comes via a normal response, not through catch.
     console.warn('[jobs] refresh failed:', e)
   }
 }
@@ -885,10 +879,10 @@ onBeforeUnmount(() => {
 
 const visibleTurns = computed<ChatTurn[]>(() => {
   if (!activeChat.value) return []
-  // selectChat при выборе чата всегда инициализирует liveTurns[id] полной
-  // историей (без system) — live единственный источник правды для рендера.
-  // Fallback на persisted остаётся на случай гонки (selectChat ещё не
-  // дочитал api.getChat, но computed уже стартовал).
+  // selectChat always initializes liveTurns[id] with the full history (minus
+  // system) — live is the sole source of truth for rendering. The persisted
+  // fallback stays for the race case (selectChat hasn't finished api.getChat yet,
+  // but the computed already ran).
   const live = liveTurns[activeChat.value.id]
   if (live) return live
   return activeChat.value.turns.filter((t) => t.role !== 'system')

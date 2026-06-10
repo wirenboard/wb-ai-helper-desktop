@@ -191,11 +191,11 @@ export class Discovery {
     }
   }
 
-  /** `serviceType` (e.g. `_ssh._tcp`, `_http._tcp`, `_workstation._tcp`) — нужен
-   *  чтобы НЕ принимать `svc.port` от чего попало. Поле `Controller.port`
-   *  семантически означает «нестандартный SSH-порт»; mDNS-announce от http/
-   *  workstation шлёт 80/9 соответственно, и если их подхватить — `SshPool`
-   *  пойдёт коннектиться на 80/9. Поэтому порт берём только из `_ssh._tcp`. */
+  /** `serviceType` (e.g. `_ssh._tcp`, `_http._tcp`, `_workstation._tcp`) — needed
+   *  so we DON'T accept `svc.port` from just anything. `Controller.port`
+   *  semantically means "non-standard SSH port"; http/workstation mDNS announces
+   *  send 80/9 respectively, and picking those up would make `SshPool` connect to
+   *  80/9. So the port is only taken from `_ssh._tcp`. */
   private onService(
     svc: { host?: string; addresses?: string[]; port?: number },
     serviceType: string = '',
@@ -206,10 +206,10 @@ export class Discovery {
     const key = sn.toUpperCase()
     const existing = this.controllers.get(key)
     const isSshAnnouncement = /^_ssh\._tcp/.test(serviceType)
-    // Existing port wins (он либо из предыдущего _ssh._tcp announce, либо ввели
-    // вручную как `host:port`); только потом — новый порт, но только если это
-    // именно SSH-announce, и только если порт нестандартный (22 явно
-    // указывать не нужно — это дефолт baseConfig).
+    // Existing port wins (either from a prior _ssh._tcp announce or entered
+    // manually as `host:port`); only then a new port, and only if this is an
+    // SSH announce and the port is non-standard (22 needn't be set explicitly —
+    // it's the baseConfig default).
     let port = existing?.port
     if (isSshAnnouncement && typeof svc.port === 'number' && svc.port > 0 && svc.port !== 22) {
       port = svc.port

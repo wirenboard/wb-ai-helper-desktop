@@ -78,7 +78,7 @@ const expanded = reactive<Record<string, boolean>>({})
 function toggle(key: string) { expanded[key] = !expanded[key] }
 
 const scrollEl = ref<HTMLElement | null>(null)
-const BOTTOM_THRESHOLD = 80 // px — считаем "у дна" если < 80px до конца
+const BOTTOM_THRESHOLD = 80 // px — "at bottom" if < 80px from the end
 
 function isAtBottom(): boolean {
   if (!scrollEl.value) return true
@@ -90,12 +90,12 @@ function scrollToBottom() {
   if (scrollEl.value) scrollEl.value.scrollTop = scrollEl.value.scrollHeight
 }
 
-// Stick-to-bottom: скроллим только если пользователь уже внизу (для resize)
+// Stick-to-bottom: scroll only if the user is already at the bottom (for resize)
 function scrollIfAtBottom() {
   if (isAtBottom()) scrollToBottom()
 }
 
-// При новых сообщениях и окончании стриминга — всегда скроллим вниз
+// On new messages and when streaming ends — always scroll to bottom
 watch(() => props.items.length, () => nextTick(scrollToBottom))
 watch(() => props.streaming, (v) => { if (!v) nextTick(scrollToBottom) })
 
@@ -104,12 +104,12 @@ onMounted(async () => {
   await nextTick()
   scrollToBottom()
   if (!scrollEl.value) return
-  // ResizeObserver: только если уже внизу (раскрытие тулколов не должно прыгать)
+  // ResizeObserver: only if already at bottom (expanding tool-calls shouldn't jump)
   ro = new ResizeObserver(scrollIfAtBottom)
   Array.from(scrollEl.value.children).forEach(c => ro!.observe(c))
   const mo = new MutationObserver((mutations) => {
     mutations.forEach(m => m.addedNodes.forEach(n => { if (n instanceof Element && ro) ro.observe(n) }))
-    // Новый дочерний элемент — всегда скроллим
+    // New child element — always scroll
     scrollToBottom()
   })
   mo.observe(scrollEl.value, { childList: true })
@@ -119,9 +119,9 @@ onBeforeUnmount(() => ro?.disconnect())
 
 <template>
   <div ref="scrollEl" class="msg-list">
-    <!-- Empty state. Welcome ⚙ system_event (model/tools/skills) и баннеры
-         retry-wait тоже попадают в items, но это не «настоящие» сообщения —
-         если в чате только они, считаем чат пустым и показываем suggestion'ы. -->
+    <!-- Empty state. Welcome ⚙ system_event (model/tools/skills) and retry-wait
+         banners also land in items, but they aren't "real" messages — if a chat
+         has only those, treat it as empty and show suggestions. -->
     <div v-if="!items.some((i) => i.type !== 'system_event') && !streaming" class="empty-state">
       <div v-for="group in SUGGESTIONS" :key="group.label" class="suggestion-group">
         <div class="suggestion-label">{{ group.label }}</div>

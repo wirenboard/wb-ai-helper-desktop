@@ -1,7 +1,7 @@
 /**
- * Per-session todo list. In-memory — план живёт в рамках сессии.
- * Модель пишет список целиком через todo_write. Список инжектируется
- * как system-message каждого turn.
+ * Per-session todo list. In-memory — the plan lives within the session.
+ * The model writes the whole list via todo_write. The list is injected as a
+ * system message on every turn.
  */
 
 export type TodoStatus = 'pending' | 'in_progress' | 'completed'

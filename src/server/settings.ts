@@ -4,8 +4,8 @@ import path from 'node:path'
 import os from 'node:os'
 
 export type LlmProvider = 'openai' | 'aitunnel' | 'openrouter' | 'custom' | 'custom_proxy'
-/** Только OpenAI Chat Completions сейчас. Anthropic-формат вырезан, оставлено
- * поле для будущего — Responses API или ещё какие protocol-варианты. */
+/** OpenAI Chat Completions only for now. Anthropic format removed; the field is
+ * kept for the future — Responses API or other protocol variants. */
 export type ApiFormat = 'openai'
 
 /** All LLM-side settings live here, one set per provider. */
@@ -17,27 +17,27 @@ export interface ProviderConfig {
   llmProxyUser: string
   llmProxyPassword: string
   tlsInsecure: boolean
-  /** PEM-содержимое CA-сертификата для доступа через MITM-прокси (e.g. Claude proxy). */
+  /** CA certificate PEM for access via a MITM proxy (e.g. Claude proxy). */
   caCert: string
   /** Override known model context window in tokens (manual). null = use static MODEL_CONTEXT
    * fallback / auto-detected provider value. */
   contextWindow: number | null
-  /** Опциональная (обычно более дешёвая) модель для сжатия контекста через checkpoint.
-   * Пусто → используется основная `model`. */
+  /** Optional (usually cheaper) model for context compaction via checkpoint.
+   * Empty → use the main `model`. */
   compactModel: string
-  /** Автоматически вызывать checkpoint когда заполнение контекстного окна
-   * превышает порог (см. `autoCompactThreshold`). */
+  /** Auto-call checkpoint when context-window fill exceeds the threshold
+   * (see `autoCompactThreshold`). */
   autoCompact: boolean
-  /** Порог заполнения контекстного окна (0..1) для автосжатия. */
+  /** Context-window fill threshold (0..1) for auto-compaction. */
   autoCompactThreshold: number
-  /** Override модельной/провайдерской temperature (0..2). null = не передавать
-   * параметр, провайдер выберет дефолт сам. */
+  /** Override model/provider temperature (0..2). null = don't send the param,
+   * provider picks its own default. */
   temperature: number | null
-  /** Минимальный интервал между запросами к провайдеру в миллисекундах.
-   * null/0 = без троттлинга. Например, 1000 — не чаще одного запроса
-   * в секунду, чтобы не словить бан у строгих провайдеров. */
+  /** Minimum interval between provider requests, in milliseconds. null/0 = no
+   * throttling. E.g. 1000 — at most one request per second, to avoid bans from
+   * strict providers. */
   minRequestIntervalMs: number | null
-  /** Формат API: 'openai' (Chat Completions) или 'anthropic' (Messages). Только Custom AI Proxy. */
+  /** API format: 'openai' (Chat Completions) or 'anthropic' (Messages). Custom AI Proxy only. */
   apiFormat: ApiFormat
   priceInput: number | null
   priceOutput: number | null
@@ -50,11 +50,11 @@ const EMPTY_PROVIDER: ProviderConfig = {
   tlsInsecure: false, caCert: '', apiFormat: 'openai',
   priceInput: null, priceOutput: null, priceCached: null,
   contextWindow: null, compactModel: '',
-  // autoCompactThreshold снижен с 0.85 до 0.70 в v0.13.12 — 0.85 оставляло
-  // мало запаса до HARD-сжатия (0.9), модель часто не успевала вызвать
-  // checkpoint между soft-просьбой и принудительной обрезкой. 0.70 даёт
-  // 20pp запаса: пока ratio растёт с 0.70 до 0.90, есть время для пары
-  // итераций «попроси → подожди → попроси ещё раз».
+  // autoCompactThreshold lowered from 0.85 to 0.70 in v0.13.12 — 0.85 left too
+  // little headroom before HARD compaction (0.9); the model often couldn't
+  // checkpoint between the soft ask and the forced truncation. 0.70 gives 20pp
+  // of headroom: as ratio climbs 0.70 → 0.90 there's time for a couple of
+  // "ask → wait → ask again" iterations.
   autoCompact: true, autoCompactThreshold: 0.70,
   temperature: null,
   minRequestIntervalMs: null,
@@ -131,13 +131,13 @@ const DEFAULTS: Settings = {
   provider: 'openai',
   providers: {
     openai:       { ...EMPTY_PROVIDER, apiFormat: 'openai' },
-    // AITunnel сам сжимает контекст на своей стороне (message-transforms),
-    // поэтому клиентское авто-сжатие по умолчанию выключено. Юзер может
-    // включить вручную если хочет явный checkpoint с summary в истории чата.
+    // AITunnel compacts context server-side (message-transforms), so
+    // client-side auto-compaction is off by default. The user can enable it
+    // manually for an explicit checkpoint with a summary in the chat history.
     aitunnel:     { ...EMPTY_PROVIDER, apiFormat: 'openai', autoCompact: false },
-    // OpenRouter: одна галочка `autoCompact` управляет режимом — off
-    // включает серверный middle-out (см. buildLlmClient), on — клиентский
-    // checkpoint. По дефолту off → серверное сжатие.
+    // OpenRouter: the single `autoCompact` toggle picks the mode — off enables
+    // server-side middle-out (see buildLlmClient), on uses client-side
+    // checkpoint. Default off → server-side compaction.
     openrouter:   { ...EMPTY_PROVIDER, apiFormat: 'openai', autoCompact: false },
     custom:       { ...EMPTY_PROVIDER, apiFormat: 'openai' },
     custom_proxy: { ...EMPTY_PROVIDER, apiFormat: 'openai' },
@@ -306,7 +306,7 @@ const SHARED_FIELDS = [
 ] as const
 
 function isLlmProvider(v: unknown): v is LlmProvider {
-  // Anthropic dropped — старые конфиги мигрируем в OpenAI на загрузке
+  // Anthropic dropped — old configs migrate to OpenAI on load
   if (v === 'anthropic') return false
   return v === 'openai' || v === 'aitunnel' || v === 'openrouter' || v === 'custom' || v === 'custom_proxy'
 }
@@ -386,12 +386,12 @@ function mergeWithMigration(defaults: Settings, env: Partial<Settings> & Partial
   return result
 }
 
-/** Where to store settings: рядом с бинарём (USB-friendly), фолбэк — XDG/APPDATA. */
+/** Where to store settings: next to the binary (USB-friendly), fallback — XDG/APPDATA. */
 function defaultStoragePath(): string {
-  // process.execPath для bun-скомпилированного бинарника указывает на сам exe.
-  // В dev-режиме (`bun --hot src/server/index.ts`) — на бинарь bun, тогда уходим в XDG/APPDATA,
-  // чтобы не засорять рабочую копию проекта.
-  // В AppImage (APPIMAGE env set) — бинарник в read-only squashfs, уходим в XDG.
+  // process.execPath for a bun-compiled binary points at the exe itself.
+  // In dev mode (`bun --hot src/server/index.ts`) it points at the bun binary —
+  // then go to XDG/APPDATA to avoid littering the project working copy.
+  // In an AppImage (APPIMAGE env set) the binary is in a read-only squashfs — go to XDG.
   const exe = process.execPath
   const isCompiled = exe && !path.basename(exe).startsWith('bun')
   if (isCompiled && !process.env['APPIMAGE']) return path.join(path.dirname(exe), 'wb-ai-helper-settings.json')
@@ -427,16 +427,16 @@ function envOverrides(): Partial<Settings> & Partial<ProviderConfig> {
   return out
 }
 
-/** Лёгкий тип записи модели — id обязателен, contextLength опционален.
- * Заполняется когда провайдер отдаёт расширенные поля в `/v1/models`
- * (OpenRouter, LiteLLM, Ollama-compat). У aitunnel/OpenAI этих полей нет. */
+/** Lightweight model record — id required, contextLength optional. Populated
+ * when the provider exposes extended fields in `/v1/models` (OpenRouter,
+ * LiteLLM, Ollama-compat). aitunnel/OpenAI don't have these fields. */
 export interface ModelInfo {
   id: string
   contextLength?: number
 }
 
-/** Достаём context length из произвольного объекта модели в ответе /v1/models.
- * Разные провайдеры называют поле по-разному: пытаемся все распространённые. */
+/** Extract context length from an arbitrary model object in the /v1/models
+ * response. Providers name the field differently — try all the common ones. */
 export function pickContextLength(m: Record<string, unknown>): number | undefined {
   const candidates = [
     m['context_length'],
@@ -526,7 +526,7 @@ export async function listModels(
 /**
  * Whitelist of models known to work via /v1/chat/completions through the
  * Copilot-style proxies. Reasoning-only models (o1/o3, gpt-5.x main line)
- * need /v1/responses — будут открыты когда допишем поддержку Responses API.
+ * need /v1/responses — will be enabled once Responses API support lands.
  *
  * Order = relevance: cheap mini first, then mid, then top-tier.
  */
@@ -544,10 +544,10 @@ const SUPPORTED_PROXY_MODELS = [
 ]
 
 /**
- * GitHub Copilot premium-request multipliers (приблизительно по публичному
- * документу — поправь если устарело). Показывается рядом с моделью в комбо-боксе:
- *   0× — включено в подписку без лимита
- *   N× — N premium-запросов из месячной квоты на каждое сообщение
+ * GitHub Copilot premium-request multipliers (approx, per the public doc — fix
+ * if stale). Shown next to the model in the combo box:
+ *   0× — included in the subscription, no limit
+ *   N× — N premium requests from the monthly quota per message
  */
 export const COPILOT_MULTIPLIERS: Record<string, string> = {
   'gpt-4o-mini':       '0×',
@@ -591,7 +591,7 @@ async function probeModelsViaError(root: string, apiKey: string, baseInit: Reque
   const proxyOffered = new Set(m[1]!.split(/[\s,]+/).map(s => s.trim()).filter(s => s && !/^[\[\]]$/.test(s)))
   // Intersection in our preferred order
   const safe = SUPPORTED_PROXY_MODELS.filter(name => proxyOffered.has(name))
-  return safe.length ? safe : SUPPORTED_PROXY_MODELS  // если прокси не отдал список — используем дефолт
+  return safe.length ? safe : SUPPORTED_PROXY_MODELS  // proxy gave no list — use the default
 }
 
 function buildProxyUrl(proxy: string, user?: string, password?: string): string {

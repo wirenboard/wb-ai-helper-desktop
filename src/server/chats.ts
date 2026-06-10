@@ -213,8 +213,8 @@ export class ChatStore {
     const tokensCompletion = usage?.completionTokens ?? 0
     const tokensCached = usage?.cachedTokens ?? 0
     const totalCost = usage?.totalCost ?? 0
-    // Атрибуцию имеет смысл хранить только на assistant-турнах — это то, что
-    // рендерится в подвале сообщения. На user/tool/system она ни к чему.
+    // Attribution only matters on assistant turns — it renders in the message
+    // footer. Pointless on user/tool/system turns.
     const provider = turn.role === 'assistant' ? (attribution?.provider ?? null) : null
     const model = turn.role === 'assistant' ? (attribution?.model ?? null) : null
     this.db
@@ -228,18 +228,18 @@ export class ChatStore {
     return this.get(id)
   }
 
-  /** Принудительно обрезать историю чата: оставить system-турн + последние
-   *  `keepLast` турн'ов (по умолчанию 6 — обычно хватает чтобы остался
-   *  последний user-msg, его tool-iterations и финальный assistant-ответ).
-   *  Всё что между — заменить одним synthetic `[System]` уведомлением.
+  /** Force-truncate chat history: keep the system turn + the last `keepLast`
+   *  turns (default 6 — usually enough to retain the last user message, its
+   *  tool iterations and the final assistant reply). Everything in between is
+   *  replaced with a single synthetic `[System]` notice.
    *
-   *  Используется когда `currentContextUsage.ratio >= HARD_COMPACT_RATIO` (0.9)
-   *  — модель была попрошена вызвать checkpoint, не вняла, контекст растёт.
-   *  Деструктивно для tool-results; модель должна была сохранить важное в
-   *  summary через checkpoint раньше.
+   *  Used when `currentContextUsage.ratio >= HARD_COMPACT_RATIO` (0.9) — the
+   *  model was asked to checkpoint, ignored it, context keeps growing.
+   *  Destructive to tool results; the model should have saved what matters into
+   *  a checkpoint summary earlier.
    *
-   *  Возвращает `{ removed }` — сколько turns удалено. Если в чате ≤ 1+keepLast
-   *  turn'ов — сжимать нечего, возвращает 0.
+   *  Returns `{ removed }` — how many turns were deleted. With ≤ 1+keepLast
+   *  turns there's nothing to compact, returns 0.
    */
   forceCompact(chatId: string, reason: string, keepLast = 6): { removed: number } {
     type Row = { id: number; ord: number; role: string; content: string }
@@ -250,13 +250,11 @@ export class ChatStore {
       .all(chatId)
     if (rows.length === 0) return { removed: 0 }
     if (rows.length <= 1 + keepLast) return { removed: 0 }
-    // OpenAI требует, чтобы каждое сообщение с role=tool шло после
-    // assistant-турна с tool_calls. Если просто отрезать «последние K турнов»,
-    // первым сохранённым легко окажется orphan-tool → API возвращает 400.
-    // Поэтому ищем «безопасную границу» — позицию user или assistant турна
-    // (они не зависят от предыдущих сообщений). Tool-турны всегда идут
-    // сразу за своим assistant'ом, поэтому сохраняя assistant мы автоматически
-    // получим следующие за ним tool-результаты.
+    // OpenAI requires every role=tool message to follow an assistant turn with
+    // tool_calls. Naively cutting "the last K turns" can leave an orphan tool
+    // first → API returns 400. So find a "safe boundary" — a user or assistant
+    // turn (self-contained). Tool turns always follow their assistant, so
+    // keeping the assistant automatically keeps its tool results.
     let dropEndIdx = -1
     for (let i = rows.length - keepLast; i >= 1; i--) {
       const r = rows[i]!
@@ -272,13 +270,13 @@ export class ChatStore {
     const droppedTools = middle.filter((r) => r.role === 'tool').length
     const droppedUserReal = middle.filter((r) => r.role === 'user' && !r.content.startsWith('[System]')).length
     const droppedUserSystem = middle.filter((r) => r.role === 'user' && r.content.startsWith('[System]')).length
-    // Bulk DELETE через IN(...) — bun:sqlite не поддерживает массивы напрямую.
+    // Bulk DELETE via IN(...) — bun:sqlite doesn't bind arrays directly.
     const placeholders = middle.map(() => '?').join(',')
     this.db
       .query(`DELETE FROM turns WHERE id IN (${placeholders})`)
       .run(...middle.map((r) => r.id))
-    // Synthetic notice вставляем в освобождённый ord-слот ровно перед
-    // первым из сохранённого хвоста.
+    // Insert the synthetic notice into the freed ord slot, just before the
+    // first kept turn.
     const firstKeptOrd = rows[dropEndIdx]!.ord
     const syntheticOrd = firstKeptOrd - 1
     const parts = []
@@ -335,11 +333,10 @@ export class ChatStore {
   }
 
   private maybeAutoTitle(chatId: string, content: string) {
-    // Турны с префиксом «[System]» — это ⚙ system_event'ы (welcome line,
-    // 429-retry-баннеры, уведомления о завершении джобы), а не настоящие
-    // пользовательские сообщения. Не считаем их за обычный user-turn ни
-    // в условии срабатывания, ни как источник заголовка — иначе чат уезжает
-    // с заголовком вида «[System] OpenAI · gpt-5.4-mini · …».
+    // Turns prefixed with "[System]" are ⚙ system_events (welcome line,
+    // 429-retry banners, job-done notices), not real user messages. Don't count
+    // them as a normal user turn — neither for the trigger condition nor as a
+    // title source — else the chat ends up titled "[System] OpenAI · gpt-5.4-mini · …".
     if (content.startsWith('[System]')) return
     const r = this.db
       .query<{ n: number }, [string]>(
@@ -347,8 +344,8 @@ export class ChatStore {
       )
       .get(chatId)
     if ((r?.n ?? 0) === 1) {
-      // Чистим токены вложений `[file:id:name]` (вставляются ChatInputArea)
-      // — они полезны для рендера, но в title их быть не должно.
+      // Strip attachment tokens `[file:id:name]` (inserted by ChatInputArea) —
+      // useful for rendering, but shouldn't appear in the title.
       const cleaned = content.replace(/\[file:[^:\]]+:[^\]]+\]\s*/g, '').trim()
       const title = cleaned.slice(0, 60) || 'Новый чат'
       this.db.query(`UPDATE chats SET title = ? WHERE id = ?`).run(title, chatId)

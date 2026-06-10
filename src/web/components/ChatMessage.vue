@@ -51,11 +51,11 @@ function renderMd(text: string): string {
 
 const props = defineProps<{ item: ChatItem; chatId: string; settings?: Settings | null }>()
 
-// Provider/model в подвале — приоритет данные сохранённые на сам turn
-// (`item.provider`/`item.model`). Падаем на текущие settings только для
-// легаси-турнов, у которых атрибуции в БД ещё нет (миграция v0.13.8 заводит
-// колонки provider/model, но старые записи остаются с NULL). Без этого после
-// переключения провайдера прошлые сообщения переезжали на новый ярлык/валюту.
+// Provider/model in the footer — prefer data stored on the turn itself
+// (`item.provider`/`item.model`). Fall back to current settings only for legacy
+// turns with no attribution in the DB (migration v0.13.8 adds provider/model
+// columns, but old rows stay NULL). Without this, switching provider would
+// re-label past messages with the new provider's label/currency.
 const turnProvider = computed(() =>
   (props.item.type === 'assistant_text' && props.item.provider)
     ? props.item.provider
@@ -75,8 +75,8 @@ const messageCost = computed(() => {
   const c = i.tokensCompletion ?? 0
   const k = i.tokensCached ?? 0
   if (!p && !c && !i.tokensCost) return null
-  // Цена и валюта тоже идут от turn-провайдера, иначе RUB-историю мы бы
-  // отрендерили в долларах (или наоборот) после смены активного провайдера.
+  // Price and currency also come from the turn's provider, else RUB history
+  // would render as USD (or vice versa) after switching the active provider.
   const provider = turnProvider.value ?? undefined
   return calcCost(p, c, k, {
     provider,
@@ -166,7 +166,7 @@ async function downloadViaFetch(url: string, name: string) {
   <div v-if="item.type === 'user'" class="msg user">
     <div v-if="item.attachments?.length" class="user-attachments">
       <template v-for="a in item.attachments" :key="a.id">
-        <!-- image — thumbnail с открытием в новой вкладке -->
+        <!-- image — thumbnail that opens in a new tab -->
         <div
           v-if="a.isImage && !deletedAttachments.has(a.id)"
           class="user-attach-img"
@@ -393,7 +393,7 @@ async function downloadViaFetch(url: string, name: string) {
 .footer-tokens { opacity: 0.7; font-family: 'JetBrains Mono', monospace; flex-shrink: 0; margin-left: auto; }
 .footer-time { opacity: 0.55; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; }
 
-/* ── Copy button: верхний правый угол bubble, на hover, в цвет bubble ── */
+/* ── Copy button: top-right of bubble, on hover, tinted to bubble color ── */
 .copy-btn,
 .user-copy {
   position: absolute; top: 6px; right: 8px;
@@ -403,7 +403,7 @@ async function downloadViaFetch(url: string, name: string) {
   padding: 3px 7px;
   opacity: 0; transition: opacity 0.12s, color 0.12s, background 0.12s, border-color 0.12s;
 }
-/* подложка в цвет соответствующего bubble — иконка не мажет текст */
+/* backdrop tinted to the matching bubble — icon doesn't smear text */
 .assistant:hover .copy-btn {
   opacity: 1; background: var(--bg-soft);
   border-color: color-mix(in srgb, var(--text-mute) 18%, transparent);
@@ -417,7 +417,7 @@ async function downloadViaFetch(url: string, name: string) {
   border-color: var(--accent);
 }
 
-/* User-attachments — компактные превью/чипы справа */
+/* User attachments — compact previews/chips on the right */
 .user-attachments {
   display: flex; flex-direction: column; align-items: flex-end;
   gap: 6px; margin-bottom: 4px;
@@ -489,7 +489,7 @@ async function downloadViaFetch(url: string, name: string) {
   max-width: 220px;
 }
 .user-attach-chip .user-attach-del {
-  /* для чипа кнопка inline в правой части — overlay-подложка не нужна */
+  /* for a chip the button is inline on the right — no overlay backdrop needed */
   position: absolute; top: 50%; right: 4px; transform: translateY(-50%);
   background: transparent; color: var(--text-mute);
   width: 20px; height: 20px;
