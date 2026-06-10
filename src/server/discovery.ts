@@ -250,6 +250,32 @@ export function defaultHost(sn: string): string {
   return `wirenboard-${sn.toLowerCase()}.local`
 }
 
+export function isIPv4(a: string): boolean {
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(a)
+}
+
+/** IPv6 link-local (fe80::/10 → fe80..febf). Unusable for us: it needs a zone
+ *  id and WB sshd doesn't listen there — dialing it yields ECONNREFUSED. */
+export function isLinkLocalIPv6(a: string): boolean {
+  return /^fe[89ab][0-9a-f]:/i.test(a)
+}
+
+/** Pick the host to dial for SSH from a controller's resolved addresses.
+ *  Priority: IPv4 literal → routable IPv6 literal → hostname (let the OS
+ *  resolve) → first address. Never returns a bare link-local IPv6 when anything
+ *  better exists — that's the ECONNREFUSED trap when mDNS resolves AAAA to a
+ *  fe80:: address (the controller is still reachable over IPv4 / its .local). */
+export function preferredSshHost(addresses: string[], host: string): string {
+  const v4 = addresses.find(isIPv4)
+  if (v4) return v4
+  const routableV6 = addresses.find((a) => a.includes(':') && !isLinkLocalIPv6(a))
+  if (routableV6) return routableV6
+  // No usable address literal left — prefer the host (an IPv4 or a resolvable
+  // .local name) over a bare link-local IPv6, the ECONNREFUSED trap.
+  if (host) return host
+  return addresses[0] ?? ''
+}
+
 /** Split a free-form "host[:port]" string into parts. Port must be a positive
  *  integer ≤ 65535; otherwise it's silently dropped so a stray colon doesn't
  *  break the host. IPv6 literals aren't supported — too edge-case for the UI. */

@@ -29,6 +29,15 @@ versioning: [Semantic Versioning](https://semver.org/).
   duplication (the model bridges languages in its reply to the user).
 
 ### Fixed
+- **SSH dialed an IPv6 link-local address → ECONNREFUSED, while the controller
+  was reachable over HTTP.** `discovery.resolveKnown()` resolves the `.local`
+  hostname with `dns.lookup(..., {family: 0})`, which returns both IPv4 and IPv6
+  — including link-local `fe80::` addresses that mDNS announces. `SshPool`
+  dialed `addresses[0]`, and when that happened to be the link-local IPv6, the
+  connection was refused (it needs a zone id and sshd doesn't listen there).
+  Added `preferredSshHost()`: prefer an IPv4 literal → a routable IPv6 → the
+  hostname (let the OS resolve) → never a bare link-local. `SshPool.baseConfig`
+  uses it. (+14 unit tests for `isIPv4`/`isLinkLocalIPv6`/`preferredSshHost`.)
 - **The model replied in the wrong language.** Two causes: (1) the system prompt
   with the language directive was baked once at chat creation — after switching
   the language in Settings, existing chats kept the old language; now the leading

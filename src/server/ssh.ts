@@ -1,6 +1,6 @@
 import { Client, type ConnectConfig } from 'ssh2'
 import { existsSync, readFileSync } from 'node:fs'
-import type { Controller } from './discovery.ts'
+import { preferredSshHost, type Controller } from './discovery.ts'
 
 const AI_BASE = '/mnt/data/ai/wb-ai-helper'
 const JOB_DIR = `${AI_BASE}/jobs`
@@ -622,7 +622,9 @@ export class SshPool {
   }
 
   private baseConfig(controller: Controller): ConnectConfig {
-    const host = controller.addresses[0] ?? controller.host
+    // Never dial a bare IPv6 link-local (fe80::) — mDNS often resolves AAAA to
+    // one, but sshd doesn't listen there → ECONNREFUSED. Prefer IPv4 / hostname.
+    const host = preferredSshHost(controller.addresses, controller.host)
     return {
       host,
       port: controller.port ?? 22,
