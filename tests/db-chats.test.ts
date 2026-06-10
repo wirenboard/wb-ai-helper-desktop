@@ -149,9 +149,9 @@ describe('ChatStore', () => {
     expect(stats.totalCompletionTokens).toBeGreaterThanOrEqual(100)
   })
 
-  test('systemPromptFor([]) mentions контроллеры не выбраны', () => {
+  test('systemPromptFor([]) mentions no controllers selected', () => {
     const prompt = store.systemPromptFor([])
-    expect(prompt).toContain('контроллеры не выбраны')
+    expect(prompt).toContain('no controllers selected')
   })
 
   test('systemPromptFor([SN1, SN2]) lists SNs', () => {
@@ -282,7 +282,7 @@ describe('ChatStore', () => {
     expect(after.turns[0]?.role).toBe('system')
     const notice = after.turns[1]
     expect(notice?.role).toBe('user')
-    expect(notice?.content).toMatch(/^\[System\] 🗜 Принудительное сжатие/)
+    expect(notice?.content).toMatch(/^\[System\] 🗜 Forced history compaction/)
     expect(notice?.content).toContain('ratio=0.95')
     // Хвост — последние 6 турнов (user msg 4..6 + assistants).
     expect(after.turns.slice(2).map((t) => (t.role === 'user' ? t.content : `[a]${t.content}`))).toEqual([
@@ -313,10 +313,10 @@ describe('ChatStore', () => {
     const after = store.get(chat.id)!
     const notice = after.turns[1]!
     // Все типы выкинутого должны быть в сводке
-    expect(notice.content).toContain('1 реплик')
-    expect(notice.content).toContain('1 ответов модели')
-    expect(notice.content).toContain('1 tool-результатов')
-    expect(notice.content).toContain('1 system-уведомлений')
+    expect(notice.content).toContain('1 user messages')
+    expect(notice.content).toContain('1 model replies')
+    expect(notice.content).toContain('1 tool results')
+    expect(notice.content).toContain('1 system notices')
   })
 
   test('forceCompact() noop when chat has fewer than keepLast+1 turns', () => {

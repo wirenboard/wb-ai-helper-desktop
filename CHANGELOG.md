@@ -7,6 +7,18 @@ versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Model-facing text is now English-first (single language).** The persona
+  system prompt and the other strings the model reads — the force-compaction
+  notice, the last-iteration nudge, log-truncation markers, RPC error messages,
+  the job-tail hint, the empty-todo placeholder, the chat-context suffix — were
+  translated from Russian to English. This matches the documented i18n principle
+  (model-facing = single-language English; the model bridges languages itself)
+  and removes the Russian language gravity that made weaker models drift to
+  Russian. The reply language is still set solely by `LANG_DIRECTIVE` (driven by
+  the UI language). The internal protocol sentinel was also renamed `[Система]`
+  → `[System]`.
+
 ### Added
 - **English language (RU/EN).** Toggle in Settings → «Interface»,
   auto-detection by browser language, env `WB_HELPER_LANGUAGE`. The UI is fully

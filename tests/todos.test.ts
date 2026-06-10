@@ -46,7 +46,7 @@ describe('clearTodos', () => {
 
 describe('formatTodos', () => {
   test('empty list', () => {
-    expect(formatTodos([])).toBe('(план пуст)')
+    expect(formatTodos([])).toBe('(plan is empty)')
   })
 
   test('renders statuses correctly', () => {

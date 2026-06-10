@@ -14,9 +14,9 @@ export function enrichSerialRpcError(e: unknown, method: string): string {
   if (/таймаут|timeout/i.test(raw)) {
     return (
       `${raw}. ` +
-      `На устаревших версиях wb-mqtt-serial (<2.180) endpoint device/${method} мог быть нерабочим — ` +
-      `проверь \`dpkg -l wb-mqtt-serial\`. Если версия меньше 2.180, обнови: \`apt update && apt install wb-mqtt-serial\` ` +
-      `(подтверди операцию с пользователем — это перезапустит драйвер).`
+      `On outdated wb-mqtt-serial versions (<2.180) the device/${method} endpoint may be non-functional — ` +
+      `check \`dpkg -l wb-mqtt-serial\`. If the version is below 2.180, update: \`apt update && apt install wb-mqtt-serial\` ` +
+      `(confirm the operation with the user — it restarts the driver).`
     )
   }
   return raw

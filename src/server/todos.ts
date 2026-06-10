@@ -27,7 +27,7 @@ export function clearTodos(sessionId: string): void {
 }
 
 export function formatTodos(items: TodoItem[]): string {
-  if (!items.length) return '(план пуст)'
+  if (!items.length) return '(plan is empty)'
   const mark: Record<TodoStatus, string> = { pending: '[ ]', in_progress: '[~]', completed: '[x]' }
   return items.map((t, i) => `${i + 1}. ${mark[t.status]} ${t.content}`).join('\n')
 }

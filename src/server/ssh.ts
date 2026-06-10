@@ -308,9 +308,9 @@ export class SshPool {
       (timeoutSec + 3) * 1000
     )
     const out = r.stdout.trim()
-    if (!out) throw new Error(`RPC ${driver}/${service}/${method} — нет ответа (таймаут ${timeoutSec}с)`)
+    if (!out) throw new Error(`RPC ${driver}/${service}/${method} — no response (timeout ${timeoutSec}s)`)
     const parsed = JSON.parse(out)
-    if (parsed.error) throw new Error(`RPC ${driver}/${service}/${method} ошибка: ${JSON.stringify(parsed.error)}`)
+    if (parsed.error) throw new Error(`RPC ${driver}/${service}/${method} error: ${JSON.stringify(parsed.error)}`)
     return parsed.result
   }
 
@@ -483,7 +483,7 @@ export class SshPool {
     const result: Record<string, unknown> = { jobId, state, lines, fromLine: from, nextFromLine, totalLines, truncated }
     if (state === 'running') {
       result['_hint'] =
-        'Задача ещё работает, лог неполный. Это промежуточные данные — НЕ используй их как окончательный результат и НЕ давай финальный ответ пользователю. Заверши ход и жди системное сообщение «Фоновая задача завершена».'
+        'The job is still running, the log is incomplete. This is interim data — do NOT use it as the final result and do NOT give a final answer to the user. Finish your turn and wait for the system message «Background task completed».'
     }
     return result
   }

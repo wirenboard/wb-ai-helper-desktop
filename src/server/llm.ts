@@ -111,7 +111,7 @@ export class LlmClient {
       if (isLastTurn) {
         injected.push({
           role: 'system',
-          content: '⚠ ПОСЛЕДНЯЯ ИТЕРАЦИЯ АГЕНТНОГО ЦИКЛА. НЕ вызывай инструменты. Дай финальный ответ на основе уже собранной информации.',
+          content: '⚠ LAST ITERATION OF THE AGENT LOOP. Do NOT call tools. Give the final answer based on the information already gathered.',
         })
       }
       const messagesForApi: ChatCompletionMessageParam[] = messages.length > 0
