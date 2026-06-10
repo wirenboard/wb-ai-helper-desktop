@@ -72,13 +72,17 @@ const SYSTEM_PROMPT = `Ты — десктопный помощник интег
 - **Специализированные скиллы** — подгружай через \`load_skill("<name>")\` СТРОГО ДО действий с контроллером. Если задача касается wb-mqtt-serial, wbrules, confed, hardware, zigbee, обновлений — сначала найди и загрузи подходящий скилл, только потом действуй. Не начинай выполнение пока не убедился, что нужный скилл загружен или его нет. После завершения задачи — \`unload_skill("<name>")\`. Каталог доступных скиллов виден в системном промпте каждого хода.
 - **Если нет нужного скилла и нет уверенности в деталях** (путь файла, имя RPC-метода, формат конфига): сначала загрузи подходящий скилл → если скилла нет, сходи в документацию (\`web_fetch\` вики/GitHub) → если документация не дала ответа, **уточни у пользователя**. Не угадывай и не пробуй наугад — одна ошибочная операция может сломать конфиг.`
 
-// Языковая директива выбирается по uiLanguage, но в любом случае велит
-// модели ЗЕРКАЛИТЬ язык пользователя — даже если он сменит язык посреди чата.
-// Персона-промпт остаётся на русском (это инструкции модели, не текст для
-// пользователя); язык ответов полностью задаёт эта директива.
+// Языковая директива идёт ПЕРВЫМ блоком системного промпта (см.
+// systemPromptFor) и намеренно перебивает язык самих инструкций: тело
+// персона-промпта написано по-русски, но это инструкции для модели, а не текст
+// для пользователя — язык ответа полностью задаёт эта директива. Без вынесения
+// наверх и жёсткой формулировки слабые модели якорятся на доминирующем
+// (русском) языке промпта и игнорируют одну строчку в хвосте.
 const LANG_DIRECTIVE: Record<Lang, string> = {
-  ru: '- **Язык ответа = язык пользователя.** Пишет по-русски — отвечай по-русски, по-английски — по-английски. По умолчанию русский. Кратко, без лишнего форматирования.',
-  en: '- **Reply in the user’s language.** If they write in English, answer in English; if in Russian, answer in Russian. Default to English. Be concise, without unnecessary formatting.',
+  ru: `# ЯЗЫК ОТВЕТА (важнее всего остального)
+Отвечай пользователю ТОЛЬКО на русском языке. Это правило перекрывает язык остальных инструкций ниже и любые языковые привычки. Даже если пользователь напишет на другом языке — отвечай по-русски (язык интерфейса — русский). Исключение: пользователь явно попросил переключиться на другой язык. Внутренние рассуждения, имена инструментов и технические идентификаторы не переводи.`,
+  en: `# RESPONSE LANGUAGE (top priority — overrides everything below)
+Reply to the user ONLY in English. This rule overrides the language of all instructions below (they are written in Russian, but that is for the model — your reply language is set HERE, not by them) and any language habits. Even if the system prompt body is in Russian, your answer to the user must be in English (the UI language is English). Exception: the user explicitly asks you to switch languages. Do not translate internal reasoning, tool names, or technical identifiers.`,
 }
 
 const CONTEXT_SUFFIX: Record<Lang, { none: string; selected: (sns: string[]) => string }> = {
@@ -312,7 +316,9 @@ export class ChatStore {
     const ctx = sns.length
       ? CONTEXT_SUFFIX[lang].selected(sns)
       : CONTEXT_SUFFIX[lang].none
-    return `${SYSTEM_PROMPT}\n\n${LANG_DIRECTIVE[lang]}\n\n${ctx}`
+    // Директива языка — ПЕРВЫМ блоком: позиция инструкции решает, наверху её
+    // модель не игнорирует. Контекст-суффикс — в хвосте.
+    return `${LANG_DIRECTIVE[lang]}\n\n${SYSTEM_PROMPT}\n\n${ctx}`
   }
 
   private loadTurns(chatId: string): ChatTurn[] {

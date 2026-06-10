@@ -470,6 +470,15 @@ app.post('/api/chats/:id/message', async (c) => {
     const agentState: { checkpointSummary?: string } = {}
     const lang = settingsStore.get().uiLanguage
     const L = (ru: string, en: string) => (lang === 'en' ? en : ru)
+    // Refresh the leading system prompt to the CURRENT language + context.
+    // The system turn is persisted once at chat creation; if the user switched
+    // uiLanguage afterwards, its baked LANG_DIRECTIVE (and its default-language
+    // hint) would stay stale and the model would keep replying in the old
+    // language. Regenerate it from current settings on every send.
+    const sysTurn = chatWithUser.turns[0]
+    if (sysTurn && sysTurn.role === 'system') {
+      sysTurn.content = chats.systemPromptFor(chat.contextSns, lang)
+    }
     const ctx = { discovery, mqtt, ssh, contextSns: chat.contextSns, db, sessionId: id, agentState, braveApiKey: process.env['BRAVE_SEARCH_API_KEY'] }
     let assistantText = ''
     const pendingToolCalls: { id: string; name: string; arguments: string }[] = []
