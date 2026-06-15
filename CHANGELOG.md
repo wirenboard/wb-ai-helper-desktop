@@ -7,6 +7,10 @@ versioning: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Russian README (`README.ru.md`).** Full translation of `README.md` with a
+  language switcher line linking the two.
+
 ## [0.14.0] — 2026-06-10
 
 ### Changed
